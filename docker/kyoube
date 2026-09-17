@@ -1,0 +1,7 @@
+#!/bin/sh
+# `kyoube` wrapper: always runs the bootstrap program as the `node` user so files
+# it writes under /kyoubeai stay readable by the core server and the watcher.
+if [ "$(id -u)" -eq 0 ] && command -v gosu >/dev/null 2>&1; then
+  exec gosu node node /opt/kyoube/bootstrap/dist/kyoube.mjs "$@"
+fi
+exec node /opt/kyoube/bootstrap/dist/kyoube.mjs "$@"

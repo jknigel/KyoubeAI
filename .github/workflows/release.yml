@@ -1,0 +1,70 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  packages: write
+
+# Never two publishes of the same ref at once, and never cancel one half-way:
+# a cancelled run can leave a tag pointing at a partially pushed manifest.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    # The same budget the smoke job in ci.yml needs, doubled: the image is ~3 GB
+    # compressed per architecture, nothing is cached on a first run, and a tag
+    # push also builds arm64 under QEMU emulation. Without this the job inherits
+    # the 6-hour cap.
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      # Same cleanup as ci.yml's docker-smoke job: an ubuntu runner does not fit
+      # this image's layers (let alone two architectures' worth, exported to the
+      # GHA cache with mode=max) without it.
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL
+          docker system prune -af
+          df -h /
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/kyoubeai
+          tags: |
+            type=sha,prefix=sha-
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-') }}
+      - name: Resolve version arg
+        id: version
+        run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          # Both architectures only for a release tag. A routine push to main —
+          # a docs commit included — publishes an amd64 `sha-` image, which is
+          # what those images are for (testing a commit), and skips an arm64
+          # build that costs an hour of QEMU emulation for nothing.
+          platforms: ${{ startsWith(github.ref, 'refs/tags/v') && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            KYOUBE_VERSION=${{ steps.version.outputs.value }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

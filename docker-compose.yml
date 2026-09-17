@@ -1,0 +1,85 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: kyoubeai
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: kyoubeai
+      KYOUBE_DB_PASSWORD: ${KYOUBE_DB_PASSWORD:?set KYOUBE_DB_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
+    restart: unless-stopped
+    healthcheck:
+      # -h 127.0.0.1 is load-bearing: the entrypoint runs an init pass on a
+      # unix socket with TCP not yet listening, so a socket-based pg_isready
+      # reports healthy while `app` still cannot connect on 5432. pg_isready
+      # does not authenticate, so this also passes on a volume that still holds
+      # the 0.1.x `paperclip` role/database until scripts/migrate-from-0.1.sh runs.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U kyoubeai -d kyoubeai"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        # The pinned upstream core image version. PAPERCLIP_VERSION is the 0.1.x
+        # name of this key and still works this release.
+        KYOUBE_CORE_VERSION: ${KYOUBE_CORE_VERSION:-${PAPERCLIP_VERSION:-2026.831.1}}
+        KYOUBE_VERSION: ${KYOUBE_VERSION:-dev}
+    image: ${KYOUBE_IMAGE:-kyoubeai}:${KYOUBE_VERSION:-dev}
+    # tini is PID 1 inside the image; pids_limit is the backstop against process leaks.
+    pids_limit: 2048
+    ports:
+      - "${KYOUBE_PORT:-3100}:3100"
+    environment:
+      DATABASE_URL: postgres://kyoubeai:${POSTGRES_PASSWORD}@db:5432/kyoubeai
+      KYOUBE_DATABASE_URL: postgres://kyoube:${KYOUBE_DB_PASSWORD}@db:5432/kyoube
+      PORT: "3100"
+      SERVE_UI: "true"
+      # The core server reads its settings under its own PAPERCLIP_* names; the
+      # operator sets KYOUBE_* in .env and this block maps them. The 0.1.x names
+      # are accepted as fallbacks for this release only.
+      PAPERCLIP_DEPLOYMENT_MODE: authenticated
+      PAPERCLIP_DEPLOYMENT_EXPOSURE: ${KYOUBE_DEPLOYMENT_EXPOSURE:-${PAPERCLIP_DEPLOYMENT_EXPOSURE:-private}}
+      PAPERCLIP_PUBLIC_URL: ${KYOUBE_PUBLIC_URL:-${PAPERCLIP_PUBLIC_URL:-http://localhost:3100}}
+      # Which legacy keys are set, so `kyoube doctor` can say so (the container
+      # cannot otherwise tell which key supplied a value).
+      KYOUBE_LEGACY_ENV_KEYS: "${PAPERCLIP_PUBLIC_URL:+PAPERCLIP_PUBLIC_URL }${PAPERCLIP_DEPLOYMENT_EXPOSURE:+PAPERCLIP_DEPLOYMENT_EXPOSURE }${PAPERCLIP_VERSION:+PAPERCLIP_VERSION}"
+      # The core rewrites a loopback-hostname KYOUBE_PUBLIC_URL's port to match
+      # its internal listen port (PORT, above), so when KYOUBE_PORT differs from
+      # PORT the derived Better Auth trusted-origin list still points at PORT and
+      # rejects browser/API requests whose Origin is the published KYOUBE_PORT.
+      # This passthrough lets a deployment add the externally-visible origin(s)
+      # back in verbatim; empty (default) changes nothing for the common case
+      # where KYOUBE_PORT equals PORT (3100).
+      BETTER_AUTH_TRUSTED_ORIGINS: ${BETTER_AUTH_TRUSTED_ORIGINS:-}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET in .env}
+      KYOUBE_BOARD_API_KEY: ${KYOUBE_BOARD_API_KEY:-}
+      # Set to 1 in .env to stop the entrypoint from starting the
+      # `kyoube ensure-plugins --watch` background watcher (see .env.example).
+      KYOUBE_BOOTSTRAP_DISABLED: ${KYOUBE_BOOTSTRAP_DISABLED:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+    volumes:
+      - kyoubeai-home:/kyoubeai
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      # curl is installed in the image (see docker/Dockerfile). start_period
+      # covers first-boot migrations, which are much slower than a warm start.
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3100/api/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 180s
+
+volumes:
+  pgdata:
+  kyoubeai-home:

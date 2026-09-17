@@ -1,0 +1,19 @@
+{
+  "name": "@kyoube/bootstrap",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The `kyoube` CLI: writes runtime config, installs the Kyoube plugins into the core host, and runs diagnostics",
+  "files": ["dist", "package.json"],
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.0"
+  }
+}

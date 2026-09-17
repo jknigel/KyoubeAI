@@ -1,0 +1,238 @@
+export interface HealthInfo {
+  status: string;
+  /**
+   * Only present on the full (board-authenticated, or non-`authenticated`
+   * deployment mode) `/api/health` payload. An anonymous probe against an
+   * `authenticated` instance — which is what `kyoube doctor` makes — gets the
+   * redacted body, which carries `commit` but no `version`.
+   */
+  version?: string;
+  /** Build commit SHA of the running core server; present on both payloads. */
+  commit?: string;
+  deploymentMode?: string;
+  deploymentExposure?: string;
+  bootstrapStatus?: string;
+}
+
+export interface InstalledPlugin {
+  id: string;
+  pluginKey: string;
+  version: string;
+  status: string;
+  packagePath: string | null;
+}
+
+export interface CliAuthChallenge {
+  id: string;
+  token: string;
+  boardApiToken: string;
+  approvalPath: string;
+  approvalUrl: string | null;
+  pollPath: string;
+  expiresAt: string;
+  suggestedPollIntervalMs: number;
+}
+
+export type CliAuthStatus = "pending" | "approved" | "cancelled" | "expired";
+
+export interface CompanySummary {
+  id: string;
+  name: string;
+}
+
+/** One entry of a company's skill library (`GET /api/companies/:id/skills`), reduced to what `kyoube` checks. */
+export interface CompanySkill {
+  slug: string;
+  key: string;
+  name: string;
+}
+
+/** What the `skills.install` route answers: the host's resolution status for each managed skill. */
+export interface SkillInstallResult {
+  data: { status: string };
+  apps: { status: string };
+}
+
+export interface CoreClient {
+  apiBase: string;
+  getHealth(): Promise<HealthInfo>;
+  waitForHealth(opts?: { timeoutMs?: number; intervalMs?: number }): Promise<HealthInfo>;
+  listPlugins(): Promise<InstalledPlugin[]>;
+  /** `GET /api/companies` — every company the key may see (all of them for an instance-admin board key). */
+  listCompanies(): Promise<CompanySummary[]>;
+  /** `GET /api/companies/:companyId/skills` — the company's skill library. */
+  listCompanySkills(companyId: string): Promise<CompanySkill[]>;
+  /**
+   * `POST /api/plugins/kyoube.apps/api/skills/install` — asks the `kyoube.apps`
+   * worker to import its two managed skills into one company's library. A
+   * board-only plugin route: the request itself is the company-scoped
+   * invocation the host demands for that import.
+   */
+  installPluginSkills(companyId: string): Promise<SkillInstallResult>;
+  installLocalPlugin(localPath: string): Promise<InstalledPlugin>;
+  /**
+   * `POST /api/plugins/:pluginId/upgrade`. Upstream re-reads the stored
+   * `packagePath` from disk, so no body is needed for a local-path plugin
+   * whose bundle directory already holds the new version.
+   */
+  upgradePlugin(pluginId: string): Promise<InstalledPlugin>;
+  /**
+   * `DELETE /api/plugins/:pluginId`. Soft delete by default (30-day retention,
+   * the row is reactivated by a later install); `purge` hard-deletes the row
+   * and all plugin-scoped data.
+   */
+  uninstallPlugin(pluginId: string, opts?: { purge?: boolean }): Promise<void>;
+  createCliAuthChallenge(input: { command: string; clientName: string }): Promise<CliAuthChallenge>;
+  getCliAuthChallengeStatus(pollPath: string, token: string): Promise<CliAuthStatus>;
+  whoAmI(token: string): Promise<{ userId: string | null }>;
+}
+
+export class CoreApiError extends Error {
+  readonly status: number;
+  readonly body: unknown;
+  constructor(status: number, body: unknown, message: string) {
+    super(message);
+    this.name = "CoreApiError";
+    this.status = status;
+    this.body = body;
+  }
+}
+
+export interface CoreClientOptions {
+  apiBase: string;
+  apiKey?: string;
+  fetchImpl?: typeof fetch;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+}
+
+const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+function toInstalledPlugin(raw: unknown): InstalledPlugin {
+  const record = (raw ?? {}) as Record<string, unknown>;
+  return {
+    id: String(record.id ?? ""),
+    pluginKey: String(record.pluginKey ?? ""),
+    version: String(record.version ?? ""),
+    status: String(record.status ?? ""),
+    packagePath: typeof record.packagePath === "string" ? record.packagePath : null,
+  };
+}
+
+export function createCoreClient(opts: CoreClientOptions): CoreClient {
+  const apiBase = opts.apiBase.trim().replace(/\/+$/, "");
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  const sleep = opts.sleep ?? defaultSleep;
+  const now = opts.now ?? (() => Date.now());
+
+  async function request<T>(path: string, init: { method?: string; body?: unknown; token?: string } = {}): Promise<T> {
+    const headers: Record<string, string> = { accept: "application/json" };
+    const token = init.token ?? opts.apiKey;
+    if (token) headers.authorization = `Bearer ${token}`;
+    if (init.body !== undefined) headers["content-type"] = "application/json";
+    const response = await fetchImpl(`${apiBase}${path}`, {
+      method: init.method ?? "GET",
+      headers,
+      body: init.body === undefined ? undefined : JSON.stringify(init.body),
+    });
+    const text = await response.text();
+    const body: unknown = text ? safeJson(text) : null;
+    if (!response.ok) {
+      const message =
+        body && typeof body === "object" && typeof (body as { error?: unknown }).error === "string"
+          ? (body as { error: string }).error
+          : `KyoubeAI API request failed: ${response.status} ${init.method ?? "GET"} ${path}`;
+      throw new CoreApiError(response.status, body, message);
+    }
+    return body as T;
+  }
+
+  return {
+    apiBase,
+    getHealth: () => request<HealthInfo>("/api/health"),
+    async waitForHealth({ timeoutMs = 180_000, intervalMs = 1000 } = {}) {
+      const deadline = now() + timeoutMs;
+      let lastError: unknown = null;
+      while (now() < deadline) {
+        try {
+          return await request<HealthInfo>("/api/health");
+        } catch (error) {
+          lastError = error;
+          await sleep(intervalMs);
+        }
+      }
+      const reason = lastError instanceof Error ? lastError.message : String(lastError);
+      throw new Error(`KyoubeAI at ${apiBase} did not become healthy within ${timeoutMs}ms (${reason})`);
+    },
+    async listCompanies() {
+      const raw = await request<unknown>("/api/companies");
+      // Upstream answers with a bare array today; tolerate an envelope so a
+      // future `{ companies: [...] }` does not read as "no companies".
+      const rows = Array.isArray(raw) ? raw : ((raw as { companies?: unknown[] } | null)?.companies ?? []);
+      return rows.map((row) => {
+        const record = (row ?? {}) as Record<string, unknown>;
+        return { id: String(record.id ?? ""), name: String(record.name ?? "") };
+      });
+    },
+    async listCompanySkills(companyId) {
+      const raw = await request<unknown>(`/api/companies/${encodeURIComponent(companyId)}/skills`);
+      const rows = Array.isArray(raw) ? raw : ((raw as { skills?: unknown[] } | null)?.skills ?? []);
+      return rows.map((row) => {
+        const record = (row ?? {}) as Record<string, unknown>;
+        return { slug: String(record.slug ?? ""), key: String(record.key ?? ""), name: String(record.name ?? "") };
+      });
+    },
+    async installPluginSkills(companyId) {
+      const raw = await request<{ data?: { status?: unknown }; apps?: { status?: unknown } } | null>(
+        "/api/plugins/kyoube.apps/api/skills/install",
+        { method: "POST", body: { companyId } },
+      );
+      return { data: { status: String(raw?.data?.status ?? "") }, apps: { status: String(raw?.apps?.status ?? "") } };
+    },
+    async listPlugins() {
+      const rows = await request<unknown[]>("/api/plugins");
+      return rows.map(toInstalledPlugin);
+    },
+    async installLocalPlugin(localPath) {
+      const raw = await request<unknown>("/api/plugins/install", {
+        method: "POST",
+        body: { packageName: localPath, isLocalPath: true },
+      });
+      return toInstalledPlugin(raw);
+    },
+    async upgradePlugin(pluginId) {
+      const raw = await request<unknown>(`/api/plugins/${encodeURIComponent(pluginId)}/upgrade`, {
+        method: "POST",
+        // The route reads an optional `{ version?: string }`; omitting `version`
+        // means "whatever the package path now declares".
+        body: {},
+      });
+      return toInstalledPlugin(raw);
+    },
+    async uninstallPlugin(pluginId, opts = {}) {
+      const query = opts.purge ? "?purge=true" : "";
+      await request<unknown>(`/api/plugins/${encodeURIComponent(pluginId)}${query}`, { method: "DELETE" });
+    },
+    createCliAuthChallenge: (input) =>
+      request<CliAuthChallenge>("/api/cli-auth/challenges", {
+        method: "POST",
+        body: { command: input.command, clientName: input.clientName, requestedAccess: "instance_admin_required", requestedCompanyId: null },
+      }),
+    async getCliAuthChallengeStatus(pollPath, token) {
+      const result = await request<{ status: CliAuthStatus }>(`/api${pollPath}?token=${encodeURIComponent(token)}`);
+      return result.status;
+    },
+    async whoAmI(token) {
+      const me = await request<{ userId?: string; user?: { id?: string } | null }>("/api/cli-auth/me", { token });
+      return { userId: me.userId ?? me.user?.id ?? null };
+    },
+  };
+}
+
+function safeJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}

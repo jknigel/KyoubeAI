@@ -1,0 +1,29 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "labels": ["dependencies"],
+  "packageRules": [
+    { "matchManagers": ["npm"], "matchUpdateTypes": ["minor", "patch"], "groupName": "npm minor/patch" },
+    {
+      "description": "Core host image and plugin SDK move together",
+      "groupName": "core",
+      "matchPackageNames": ["@paperclipai/plugin-sdk", "ghcr.io/paperclipai/paperclip"],
+      "schedule": ["before 6am on monday"]
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Core image pins: ARG in the Dockerfile, KYOUBE_CORE_VERSION in the env files, the compose fallback",
+      "fileMatch": ["^docker/Dockerfile$", "^\\.env\\.example$", "^scripts/smoke\\.env$", "^docker-compose\\.yml$"],
+      "matchStrings": ["(?:KYOUBE_CORE_VERSION|PAPERCLIP_VERSION)[=:-]+(?<currentValue>\\d{4}\\.\\d{3,4}\\.\\d+)"],
+      "depNameTemplate": "ghcr.io/paperclipai/paperclip",
+      "datasourceTemplate": "docker"
+    }
+  ],
+  "postUpgradeTasks": {
+    "commands": ["bash scripts/check-pins.sh"],
+    "fileFilters": ["**/*"],
+    "executionMode": "branch"
+  }
+}

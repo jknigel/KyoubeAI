@@ -1,0 +1,48 @@
+{
+  "name": "@kyoube/plugin-apps",
+  "version": "0.4.2",
+  "description": "KyoubeAI organisation database and apps (Paperclip plugin)",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "files": [
+    "dist",
+    "migrations",
+    "package.json",
+    "README.md"
+  ],
+  "paperclipPlugin": {
+    "manifest": "./dist/manifest.js",
+    "worker": "./dist/worker.js",
+    "ui": "./dist/ui/"
+  },
+  "scripts": {
+    "build": "pnpm --filter @kyoube/app-sdk build && node build.mjs",
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "typecheck": "pnpm --filter @kyoube/app-sdk build && tsc --noEmit"
+  },
+  "dependencies": {
+    "@paperclipai/plugin-sdk": "2026.831.1",
+    "pg": "^8.23.0",
+    "pgsql-ast-parser": "^12.0.2",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@kyoube/app-sdk": "workspace:*",
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.23.1",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.5",
+    "esbuild": "^0.28.2",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.0"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "engines": {
+    "node": ">=24.11.0"
+  }
+}

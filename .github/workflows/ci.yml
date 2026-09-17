@@ -1,0 +1,63 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: ci
+        ports: ["5433:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      KYOUBE_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5433/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/check-pins.sh
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      # Ruling P4-R22: the unit suite checks the string buildSrcdoc produces;
+      # this loads every one of those shapes in the Chrome the ubuntu runner
+      # ships and asks the browser's own DOM where the policy ended up. It
+      # prints SKIPPED and passes where no Chrome is installed.
+      - run: node scripts/browser-check.mjs
+      # The Terminal page's box under xterm's fit addon: the plugin's stylesheet,
+      # xterm and the fit addon in the DOM chain upstream's plugin page provides.
+      # Layout, so only a browser can say; SKIPPED where no Chrome is installed.
+      - run: node scripts/terminal-fit-check.mjs
+      # The Apps page's frame in upstream's layout chain, desktop and mobile: it
+      # has to fill the room under it without leaving `main` (or the page)
+      # anything to scroll. Layout again, so a browser; SKIPPED without Chrome.
+      - run: node scripts/app-frame-check.mjs
+      - run: pnpm --filter @kyoube/plugin-apps test:integration
+      - run: pnpm build
+
+  docker-smoke:
+    runs-on: ubuntu-latest
+    needs: unit
+    # The image is ~3 GB compressed and builds pi + Hermes (venv, Playwright
+    # Chromium, cua-driver) from scratch on every run — no layer cache exists
+    # yet, so budget for the full build plus the end-to-end run.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL
+          docker system prune -af
+          df -h /
+      - name: Smoke test the compose stack
+        run: bash scripts/smoke.sh
