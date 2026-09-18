@@ -68,7 +68,8 @@ Inside `/kyoubeai` (the `kyoubeai-home` volume):
 | `.claude/.credentials.json` | Claude Code login. |
 | `.pi/` | pi's configuration and login. |
 | `.hermes/config.yaml` | Hermes Agent configuration (`HERMES_HOME=/kyoubeai/.hermes`). |
-| `workspaces/` | Whatever the agents have written in their working directories. |
+| `instances/default/projects/<companyId>/<projectId>/` | Each project's managed working folder (`_default`, or the repository name for a cloned repo): what its agents have written, and what the project's **Files** tab shows and edits. |
+| `instances/default/workspaces/<agentId>/` | An agent's own default working directory, used for runs with no project folder. |
 
 ## Backups
 
@@ -359,10 +360,10 @@ memory-hungry — and remember the container is killed outright, with exit code 
 `shared_buffers`.
 
 Disk is the limit people actually hit: the `pgdata` volume grows with the activity log and company
-data, and `kyoubeai-home` grows with agent workspaces. Both live under Docker's data root, so watch
+data, and `kyoubeai-home` grows with project folders and agent workspaces. Both live under Docker's data root, so watch
 that filesystem, not the repository's.
 
 ```bash
 docker system df -v | grep -E 'kyoubeai-home|pgdata'
-docker compose exec app du -sh /kyoubeai/workspaces
+docker compose exec app du -sh /kyoubeai/instances/default/projects /kyoubeai/instances/default/workspaces
 ```

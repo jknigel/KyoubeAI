@@ -151,17 +151,21 @@ wait_for_plugin_api() { # poll until both plugin workers answer a route of their
 
 APPS_SHIPPED="$(jq -r .version "$ROOT/plugins/kyoube-apps/package.json")"
 [[ "$APPS_SHIPPED" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected kyoube.apps version '$APPS_SHIPPED' in package.json" >&2; exit 1; }
+FILES_SHIPPED="$(jq -r .version "$ROOT/plugins/kyoube-files/package.json")"
+[[ "$FILES_SHIPPED" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected kyoube.files version '$FILES_SHIPPED' in package.json" >&2; exit 1; }
 
 echo "==> install plugins via kyoube ensure-plugins"
-# Two plugins ship in the image (/opt/kyoube/plugins/{terminal,apps}), so the
-# first pass installs both — `installed 2`, nothing upgraded or skipped.
+# Three plugins ship in the image (/opt/kyoube/plugins/{terminal,apps,files}),
+# so the first pass installs all three — `installed 3`, nothing upgraded or
+# skipped.
 compose exec -T app kyoube ensure-plugins --api-key "$TOKEN" | tee "$TMP/ensure-first.log"
-grep -q 'installed 2, upgraded 0, skipped 0' "$TMP/ensure-first.log" \
-  || { echo "expected both bundled plugins to install on the first pass:" >&2; cat "$TMP/ensure-first.log" >&2; exit 1; }
+grep -q 'installed 3, upgraded 0, skipped 0' "$TMP/ensure-first.log" \
+  || { echo "expected all three bundled plugins to install on the first pass:" >&2; cat "$TMP/ensure-first.log" >&2; exit 1; }
 curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/plugins" \
   | jq -e 'map(select(.pluginKey == "kyoube.terminal")) | length == 1 and .[0].status == "ready"' >/dev/null
 wait_for_plugin kyoube.apps $APPS_SHIPPED
-echo "    kyoube.terminal and kyoube.apps ${APPS_SHIPPED} are installed and ready"
+wait_for_plugin kyoube.files $FILES_SHIPPED
+echo "    kyoube.terminal, kyoube.apps ${APPS_SHIPPED} and kyoube.files ${FILES_SHIPPED} are installed and ready"
 
 echo "==> kyoube setup (real browser-approval onboarding)"
 # Run setup detached inside the container; it prints an approval URL and then
@@ -189,11 +193,11 @@ for i in $(seq 1 120); do
 done
 compose exec -T app sh -c 'sed "s/^/    setup| /" /tmp/setup.log'
 [[ "$SETUP_EXIT" == "0" ]] || { echo "kyoube setup exited '${SETUP_EXIT:-<timeout>}'" >&2; exit 1; }
-# setup ends by running ensure-plugins with the key it just stored; both bundled
-# plugins are already installed at the on-disk version, so it skips both.
+# setup ends by running ensure-plugins with the key it just stored; the bundled
+# plugins are already installed at the on-disk version, so it skips all three.
 compose exec -T app sh -c 'cat /tmp/setup.log' >"$TMP/setup.log"
-grep -q 'installed 0, upgraded 0, skipped 2' "$TMP/setup.log" \
-  || { echo "expected setup's ensure-plugins to skip both bundled plugins:" >&2; cat "$TMP/setup.log" >&2; exit 1; }
+grep -q 'installed 0, upgraded 0, skipped 3' "$TMP/setup.log" \
+  || { echo "expected setup's ensure-plugins to skip the three bundled plugins:" >&2; cat "$TMP/setup.log" >&2; exit 1; }
 # No company exists at this point, so setup has nothing to verify and says so
 # rather than waiting for skills that cannot appear yet.
 grep -q 'no company exists yet' "$TMP/setup.log" \
@@ -210,10 +214,12 @@ grep -q 'kyoube.terminal skip' "$TMP/ensure-stored.log" \
   || { echo "expected kyoube.terminal to be skipped:" >&2; cat "$TMP/ensure-stored.log" >&2; exit 1; }
 grep -q 'kyoube.apps skip' "$TMP/ensure-stored.log" \
   || { echo "expected kyoube.apps to be skipped:" >&2; cat "$TMP/ensure-stored.log" >&2; exit 1; }
-# Both bundled plugins are already at the on-disk version by now, so the whole
-# run is a no-op: two skips, nothing installed or upgraded.
-grep -q 'installed 0, upgraded 0, skipped 2' "$TMP/ensure-stored.log" \
-  || { echo "expected 'installed 0, upgraded 0, skipped 2' in the summary:" >&2; cat "$TMP/ensure-stored.log" >&2; exit 1; }
+grep -q 'kyoube.files skip' "$TMP/ensure-stored.log" \
+  || { echo "expected kyoube.files to be skipped:" >&2; cat "$TMP/ensure-stored.log" >&2; exit 1; }
+# All bundled plugins are already at the on-disk version by now, so the whole
+# run is a no-op: three skips, nothing installed or upgraded.
+grep -q 'installed 0, upgraded 0, skipped 3' "$TMP/ensure-stored.log" \
+  || { echo "expected 'installed 0, upgraded 0, skipped 3' in the summary:" >&2; cat "$TMP/ensure-stored.log" >&2; exit 1; }
 sed 's/^/    /' "$TMP/ensure-stored.log"
 
 echo "==> the entrypoint plugin watcher finishes and exits"
@@ -521,6 +527,56 @@ jq -e '.code == "WORKER_ERROR" and (.message | contains("forbidden"))' "$TMP/app
   || { echo "expected a WORKER_ERROR with a 'forbidden' message, got: $(cat "$TMP/apps-undeclared.json")" >&2; exit 1; }
 echo "    apps round-trip ok"
 
+echo "==> files: a project's folder is browsable and editable from the action bridge"
+# kyoube.files adds a Files tab to the project page. It has no board-API routes
+# of its own — everything is a UI action, host-authenticated like `apps.*`
+# above — so this drives the same bridge the tab does. The project has no
+# configured workspace, so the folder it exposes is the managed one the core
+# would start an agent in: <instance>/projects/<companyId>/<projectId>/_default.
+FILES_PROJECT_ID="$(curl -fsS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -X POST "$BASE_URL/api/companies/$COMPANY_ID/projects" --data '{"name":"Smoke Files"}' | jq -r '.id')"
+[[ -n "$FILES_PROJECT_ID" && "$FILES_PROJECT_ID" != "null" ]] || { echo "could not create the files smoke project" >&2; exit 1; }
+files_bridge() { curl -fsS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -X POST "$BASE_URL/api/plugins/kyoube.files/actions/$1" --data "$2"; }
+files_bridge files.workspaces "{\"companyId\":\"$COMPANY_ID\",\"params\":{\"projectId\":\"$FILES_PROJECT_ID\"}}" >"$TMP/files-ws.json"
+jq -e '.data.canRead == true and .data.canWrite == true and (.data.workspaces | length == 1) and .data.workspaces[0].source == "managed"' "$TMP/files-ws.json" >/dev/null \
+  || { echo "files.workspaces did not report a writable managed folder: $(cat "$TMP/files-ws.json")" >&2; exit 1; }
+FILES_ROOT="$(jq -r '.data.workspaces[0].path' "$TMP/files-ws.json")"
+[[ "$FILES_ROOT" == "/kyoubeai/instances/default/projects/$COMPANY_ID/$FILES_PROJECT_ID/_default" ]] \
+  || { echo "unexpected managed project folder '$FILES_ROOT'" >&2; exit 1; }
+# The folder does not exist until an agent runs (or someone writes into it).
+files_bridge files.list "{\"companyId\":\"$COMPANY_ID\",\"params\":{\"projectId\":\"$FILES_PROJECT_ID\",\"path\":\"\"}}" \
+  | jq -e '.data.exists == false and .data.entries == []' >/dev/null
+files_bridge files.create "{\"companyId\":\"$COMPANY_ID\",\"params\":{\"projectId\":\"$FILES_PROJECT_ID\",\"dir\":\"\",\"name\":\"docs\",\"kind\":\"dir\"}}" | jq -e '.data.kind == "dir"' >/dev/null
+files_bridge files.create "{\"companyId\":\"$COMPANY_ID\",\"params\":{\"projectId\":\"$FILES_PROJECT_ID\",\"dir\":\"docs\",\"name\":\"plan.md\",\"kind\":\"file\"}}" | jq -e '.data.kind == "file"' >/dev/null
+files_bridge files.write "{\"companyId\":\"$COMPANY_ID\",\"params\":{\"projectId\":\"$FILES_PROJECT_ID\",\"path\":\"docs/plan.md\",\"content\":\"# smoke plan\\n\",\"mustExist\":true}}" | jq -e '.data.size == 13' >/dev/null
+# What the bridge wrote is what an agent in that folder would read.
+compose exec -T app sh -c "cat '$FILES_ROOT/docs/plan.md'" | grep -qx '# smoke plan' \
+  || { echo "the file written through kyoube.files is not on disk at $FILES_ROOT/docs/plan.md" >&2; exit 1; }
+# And what an agent writes is what the bridge reads back.
+compose exec -T app sh -c "printf 'from-the-shell' > '$FILES_ROOT/docs/agent.txt'"
+files_bridge files.read "{\"companyId\":\"$COMPANY_ID\",\"params\":{\"projectId\":\"$FILES_PROJECT_ID\",\"path\":\"docs/agent.txt\"}}" \
+  | jq -e '.data.encoding == "utf8" and .data.content == "from-the-shell"' >/dev/null
+files_bridge files.list "{\"companyId\":\"$COMPANY_ID\",\"params\":{\"projectId\":\"$FILES_PROJECT_ID\",\"path\":\"docs\"}}" \
+  | jq -e '[.data.entries[].name] == ["agent.txt", "plan.md"]' >/dev/null
+# A path that tries to leave the folder is refused inside the worker (invalid),
+# which the bridge surfaces as a 502 WORKER_ERROR like the apps case above.
+STATUS="$(curl -sS -o "$TMP/files-escape.json" -w '%{http_code}' -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -X POST "$BASE_URL/api/plugins/kyoube.files/actions/files.read" --data "{\"companyId\":\"$COMPANY_ID\",\"params\":{\"projectId\":\"$FILES_PROJECT_ID\",\"path\":\"../../../../kyoube/board-key.json\"}}")"
+[[ "$STATUS" == "502" ]] || { echo "expected a bridge error for a path outside the folder, got $STATUS: $(cat "$TMP/files-escape.json")" >&2; exit 1; }
+jq -e '.code == "WORKER_ERROR" and (.message | contains("invalid"))' "$TMP/files-escape.json" >/dev/null \
+  || { echo "expected a WORKER_ERROR with an 'invalid' message, got: $(cat "$TMP/files-escape.json")" >&2; exit 1; }
+files_bridge files.delete "{\"companyId\":\"$COMPANY_ID\",\"params\":{\"projectId\":\"$FILES_PROJECT_ID\",\"path\":\"docs\",\"recursive\":true}}" | jq -e '.data.ok == true' >/dev/null
+# The activity log names each change and its path (the message lands in
+# `.action`, as for the terminal and data entries above), never file content.
+curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/companies/$COMPANY_ID/activity?limit=200" >"$TMP/files-activity.json"
+for want in 'Kyoube files: created folder docs in' 'Kyoube files: created file docs/plan.md in' 'Kyoube files: saved docs/plan.md in' 'Kyoube files: deleted folder docs in'; do
+  jq -e --arg w "$want" 'map(select((.action // "") | startswith($w))) | length >= 1' "$TMP/files-activity.json" >/dev/null \
+    || { echo "no '$want' entry in the activity log: $(jq -c 'map(.action)' "$TMP/files-activity.json")" >&2; exit 1; }
+done
+jq -e 'tostring | contains("smoke plan") | not' "$TMP/files-activity.json" >/dev/null \
+  || { echo "the activity log leaked file content ('smoke plan')" >&2; exit 1; }
+echo "    files round-trip ok at $FILES_ROOT"
+
 echo "==> disaster recovery: back up, destroy the stack, restore it, and prove the restore"
 # Ruling P4-R5: the round trip is never rehearsed against the default compose
 # project — that is the operator's own stack and data. scripts/backup.sh and
@@ -663,6 +719,8 @@ grep -q "kyoube.apps@${APPS_SHIPPED}=ready" "$TMP/doctor.log" \
   || { echo "kyoube doctor did not report kyoube.apps@${APPS_SHIPPED}=ready:" >&2; cat "$TMP/doctor.log" >&2; exit 1; }
 grep -q "kyoube.terminal@${BUMP2}=ready" "$TMP/doctor.log" \
   || { echo "kyoube doctor did not report kyoube.terminal@${BUMP2}=ready:" >&2; cat "$TMP/doctor.log" >&2; exit 1; }
+grep -q "kyoube.files@${FILES_SHIPPED}=ready" "$TMP/doctor.log" \
+  || { echo "kyoube doctor did not report kyoube.files@${FILES_SHIPPED}=ready:" >&2; cat "$TMP/doctor.log" >&2; exit 1; }
 grep -Eq '^ok +skills .*1/1 companies' "$TMP/doctor.log" \
   || { echo "kyoube doctor did not report the Kyoube skills present in the restored company:" >&2; cat "$TMP/doctor.log" >&2; exit 1; }
 # The restored stack started with a company already in place, which is the

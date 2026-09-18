@@ -147,6 +147,12 @@ tracked, so `bump-core.sh` cannot touch it) and `docker compose up -d --build`.
 
 ### What can break
 
+- **The image build stops at the `core-patches` step** with a line like
+  `core patch "<id>" matched 0 time(s) … expected 1`. Each entry in `docker/core-patches/patches.mjs`
+  is a fix to an upstream bug that shipped here first; the new core either carries the upstream fix
+  (delete the entry — that is the intended outcome) or changed the code's shape (check the upstream
+  file the entry names; redo the pattern only if the bug is still there). Never loosen a pattern to
+  make the build pass.
 - **A capability was renamed or removed upstream.** The plugin install fails outright. Fix the
   manifest in `plugins/*/src/manifest.ts`.
 - **The plugin host changed a bridge or route shape.** Usually surfaces as a plugin that installs

@@ -23,10 +23,10 @@ the full security model built on top of them):
 
 1. **The core.** Upstream, pinned by exact version, never patched. It provides authentication,
    sessions, company membership and roles, the activity log, the board API, and the plugin host.
-2. **Kyoube plugins — trusted code.** `kyoube.terminal` and `kyoube.apps` are first-party code, reviewed
-   and shipped with the image, running as core plugin worker processes. They hold their own
-   database credential (the `kyoube` Postgres login role) and have no privilege on the `kyoubeai`
-   database at all.
+2. **Kyoube plugins — trusted code.** `kyoube.terminal`, `kyoube.apps` and `kyoube.files` are first-party
+   code, reviewed and shipped with the image, running as core plugin worker processes. The apps plugin
+   holds its own database credential (the `kyoube` Postgres login role) and has no privilege on the
+   `kyoubeai` database at all; the files plugin holds no credential and touches only project folders.
 3. **Apps — untrusted, sandboxed code.** An app is one HTML document, typically written by an agent,
    that a person with schema access chooses to publish. It runs in a browser iframe with an opaque
    origin and a restrictive Content-Security-Policy, and every data call it makes is re-authorised under
@@ -42,27 +42,29 @@ docker compose
 │   │    ├─ adapters: claude_local · pi_local · hermes_local
 │   │    ├─ plugin runtime
 │   │    │     ├─ worker  kyoube.terminal   — node-pty PTY sessions
-│   │    │     └─ worker  kyoube.apps       — DataService + AppService
+│   │    │     ├─ worker  kyoube.apps       — DataService + AppService
+│   │    │     └─ worker  kyoube.files      — WorkspaceFiles over each project's folder
 │   │    └─ plugin API routes  ◀── agent runs (Claude Code, pi, Hermes) over REST
 │   │
 │   ├─ CLIs on PATH: claude, pi, hermes
 │   ├─ kyoube-entrypoint.sh → background: `kyoube ensure-plugins --watch`
 │   ├─ DATABASE_URL         ───────────▶ db: `kyoubeai` database
 │   ├─ KYOUBE_DATABASE_URL  ───────────▶ db: `kyoube` database
-│   └─ volume kyoubeai-home:/kyoubeai (board key, ~/.claude ~/.pi ~/.hermes, workspaces)
+│   └─ volume kyoubeai-home:/kyoubeai (board key, ~/.claude ~/.pi ~/.hermes, project folders)
 │
 └── db    (postgres:17-alpine)
       ├─ database `kyoubeai`  — owned by the `kyoubeai` superuser (upstream's own data)
       ├─ database `kyoube`     — owned by the `kyoube` role (Kyoube's own data; see below)
       └─ volume pgdata:/var/lib/postgresql/data
 
-        ▲ :3100 (KYOUBE_PORT) — browser: KyoubeAI UI (core pages + Terminal, Data, Apps)
+        ▲ :3100 (KYOUBE_PORT) — browser: KyoubeAI UI (core pages + Terminal, Data, Apps, project Files tab)
 ```
 
-Two plugins ship in the image: `@kyoube/plugin-terminal` (`plugins/kyoube-terminal`) and
+Three plugins ship in the image: `@kyoube/plugin-terminal` (`plugins/kyoube-terminal`),
 `@kyoube/plugin-apps` (`plugins/kyoube-apps`), which carries both the Data layer and the Apps module in
-one worker because apps need in-process access to the data service and plugins cannot call each other.
-Everything Kyoube adds is one of these two plugins, the `@kyoube/app-sdk` package they inject into apps
+one worker because apps need in-process access to the data service and plugins cannot call each other,
+and `@kyoube/plugin-files` (`plugins/kyoube-files`), the Files tab on project pages. Everything Kyoube adds
+is one of these three plugins, the `@kyoube/app-sdk` package the apps plugin injects into apps
 (`packages/kyoube-app-sdk`), and the `kyoube` bootstrap CLI (`docker/bootstrap`) that installs them.
 
 ## Request paths
@@ -146,6 +148,30 @@ every call. Output streams back over the core's plugin SSE bridge on a per-sessi
 `term-<24 random bytes, base64url>` (never listed, returned only to the session's own opener), driving a
 `node-pty` (`@lydell/node-pty`) process spawned with `HOME=/kyoubeai`.
 
+### Files tab → project folder
+
+The **Files** tab on a project page (a `detailTab` slot on `project` entities, plus a `projectSidebarItem`
+link under each project in the sidebar) and the folder icon at the right end of the top bar on a task page (a
+`globalToolbarButton` slot, whose component reads the task reference from the route and resolves its
+project through the `files.locate` action and `ctx.issues.get`, then docks the same browser in a
+fixed panel on the right) both drive the `files.workspaces` / `list` / `stat` / `read` / `write` /
+`create` / `upload` / `rename` / `delete` actions (`plugins/kyoube-files/src/plugin.ts`). Every one — reads
+included, unlike the apps plugin's data reads — is a `ctx.actions.register` handler, so the caller is the
+host-authenticated actor, never a client-supplied id: it must be a signed-in user whose company role is in
+the plugin's `readRoles` (`writeRoles` for a mutation, checked against a fresh read of the members API).
+The folder itself comes from `ctx.projects.getPrimaryWorkspace(projectId, companyId)`, which the host
+answers with the project's *effective* local folder — the configured primary workspace's path when the
+project has one, otherwise the managed folder the core creates for it
+(`<instance>/projects/<companyId>/<projectId>/_default`) — the same resolution upstream's run scheduler
+uses to choose an agent's working directory, and `null` for a project outside the company scope. Further
+configured workspaces of the project are offered as well. `WorkspaceFiles` (`src/fs-service.ts`) then
+performs the operation under two invariants: nothing outside the folder's resolved location is ever
+touched (paths are normalised before the disk is consulted, and the resolved path is checked against the
+resolved root, so a symlink inside the folder cannot lead out of it), and symbolic links are never
+followed (listed, deletable, renameable — never read or written through). A save carries the mtime the
+file had when it was read and is refused with `conflict` if the file changed since. Every mutation goes
+to the company's activity log as one line with the operation and path — never content.
+
 ## Data model
 
 ### `kyoube_meta` (shared metadata)
@@ -210,6 +236,18 @@ each plugin's own dependency:
 
 `scripts/check-pins.sh` fails (and runs first in CI) if any of these disagree.
 `scripts/bump-core.sh <version>` rewrites all five in one pass, reinstalls, and re-runs the check.
+
+### Core patches
+
+The image is the pinned core, unmodified in behaviour — with one bounded exception.
+`docker/core-patches/patches.mjs` may carry a fix to an upstream bug that had to ship here first,
+applied to the pristine core layer by `docker/core-patches/apply.mjs` in the Dockerfile step right
+before the rebrand, while the same fix is on its way upstream (each entry names its issue or PR). A
+pattern anchors on the compiled bundle's string literals and code shape (never a minifier's
+identifier names) and must match exactly the declared number of times, so a core bump that changes
+that code or already carries the fix fails the build with the patch's id — the cue to delete the
+entry. The list is meant to be empty; `CONTRIBUTING.md` ("Never patch the core") has the rules, and
+`docs/upgrading.md` what to do when the step fails at a bump.
 
 ### Plugin hot reload
 

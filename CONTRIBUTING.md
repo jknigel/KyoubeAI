@@ -1,7 +1,7 @@
 # Contributing to KyoubeAI
 
 KyoubeAI is a Docker overlay on top of the upstream core (Paperclip, https://github.com/paperclipai/paperclip):
-two core plugins (`kyoube.terminal`, `kyoube.apps`), an app SDK, and a small bootstrap CLI. This
+three core plugins (`kyoube.terminal`, `kyoube.apps`, `kyoube.files`), an app SDK, and a small bootstrap CLI. This
 document is local setup, conventions, and the review checklist. For how the pieces fit together, read
 [`docs/architecture.md`](docs/architecture.md) first.
 
@@ -16,7 +16,7 @@ git clone https://github.com/jknigel/KyoubeAI.git && cd KyoubeAI
 pnpm install
 ```
 
-Unit tests (bootstrap CLI, both plugins, the app SDK — no database needed):
+Unit tests (bootstrap CLI, the plugins, the app SDK — no database needed):
 
 ```bash
 pnpm test
@@ -56,20 +56,28 @@ first step of CI and fails fast if `KYOUBE_CORE_VERSION` and the plugin SDK pins
 
 ## Where things live
 
-The workspace has five `package.json`s: the private root, and four publishable/deployable members.
+The workspace has seven `package.json`s: the private root, and six build-time or deployable members.
 
 | Path | Package | What it is |
 |---|---|---|
 | *(root)* | `kyoubeai` | Workspace root: `docker-compose.yml`, `docker/`, `docs/`, `scripts/`, `.github/`. |
 | `docker/bootstrap/` | `@kyoube/bootstrap` | The `kyoube` CLI (`setup`, `ensure-plugins`, `doctor`). |
+| `docker/core-patches/` | `@kyoube/core-patches` | Build-time fixes to upstream bugs, held only until the upstream fix ships (see "Never patch the core"). |
 | `plugins/kyoube-terminal/` | `@kyoube/plugin-terminal` | The browser terminal plugin. |
 | `plugins/kyoube-apps/` | `@kyoube/plugin-apps` | The organisation database and Apps plugin (one worker, two modules). |
+| `plugins/kyoube-files/` | `@kyoube/plugin-files` | The project Files tab: a browser and editor for each project's working folder. |
 | `packages/kyoube-app-sdk/` | `@kyoube/app-sdk` | `window.kyoube`, injected into every app's iframe. |
 
 Within `plugins/kyoube-apps/src/`: `data/` is the schema/records/permissions/SQL-validation service,
 `apps/` is the Apps module (manifest, store, service, tools, API routes) built on top of it, `db/` is the
 company-scope and migration machinery, `ui/` is the plugin's React pages, and `skills/` holds the two
 managed-skill Markdown files (`kyoube-data.md`, `kyoube-apps.md`) shipped in the plugin manifest.
+
+Within `plugins/kyoube-files/src/`: `fs-service.ts` is `WorkspaceFiles`, every filesystem operation bound
+to one project folder with the containment and no-symlink-following rules, `paths.ts` the pure path
+validation it builds on, `plugin.ts` the actions and the role gate, and `ui/` the `ProjectFilesTab`
+(`detailTab` on projects) and the `ProjectSidebarItem` link and the `GlobalFilesButton` top-bar icon with its docked task panel. It has no database, no REST routes and no
+tools: agents already have the folder, and the plugin exists for people.
 
 ## Never patch the core
 
@@ -80,9 +88,22 @@ code — propose it upstream (open an issue or PR on
 [`paperclipai/paperclip`](https://github.com/paperclipai/paperclip)) or find a way to build it as a
 plugin. `docs/architecture.md`'s "Isolation from upstream" material and `docs/upgrading.md` explain why
 this matters: it is what makes a core version bump a one-line change instead of a rebase. The single
-exception is `docker/rebrand/`, a build-time transform of the core's *user-facing text and artwork* that
-is re-applied on every build; it changes no behaviour, and `docs/branding.md` lists what it leaves
-alone.
+standing exception is `docker/rebrand/`, a build-time transform of the core's *user-facing text and
+artwork* that is re-applied on every build; it changes no behaviour, and `docs/branding.md` lists what
+it leaves alone.
+
+There is one narrow, temporary way to change behaviour: `docker/core-patches/patches.mjs`, a list that
+is meant to be empty. An entry is a fix to an upstream bug that had to ship here first, applied to the
+pristine core layer at image build time (`docker/core-patches/apply.mjs`, the Dockerfile step right
+before the rebrand) **while the same fix is on its way upstream** — every entry names its upstream
+issue or pull request, and opening that PR is part of adding the entry, not an afterthought. The rules
+that keep this from turning into a fork: a pattern anchors on the compiled bundle's string literals
+and code shape, never on minifier-chosen identifier names; it must match **exactly** the declared
+number of times or the build fails with the patch's id; and the tests in `docker/core-patches/tests`
+pin the patch to a fixture of the real minified code *and run the patched code* to prove the
+behaviour. A core bump that changes that code — or that already carries the upstream fix — therefore
+fails at the patch step, and the answer is to delete the entry (or, if upstream still has the bug in
+a new shape, redo it), never to loosen the pattern.
 
 ## How to add a tool
 

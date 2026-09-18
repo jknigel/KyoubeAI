@@ -11,6 +11,7 @@ COPY package.json pnpm-workspace.yaml pnpm-lock.yaml tsconfig.base.json ./
 COPY docker/bootstrap/package.json docker/bootstrap/
 COPY plugins/kyoube-terminal/package.json plugins/kyoube-terminal/
 COPY plugins/kyoube-apps/package.json plugins/kyoube-apps/
+COPY plugins/kyoube-files/package.json plugins/kyoube-files/
 COPY packages/kyoube-app-sdk/package.json packages/kyoube-app-sdk/
 RUN pnpm install --frozen-lockfile
 COPY docker/bootstrap docker/bootstrap
@@ -23,9 +24,11 @@ RUN pnpm -r build \
  && pnpm --filter @kyoube/bootstrap deploy --prod /out/bootstrap \
  && pnpm --filter @kyoube/plugin-terminal deploy --prod /out/plugins/terminal \
  && pnpm --filter @kyoube/plugin-apps deploy --prod /out/plugins/apps \
+ && pnpm --filter @kyoube/plugin-files deploy --prod /out/plugins/files \
  && test -f /out/bootstrap/dist/kyoube.mjs \
  && test -f /out/plugins/terminal/dist/manifest.js \
- && test -f /out/plugins/apps/dist/manifest.js
+ && test -f /out/plugins/apps/dist/manifest.js \
+ && test -f /out/plugins/files/dist/manifest.js
 
 # ---------------------------------------------------------------------------
 # Stage 2: the runtime image = the upstream core image + pi + Hermes + KyoubeAI.
@@ -145,6 +148,19 @@ RUN apt-get update \
  && test -z "$(ls -A /kyoubeai)"
 
 # ---------------------------------------------------------------------------
+# Core patches: fixes to upstream bugs applied to the pristine core layer while
+# the same fix is on its way upstream (docker/core-patches/patches.mjs, one
+# documented entry per patch, each naming its upstream issue or PR). Every
+# pattern must match exactly as declared or this build fails — so a core bump
+# that changes the code, or that already carries the fix, stops here with the
+# patch's id, which is the cue to delete it. Runs before the rebrand so the
+# asset renaming below hashes the patched bundle. See CONTRIBUTING.md,
+# "Never patch the core", for the rule this is the narrow exception to.
+# ---------------------------------------------------------------------------
+COPY docker/core-patches/apply.mjs docker/core-patches/lib.mjs docker/core-patches/patches.mjs /opt/kyoube/core-patches/
+RUN gosu node node /opt/kyoube/core-patches/apply.mjs --root /app --report
+
+# ---------------------------------------------------------------------------
 # KyoubeAI branding. The upstream layer above says "Paperclip" in its UI
 # bundle, server messages, agent skills and artwork; docker/rebrand/rebrand.mjs
 # rewrites those surfaces in place (spec: docs/superpowers/specs/2026-09-13-
@@ -189,6 +205,8 @@ RUN chmod +x /usr/local/bin/kyoube /usr/local/bin/kyoube-entrypoint.sh \
  && test -f /opt/kyoube/plugins/apps/migrations/0001_meta.sql \
  && test -f /opt/kyoube/plugins/apps/migrations/0002_apps.sql \
  && gosu node sh -c 'node -e "require(\"/opt/kyoube/plugins/apps/node_modules/pg\"); require(\"/opt/kyoube/plugins/apps/node_modules/pgsql-ast-parser\"); console.log(\"apps deps ok\")"' \
+ && test -f /opt/kyoube/plugins/files/dist/manifest.js \
+ && test -f /opt/kyoube/plugins/files/dist/ui/index.js \
  && HOME=/tmp/build-home node /opt/kyoube/bootstrap/dist/kyoube.mjs --help >/dev/null \
  && rm -rf /tmp/build-home \
  && test -z "$(ls -A /kyoubeai)"

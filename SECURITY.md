@@ -17,7 +17,7 @@ otherwise unmodified, `FROM` a published image) is out of scope here; report it 
 ## Scope
 
 KyoubeAI is a Docker overlay on the upstream core:
-a Postgres 17 cluster, the two Kyoube plugins (`kyoube.terminal`, `kyoube.apps`), and the `kyoube`
+a Postgres 17 cluster, the three Kyoube plugins (`kyoube.terminal`, `kyoube.apps`, `kyoube.files`), and the `kyoube`
 bootstrap CLI that renders config, installs the plugins, and runs diagnostics. Nothing here patches
 the core — every Kyoube feature is a plugin — so this document describes the security properties of
 the overlay, not of the core's own auth, sessions, board API, or MCP tool gateway.
@@ -31,14 +31,16 @@ KyoubeAI's design rests on three zones of trust, each with a different guarantee
    membership and roles, the activity log, the board API, and the plugin host. Its own security model
    (auth, deployment modes, the MCP tool gateway) is documented upstream — see
    [Out of scope](#out-of-scope).
-2. **Kyoube plugins — trusted code.** `kyoube.terminal` and `kyoube.apps` are first-party code, reviewed
-   and shipped with the image, running as core plugin workers. They hold their **own** database
-   credential — the `kyoube` Postgres login role (`LOGIN NOSUPERUSER NOCREATEDB CREATEROLE NOINHERIT`,
+2. **Kyoube plugins — trusted code.** `kyoube.terminal`, `kyoube.apps` and `kyoube.files` are first-party
+   code, reviewed and shipped with the image, running as core plugin workers. The apps plugin holds its
+   **own** database credential — the `kyoube` Postgres login role (`LOGIN NOSUPERUSER NOCREATEDB CREATEROLE NOINHERIT`,
    created once by `docker/postgres-init/01-kyoube.sh`) — which owns the separate `kyoube` database and
    has **no** privilege on the `kyoubeai` database at all (`REVOKE CONNECT ON DATABASE kyoubeai FROM
    PUBLIC`, and `kyoube` is never granted it). A compromise of a Kyoube plugin cannot reach the core's
    own data through that credential; it is still, however, trusted code running inside the same
-   container as the core, with everything that implies (see [Terminal](#terminal) below).
+   container as the core, with everything that implies (see [Terminal](#terminal) below). The files
+   plugin holds no credential at all: it reads and writes project folders on the home volume as the
+   container's `node` user, within the bounds described under [Files](#files).
 3. **Apps — untrusted, sandboxed code.** An app is one HTML document, typically written by an agent,
    that a person with schema access chooses to publish. It runs in a browser iframe with an opaque
    origin and a restrictive Content-Security-Policy, and every data call it makes is re-authorised
@@ -200,6 +202,74 @@ Four residuals are known and accepted, documented in full in `docs/apps.md`:
 - **`sql_select` allows a schema-qualified `OPERATOR(schema.op)`** — see the Data section above.
 - **`viewer.name` is always empty in v1** — the host gives an app the viewer's id, not their display
   name (see `docs/apps.md`), so an app cannot greet a viewer by name.
+
+## Files
+
+The **Files** tab on a project page lets company members browse and change the project's working
+folder — the configured workspace, or the managed folder the core creates for the project under
+`/kyoubeai/instances/default/projects/<companyId>/<projectId>/` — which is the folder the project's
+agents run in. It is deliberately a narrow surface: one folder per project, chosen by the core (the
+plugin asks the host for the project's effective local folder through `ctx.projects.getPrimaryWorkspace`
+and never derives or accepts a path from the browser), for people who can already open that project.
+
+**Who may use it.** Every action — reads included — is a host-authenticated `performAction` call, so
+the caller's identity is the actor the core supplies, never a client-supplied id, and it must be a
+signed-in user (agents are refused; they have the folder already). The user's company role is checked
+against the plugin's `readRoles` (default: every role) or `writeRoles` (default: every role but
+`viewer`) under **Settings → Plugins → Kyoube Files**. Reads take the same 30-second membership cache as
+the Data page; every mutation reads the members API afresh, so a demoted or removed member can browse
+for at most 30 more seconds and can change nothing from the moment the change lands. Project
+visibility in core 2026.831.1 is company-wide (`project:read` is granted to every active member in its
+simple permissions mode), so the company role is the right unit here; if a future core adds
+per-project membership the plugin will need to consult it, and this section will say so. The project
+must be in the host's company scope: `getPrimaryWorkspace` answers `null` otherwise, and a
+`params.companyId` that contradicts the host's scope is rejected as spoofing, exactly as in the other
+two plugins.
+
+**What it can reach.** Two invariants, both enforced in `WorkspaceFiles`
+(`plugins/kyoube-files/src/fs-service.ts`) and covered by its tests:
+
+1. *Nothing outside the project folder is ever touched.* A path is normalised before the disk is
+   consulted (absolute paths, `..` segments, NUL bytes and backslashes are refused outright), and the
+   *resolved* location of every parent directory is then checked against the folder's own resolved
+   location — so a symbolic link that an agent, or a cloned repository, left inside the folder cannot
+   lead a listing, a read or a write out of it.
+2. *Symbolic links are never followed.* They are listed as links, may be renamed or deleted (which
+   acts on the link, never its target), and are refused for read and write. Following one would let a
+   link to, say, `/kyoubeai/.claude/.credentials.json` be read by anyone who can browse the project.
+
+Within those bounds the plugin does what a file manager does: `.env` files, keys an agent wrote into
+the folder, and `.git` internals are all visible and editable to anyone the role settings admit, the
+same as they are to every agent that runs there. Keep secrets an agent needs in the core's Secrets, not
+in the project folder, and keep `readRoles` no wider than the people who should see the project's work.
+
+**Limits.** The editor opens files up to `maxEditableKb` (1 MiB by default; larger files are download-
+only, never truncated — a truncated file that was then saved would be a destroyed file), a single upload
+is capped at `maxUploadMb` (5 MiB by default, clamped to 7 because the core's 10 MB JSON body limit is
+the ceiling for a base64 payload), and a download at `maxDownloadMb` (25 MiB). A save carries the
+modification time the file had when it was opened and is refused (`conflict`) if the file changed
+since, so a person and an agent editing the same file cannot silently overwrite each other; the person
+chooses to reload or overwrite.
+
+**HTML preview.** An HTML file opens rendered, in an `<iframe sandbox="allow-scripts allow-forms
+allow-modals">` (no `allow-same-origin`: an opaque origin with no cookies, no storage and no host DOM)
+under the same policy the [Apps](#apps) runner injects — `default-src 'none'`, `connect-src 'none'`,
+`form-action 'none'`, `base-uri 'none'`, inline script and style only, `data:`/`blob:` images — so a
+page an agent wrote can run its own script but cannot reach the network, navigate the host, or read
+anything the viewer can. Because the frame cannot fetch, the plugin inlines the stylesheets, scripts
+and images the page references by *relative* path from the same project folder (through the same
+authorised `files.read` action, so nothing the viewer could not open is inlined; at most 40 files, and
+absolute URLs are left unresolved and therefore blocked). The preview shows nothing that the source
+view would not, to the same person.
+
+**The task panel.** The folder icon in the top bar is a `globalToolbarButton` slot, whose host
+context carries only the company. The component reads the task reference from the URL and asks the
+worker (`files.locate`) which project it belongs to — through `ctx.issues.get`, which answers `null`
+for a task outside the company — and shows the icon only when the caller's role may browse. The
+docked panel then goes through exactly the same actions and checks as the project tab.
+
+**What is logged.** Every mutation writes one line to the company's activity log — the operation, the
+path, the workspace and the user — and never file content. Reads are not logged.
 
 ## Telemetry
 

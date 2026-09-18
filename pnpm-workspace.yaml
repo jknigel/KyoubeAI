@@ -1,5 +1,6 @@
 packages:
   - "docker/bootstrap"
   - "docker/rebrand"
+  - "docker/core-patches"
   - "plugins/*"
   - "packages/*"

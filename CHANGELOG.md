@@ -4,6 +4,43 @@ All notable changes to KyoubeAI are recorded here, in terms of what changed for 
 building on it. The format is loosely [Keep a Changelog](https://keepachangelog.com/); versioning is
 [SemVer](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- **Files** — a third plugin, `kyoube.files` (`plugins/kyoube-files`), adds a **Files** tab to every
+  project page and a **Files** link under each project in the sidebar. It shows the project's working
+  folder — the configured workspace, or the managed folder the core creates for the project and starts
+  its agents in — and lets company members browse it, open and edit text files, preview Markdown and
+  images, create files and folders, upload, download, rename and delete. The listing and any open file
+  refresh themselves every few seconds so an agent's changes appear as they land; a save is refused if
+  an agent changed the file since it was opened, with a choice to reload or overwrite. Who may browse
+  and who may change files are per-instance settings (**Settings → Plugins → Kyoube Files**; by default
+  every role browses and every role but `viewer` edits). No path can leave the project folder, symbolic
+  links are never followed, and every change is written to the activity log with its path, never its
+  content. `SECURITY.md` has a **Files** section describing the bounds.
+- HTML files open rendered as the page they are, in a sandboxed frame with no network access and the
+  page's own relative stylesheets, scripts and images inlined from the folder; SVG files open as
+  drawings. A **View/Edit source** toggle shows the markup. Every viewer — editor, Markdown preview,
+  image, page — fills the screen below the page header.
+- A folder icon at the right end of the top bar on every task that belongs to a project docks the
+  project folder in a panel on the right of the screen, beside the chat (no backdrop), with the same
+  browser and editor; it follows the viewer from task to task until closed.
+- The image builds and ships the new plugin alongside the other two; `kyoube ensure-plugins` installs it
+  on the next start with no operator action.
+
+### Fixed
+
+- **Task chat with a pi agent** no longer shows every command's raw output and the core's own
+  "Resume Delta" wake prompt as agent messages in the body font. Upstream's pi transcript parser
+  (`packages/adapters/pi-local/src/ui/parse-stdout.ts`, core 2026.831.1 and `main` at the time of
+  writing) turns every `message_end` event into agent text without checking the message's role; pi
+  emits that event for the user turn and for each tool result too, so the prompt and every tool
+  output (already shown on its tool card) appeared again as prose. Fixed at image build time by
+  `docker/core-patches` (`pi-transcript-non-assistant-messages`), the repository's first and only
+  behavioural patch of the core, held until the upstream fix ships; `CONTRIBUTING.md` records the
+  rules that bound it.
+
 ## 1.0.0 - 2026-09-17
 
 The first release: KyoubeAI as a self-hosted, multi-user AI operating system for an organisation, built

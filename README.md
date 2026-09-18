@@ -20,6 +20,8 @@ first run of a prebuilt image.
   [`docs/governance.md`](docs/governance.md).
 - **[Apps](#apps)** — AI-built, database-backed single-file apps that run sandboxed inside the KyoubeAI
   UI. Authoring guide: [`docs/apps.md`](docs/apps.md).
+- **[Files](#files)** — a **Files** tab on every project page: browse, edit, upload, rename and delete
+  the folders and files in the project's working folder — the same folder its agents read and write.
 - **Operations** — backups/restore, health checks, resource limits, and upgrading the core and KyoubeAI
   independently: [`docs/operations.md`](docs/operations.md), [`docs/upgrading.md`](docs/upgrading.md).
 - **Architecture** — trust zones, request paths, the data model, and the upgrade contract, in full:
@@ -84,13 +86,40 @@ Tip: pair this with the core's tool policies (Tools & Access) to require human a
 
 Apps are single-file HTML applications that run inside the KyoubeAI UI (`/<company>/app-artifact`; the sidebar entry is still **Apps**) and use the company's Data tables through an injected `window.kyoube` SDK. Agents build and publish them through the same REST routes (or the `kyoube.apps:apps_*` tools where a gateway exists), guided by the **Kyoube Apps** managed skill; people can review source and versions, publish, and roll back from the app page. A Content-Security-Policy — not the sandbox attribute — blocks all network access; apps run at an opaque origin (no cookies, no storage) and can never exceed the permissions of the person using them. See `docs/apps.md`.
 
+## Files
+
+Every project has a working folder: the workspace configured on the project, or — when none is — the
+folder the core creates for it the first time an agent works on one of its tasks
+(`/kyoubeai/instances/default/projects/<companyId>/<projectId>/_default`). Agents run in that folder; what
+they write there is the project's work product. The **Files** tab on a project page (and the **Files**
+link under each project in the sidebar) shows that folder to people: open and edit text files, preview
+Markdown, images and SVG, create files and folders, upload, download, rename and delete. An HTML file
+opens as the page it is — rendered in a sandboxed frame with no network, with the stylesheets, scripts
+and images it references from the same folder inlined — and a **View/Edit source** toggle shows the
+markup. The listing and any open file refresh themselves every few seconds, so an agent's changes appear
+as they land; a save carries the modification time the file had when it was opened and is refused if an
+agent changed it since, with a choice to reload or overwrite. Symbolic links are listed but never
+followed, and no path can leave the project folder.
+
+The same folder is one click away while working with an agent: on any task that belongs to a project,
+a folder icon at the right end of the top bar (the one that reads *Tasks › BAP-12 …*) docks the
+project folder in a panel on the right of the screen, with the same browser and editor. The panel has
+no backdrop — the chat stays usable beside it — and it follows you from task to task, switching to
+each task's project, until you close it.
+
+Who may do what is a per-instance setting (**Settings → Plugins → Kyoube Files**): by default every
+company role can browse and download, and everyone but `viewer` can change files. Files larger than
+1 MiB open as download-only rather than in the editor, and single uploads are capped at 5 MiB (the core's
+JSON body limit keeps the ceiling at 7); larger transfers belong in the Terminal or with an agent. Every
+change is written to the company's activity log with its path, never its content.
+
 ## Layout
 
 | Path | What it is |
 |---|---|
 | `docker/Dockerfile` | Overlay image: the upstream core + pinned `claude`, `pi` and `hermes` CLIs + Kyoube |
 | `docker/bootstrap/` | The `kyoube` CLI (`setup`, `ensure-plugins`, `doctor`) |
-| `plugins/` | Core plugins (`kyoube-terminal`, `kyoube-apps`) |
+| `plugins/` | Core plugins (`kyoube-terminal`, `kyoube-apps`, `kyoube-files`) |
 | `packages/kyoube-app-sdk/` | `window.kyoube`, the SDK injected into every app |
 | `docker-compose.yml` | `app` + `db` (Postgres 17 with databases `kyoubeai` and `kyoube`) |
 | `scripts/smoke.sh` | End-to-end smoke test used by CI |
@@ -131,7 +160,7 @@ move to the next stable core release that carries the fix.
 - The image is built `FROM` a pinned upstream release of the core (Paperclip, `KYOUBE_CORE_VERSION`);
   nothing in this repository is core source, and the only change applied to the core at build time is
   the branding transform in `docker/rebrand/` (see `docs/branding.md`).
-- Every Kyoube feature is a plugin (`kyoube.terminal`, `kyoube.apps`) built only against the published
+- Every Kyoube feature is a plugin (`kyoube.terminal`, `kyoube.apps`, `kyoube.files`) built only against the published
   `@paperclipai/plugin-sdk` — no imports from the core's own server or UI source, no undocumented routes.
 - `KYOUBE_CORE_VERSION` and the plugin SDK version are pinned together across the Dockerfile, `.env.example`,
   `scripts/smoke.env`, `docker-compose.yml`, and every plugin's `package.json`. `scripts/check-pins.sh`
