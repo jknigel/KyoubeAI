@@ -62,7 +62,7 @@ The compose port binding listens on every interface, so reaching the UI from ano
    ```
    Approve the login link it prints. From then on plugins install and upgrade automatically at start-up.
 3. Check everything: `docker compose exec app kyoube doctor`.
-4. Authenticate the agent harnesses: either put provider API keys in `.env` (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`) or, once the Terminal plugin is installed, run `claude login`, `pi`, and `hermes setup` from the Terminal page. Credentials persist on the `kyoubeai-home` volume.
+4. Authenticate the agent harnesses: either put provider API keys in `.env` (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`) or, once the Terminal plugin is installed, run `claude login`, `pi`, and `hermes setup` from the Terminal page. Credentials persist on the `kyoubeai-home` volume. The first-run wizard's **Connect** step probes the harness you pick; if nothing is authenticated yet, choose **Skip for now and connect the harness later** — the agent is created anyway, and it starts working once the harness is logged in from the Terminal page.
 
 ## Terminal
 

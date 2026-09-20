@@ -28,6 +28,14 @@ building on it. The format is loosely [Keep a Changelog](https://keepachangelog.
   browser and editor; it follows the viewer from task to task until closed.
 - The image builds and ships the new plugin alongside the other two; `kyoube ensure-plugins` installs it
   on the next start with no operator action.
+- **First-run setup can skip the harness.** The onboarding wizard's "Connect" step probes the chosen
+  harness and refused to create the first agent while the probe failed — which, on a fresh install, it
+  always does until someone has run `claude login` (or `pi`, `hermes setup`) from the Terminal page the
+  wizard itself was covering. A failed probe now reads *"This harness is not connected yet …"* and
+  offers **Skip for now and connect the harness later**: the agent is created with the chosen harness
+  unauthenticated, setup finishes, and the harness is connected afterwards from the Terminal page (or
+  by a provider key in `.env`). Applied at image build time by `docker/core-patches`
+  (`onboarding-skip-harness-handler`, `onboarding-skip-harness-button`).
 
 ### Fixed
 
@@ -37,9 +45,8 @@ building on it. The format is loosely [Keep a Changelog](https://keepachangelog.
   writing) turns every `message_end` event into agent text without checking the message's role; pi
   emits that event for the user turn and for each tool result too, so the prompt and every tool
   output (already shown on its tool card) appeared again as prose. Fixed at image build time by
-  `docker/core-patches` (`pi-transcript-non-assistant-messages`), the repository's first and only
-  behavioural patch of the core, held until the upstream fix ships; `CONTRIBUTING.md` records the
-  rules that bound it.
+  `docker/core-patches` (`pi-transcript-non-assistant-messages`), held until the upstream fix ships;
+  `CONTRIBUTING.md` records the rules that bound it.
 
 ## 1.0.0 - 2026-09-17
 
