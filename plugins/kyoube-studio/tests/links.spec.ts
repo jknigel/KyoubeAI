@@ -13,9 +13,13 @@ describe("the Workspace page", () => {
   it("has a card for every link the theme hides from the sidebar", async () => {
     // @ts-expect-error -- plain ES module outside this package
     const { SECTIONS } = await import("../../../docker/theme/anchors.mjs");
-    const organization = SECTIONS.find((section: { id: string }) => section.id === "organization");
+    // Every section the skin hides whole is declared "exact" in anchors.mjs.
+    const hidden = SECTIONS.filter((section: { mode: string }) => section.mode === "exact").flatMap((section: { expected: string[] }) => section.expected);
+    expect(hidden.length).toBeGreaterThan(0);
     const hiddenElsewhere = ["/artifacts", "/skills", "/terminal"];
-    expect([...organization.expected, ...hiddenElsewhere].filter((route: string) => !routes.includes(route))).toEqual([]);
+    // A card covers a route when it links it or a page under it (All agents covers /agents).
+    const covered = (route: string) => routes.some((to) => to === route || to.startsWith(`${route}/`));
+    expect([...hidden, ...hiddenElsewhere].filter((route: string) => !covered(route))).toEqual([]);
   });
 
   it("never lists the same card twice", () => {

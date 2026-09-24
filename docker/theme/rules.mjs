@@ -21,14 +21,16 @@ const BUNDLE = ["ui/dist/assets/*.js"];
 export const TEXT_RULES = [
   // ── "Dashboard" is called Home ───────────────────────────────────────────
   // The mobile bottom bar already says Home; the desktop sidebar, the page's
-  // breadcrumb and the links back to it now agree. The agent page's own
-  // "Dashboard" tab is a different thing and is left alone.
+  // breadcrumb and the links back to it now agree. (The agent page's default
+  // view has been called Overview upstream since core 2026.916.)
   {
     id: "home-sidebar-label",
     files: BUNDLE,
     pattern: /to:"\/dashboard",label:"Dashboard"/g,
     replacement: 'to:"/dashboard",label:"Home"',
-    expect: 1,
+    // The streamlined sidebar (the default) and the legacy one an instance
+    // can still opt back into both ship in the bundle.
+    expect: 2,
   },
   {
     id: "home-breadcrumb",
@@ -59,106 +61,17 @@ export const TEXT_RULES = [
     expect: 1,
   },
 
-  // ── An agent's default view is its Overview ──────────────────────────────
-  // The Studio plugin shows an agent's profile (Concept C) at /team/<agent>
-  // and sends the core agent page's default "dashboard" view there, so that
-  // tab and its breadcrumb are called Overview. The route value stays.
+  // ── The core's integrations area is Connectors everywhere ──────────────
+  // Upstream renamed its "Apps" area to Connectors (sidebar, page title and
+  // most breadcrumbs) in 2026.916, which already keeps "Apps" free for
+  // KyoubeAI's own Apps. Three access-profile pages still say "Apps" in their
+  // breadcrumb; they say Connectors here too.
   {
-    id: "agent-overview-tab",
-    files: BUNDLE,
-    pattern: /\{value:"dashboard",label:"Dashboard"\}/g,
-    replacement: '{value:"dashboard",label:"Overview"}',
-    expect: 1,
-  },
-  {
-    id: "agent-overview-breadcrumb",
-    files: BUNDLE,
-    pattern: /([\w$]+)\.push\(\{label:"Dashboard"\}\)/g,
-    replacement: '$1.push({label:"Overview"})',
-    expect: 1,
-  },
-
-  // ── The core's "Apps" area is called Connections ─────────────────────────
-  // KyoubeAI's own Apps (AI-built apps over company data) keep the name. The
-  // core's area connects outside tools, so it becomes Connections, and its
-  // existing "Connections" sub-page becomes "Connected apps" so a breadcrumb
-  // never reads "Connections › Connections". Sub-page first, then the area.
-  {
-    id: "connections-subpage-nav",
-    files: BUNDLE,
-    pattern: /to:"\/apps\/connections",label:"Connections"/g,
-    replacement: 'to:"/apps/connections",label:"Connected apps"',
-    expect: 1,
-  },
-  {
-    id: "connections-subpage-breadcrumb",
-    files: BUNDLE,
-    pattern: /\{label:"Apps",href:"\/apps"\},\{label:"Connections"\}/g,
-    replacement: '{label:"Connections",href:"/apps"},{label:"Connected apps"}',
-    expect: 1,
-  },
-  {
-    id: "connections-subpage-heading",
-    files: BUNDLE,
-    pattern: /(\("h1",\{className:"text-2xl font-bold tracking-tight",children:)"Connections"(\}\),\(0,[\w$]+\.jsx\)\("p",\{className:"mt-1 text-sm text-muted-foreground",children:"The t)/g,
-    replacement: '$1"Connected apps"$2',
-    expect: 2,
-  },
-  {
-    id: "connections-breadcrumbs",
+    id: "connectors-breadcrumbs",
     files: BUNDLE,
     pattern: /\{label:"Apps",href:"\/apps"\}/g,
-    replacement: '{label:"Connections",href:"/apps"}',
-    expect: 9,
-  },
-  {
-    id: "connections-breadcrumb-root",
-    files: BUNDLE,
-    pattern: /\{label:"Apps"\}\]/g,
-    replacement: '{label:"Connections"}]',
-    expect: 1,
-  },
-  {
-    id: "connections-sidebar-label",
-    files: BUNDLE,
-    pattern: /to:"\/apps",label:"Apps"/g,
-    replacement: 'to:"/apps",label:"Connections"',
-    expect: 1,
-  },
-  {
-    id: "connections-area-title",
-    files: BUNDLE,
-    pattern: /(truncate text-sm font-bold text-foreground",children:)"Apps"/g,
-    replacement: '$1"Connections"',
-    expect: 1,
-  },
-  {
-    id: "connections-area-section",
-    files: BUNDLE,
-    pattern: /(uppercase tracking-wide text-muted-foreground",children:)"Apps"/g,
-    replacement: '$1"Connections"',
-    expect: 1,
-  },
-  {
-    id: "connections-browse-heading",
-    files: BUNDLE,
-    pattern: /(\("h1",\{className:"text-2xl font-bold tracking-tight",children:)"Apps"/g,
-    replacement: '$1"Connections"',
-    expect: 1,
-  },
-  {
-    id: "connections-empty-hint",
-    files: BUNDLE,
-    pattern: /("Add one from ",\(0,[\w$]+\.jsx\)\("span",\{className:"font-medium text-foreground",children:)"Apps"/g,
-    replacement: '$1"Connections"',
-    expect: 1,
-  },
-  {
-    id: "connections-experimental-toggle",
-    files: BUNDLE,
-    pattern: /title:"Apps",description:"Show the Apps navigation/g,
-    replacement: 'title:"Connections",description:"Show the Connections navigation',
-    expect: 2,
+    replacement: '{label:"Connectors",href:"/apps"}',
+    expect: 3,
   },
 
   // ── A plugin page is titled by its page ──────────────────────────────────

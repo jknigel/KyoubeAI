@@ -246,13 +246,10 @@ div:has(> div > aside > nav), div:has(> div > div > aside > nav) { background: v
 :is(:root[data-kyoube-shell="studio"] aside:has(> nav button > svg.lucide-square-pen), aside:has([data-kyoube-studio="team"])) nav a:is([href$="/routines"], [href$="/artifacts"], [href$="/skills"]):not([data-kyoube-nav]),
 :is(:root[data-kyoube-shell="studio"] aside:has(> nav button > svg.lucide-square-pen), aside:has([data-kyoube-studio="team"])) nav div:not([class]):has(> a:is([href$="/routines"], [href$="/artifacts"], [href$="/skills"]):not([data-kyoube-nav])) { display: none; }
 
-/* The stock Agents and Organization sections are replaced by the Studio
-   Team roster and the Workspace page. The Work section also contains agent
-   and /org links (inside the roster), hence the :not(). */
-:is(:root[data-kyoube-shell="studio"] aside:has(> nav button > svg.lucide-square-pen), aside:has([data-kyoube-studio="team"])) nav > div:has(a[href*="/agents/"]):not(:has([data-kyoube-studio])),
-:is(:root[data-kyoube-shell="studio"] aside:has(> nav button > svg.lucide-square-pen), aside:has([data-kyoube-studio="team"])) nav > div:has(button[aria-label="New agent"]):not(:has([data-kyoube-studio])),
-:is(:root[data-kyoube-shell="studio"] aside:has(> nav button > svg.lucide-square-pen), aside:has([data-kyoube-studio="team"])) nav > div:has(a[href$="/org"]):not(:has([data-kyoube-studio])),
-:is(:root[data-kyoube-shell="studio"] aside:has(> nav button > svg.lucide-square-pen), aside:has([data-kyoube-studio="team"])) nav > div:has(a[href$="/company/settings"]):not(:has([data-kyoube-studio])) { display: none; }
+/* The Org section (Agents, Skills, Connectors, Audit) moves to the Workspace
+   page; the Studio Team roster above it replaces the agent list. Found by
+   holding both its first and its last link, which no other section does. */
+:is(:root[data-kyoube-shell="studio"] aside:has(> nav button > svg.lucide-square-pen), aside:has([data-kyoube-studio="team"])) nav > div:has(a[href$="/agents"]):has(a[href$="/activity"]):not(:has([data-kyoube-studio])) { display: none; }
 
 /* Terminal lives on the Workspace page. */
 :is(:root[data-kyoube-shell="studio"] aside:has(> nav button > svg.lucide-square-pen), aside:has([data-kyoube-studio="team"])) nav div:has(> [data-kyoube-nav="terminal"]) { display: none; }
@@ -280,18 +277,25 @@ div:has(> div > aside > nav), div:has(> div > div > aside > nav) { background: v
 main div:has(> div > [data-kyoube-page]) > div:first-child:has(> a[href$="/dashboard"]):not(:has([data-kyoube-page])) { display: none; }
 
 /* ── The core agent page ──────────────────────────────────────────────── */
-/* An agent's page is the Studio profile (/team/<agent>); the core's own tabs
-   (Instructions, Skills, Configuration, Runs, …) keep the core header, set
-   like the profile's: the name in the display face. The Studio plugin paints
-   the agent's character over the header icon, since only it knows which
-   agent is on screen. Recognised by the page's own tab bar. */
-:root[data-kyoube-shell="studio"] main:has([role="tab"][id$="-trigger-instructions"]):has([role="tab"][id$="-trigger-budget"]) div:has(> button[data-slot="popover-trigger"]) > div h2 {
+/* An agent's page is the Studio profile (/team/<agent>); the core's own views
+   (Instructions, Skills, Harness / Runtime, …) keep the core header, set like
+   the profile's: the name in the display face. The Studio plugin paints the
+   agent's character over the header avatar, since only it knows which agent
+   is on screen. Recognised by the page's agent-settings-content wrapper. */
+:root[data-kyoube-shell="studio"] .agent-settings-content > header h1 {
   font-family: var(--kyoube-font-display);
   font-weight: 400;
   font-size: 34px;
   line-height: 1.05;
   letter-spacing: -0.01em;
 }
+
+/* The core paints every section of the agent overview with --card, which it
+   sets equal to --background in dark mode. KyoubeAI's cards are a step lighter
+   than the page, so the overview's borderless sections (Recent tasks, Audit)
+   would sit in grey bands; they sit on the page instead. The bordered cards
+   keep the card colour. */
+.agent-settings-overview section:not(.border) { background-color: transparent; }
 
 /* ── Home (the dashboard) ──────────────────────────────────────────────── */
 /* The Studio Home widget renders in the dashboard's plugin-widget slot,

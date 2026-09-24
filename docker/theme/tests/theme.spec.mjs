@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SECTIONS } from "../anchors.mjs";
 import { TEXT_RULES } from "../rules.mjs";
 import { THEME_ASSET, ThemeError, overriddenTokens, runTheme, sectionRoutes } from "../theme.mjs";
-import { BUNDLE, CORE_CSS, INDEX_HTML } from "./fixtures/core-2026.831.1.mjs";
+import { BUNDLE, CORE_CSS, INDEX_HTML } from "./fixtures/core-2026.916.1.mjs";
 
 const THEME_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const quiet = () => {};
@@ -15,44 +15,39 @@ let root;
 beforeEach(async () => { root = await mkdtemp(path.join(tmpdir(), "kyoube-theme-")); });
 afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 
-/** A core tree with the real 2026.831.1 excerpts, optionally edited to simulate an upstream change. */
+/** A core tree with the real 2026.916.1 excerpts, optionally edited to simulate an upstream change. */
 async function coreTree({ bundle = BUNDLE, css = CORE_CSS, html = INDEX_HTML } = {}) {
   const assets = path.join(root, "ui", "dist", "assets");
   await mkdir(assets, { recursive: true });
   await writeFile(path.join(root, "ui", "dist", "index.html"), html);
-  await writeFile(path.join(assets, "index-BHbrFFmp.js"), bundle);
-  await writeFile(path.join(assets, "index-BU41-p9M.css"), css);
+  await writeFile(path.join(assets, "index-5zyW-AFc.js"), bundle);
+  await writeFile(path.join(assets, "index-tk1F4est.css"), css);
 }
 
 const read = (rel) => readFile(path.join(root, rel), "utf8");
 const count = (text, literal) => text.split(literal).length - 1;
 
-describe("runTheme on core 2026.831.1", () => {
+describe("runTheme on core 2026.916.1", () => {
   it("applies every text rule exactly as declared and reports it", async () => {
     await coreTree();
     const lines = [];
     const result = await runTheme({ root, themeDir: THEME_DIR, report: true, log: (line) => lines.push(line) });
     expect(result.rules).toHaveLength(TEXT_RULES.length);
     for (const rule of TEXT_RULES) expect(result.rules).toContain(`${rule.id} ${rule.expect}/${rule.expect}`);
-    expect(lines.join("\n")).toMatch(/theme: anchors \d+\/\d+; sidebar sections top=6, work=9, organization=6/);
+    expect(lines.join("\n")).toMatch(/theme: anchors \d+\/\d+; sidebar sections top=6, work=8, org=4/);
   });
 
-  it("renames Dashboard to Home and the core's Apps area to Connections", async () => {
+  it("renames Dashboard to Home in both sidebars and the core's last Apps breadcrumbs to Connectors", async () => {
     await coreTree();
     await runTheme({ root, themeDir: THEME_DIR, log: quiet });
-    const bundle = await read("ui/dist/assets/index-BHbrFFmp.js");
-    expect(bundle).toContain('to:"/dashboard",label:"Home"');
+    const bundle = await read("ui/dist/assets/index-5zyW-AFc.js");
+    // Both sidebars (streamlined and legacy) are renamed; the mobile bar's own "Home" link was already there.
+    expect(count(bundle, 'to:"/dashboard",label:"Home"')).toBe(3);
     expect(bundle).not.toContain('to:"/dashboard",label:"Dashboard"');
-    expect(count(bundle, '{label:"Connections",href:"/apps"}')).toBe(10);
+    expect(bundle).toContain('[{label:"Home"}]');
+    expect(count(bundle, '{label:"Connectors",href:"/apps"}')).toBe(3);
     expect(bundle).not.toContain('{label:"Apps",href:"/apps"}');
-    expect(bundle).toContain('to:"/apps/connections",label:"Connected apps"');
-    expect(bundle).toContain('to:"/apps",label:"Connections"');
-    // KyoubeAI's own Apps page is a different route and is untouched by these rules.
-    expect(bundle).not.toContain('{label:"Connections"},{label:"Connections"}');
     expect(bundle).toMatch(/[\w$]+\(\[\{label:[\w$]+\.displayName\?\?[\w$]+\.pluginDisplayName\}\]\)/);
-    // The agent page's default tab opens the Studio profile, so it is called Overview.
-    expect(bundle).toContain('{value:"dashboard",label:"Overview"}');
-    expect(bundle).not.toContain('{value:"dashboard",label:"Dashboard"}');
   });
 
   it("makes dark the default and links the theme after the core stylesheet with the boot flag", async () => {
@@ -60,7 +55,7 @@ describe("runTheme on core 2026.831.1", () => {
     await runTheme({ root, themeDir: THEME_DIR, log: quiet });
     const html = await read("ui/dist/index.html");
     expect(html).toContain('const fallback = "dark";');
-    const core = html.indexOf('/assets/index-BU41-p9M');
+    const core = html.indexOf('/assets/index-tk1F4est');
     const theme = html.indexOf(`/assets/${THEME_ASSET}`);
     expect(core).toBeGreaterThan(-1);
     expect(theme).toBeGreaterThan(core);
@@ -75,7 +70,7 @@ describe("runTheme on core 2026.831.1", () => {
     await coreTree();
     await runTheme({ root, themeDir: THEME_DIR, dryRun: true, log: quiet });
     expect(await read("ui/dist/index.html")).toBe(INDEX_HTML);
-    expect(await read("ui/dist/assets/index-BHbrFFmp.js")).toBe(BUNDLE);
+    expect(await read("ui/dist/assets/index-5zyW-AFc.js")).toBe(BUNDLE);
   });
 
   it("refuses to run twice on the same tree", async () => {
@@ -96,7 +91,7 @@ describe("runTheme when the core changes", () => {
   }
 
   it("names a text rule whose target moved", async () => {
-    const message = await failureFor({ bundle: BUNDLE.replace('to:"/dashboard",label:"Dashboard"', 'to:"/dashboard",label:"Overview"') });
+    const message = await failureFor({ bundle: BUNDLE.replaceAll('to:"/dashboard",label:"Dashboard"', 'to:"/dashboard",label:"Overview"') });
     expect(message).toContain('text rule "home-sidebar-label" matched 0 time(s)');
   });
 
@@ -106,21 +101,21 @@ describe("runTheme when the core changes", () => {
   });
 
   it("names a hook the skin relies on", async () => {
-    const message = await failureFor({ bundle: BUNDLE.replace('ariaLabel:"New agent"', 'ariaLabel:"Add agent"') });
-    expect(message).toContain('anchor "nav-agents-section"');
+    const message = await failureFor({ bundle: BUNDLE.replace("} avatar`", "} portrait`") });
+    expect(message).toContain('anchor "agent-avatar-label"');
   });
 
-  it("stops when the hidden Organization section gains a link", async () => {
-    const bundle = BUNDLE.replace('label:"Organization",collapsible', 'label:"Organization",collapsible:x,y:[{to:"/reports",label:"Reports"}],z');
+  it("stops when the hidden Org section gains a link", async () => {
+    const bundle = BUNDLE.replace('label:"Org",collapsible', 'label:"Org",collapsible:x,y:[{to:"/reports",label:"Reports"}],z');
     const message = await failureFor({ bundle });
-    expect(message).toContain('sidebar section "organization" changed: added [/reports]');
+    expect(message).toContain('sidebar section "org" changed: added [/reports]');
   });
 
   it("only reports a new link in a section the skin keeps", async () => {
     await coreTree({ bundle: BUNDLE.replace('label:"Work",collapsible', 'label:"Work",collapsible:x,y:[{to:"/reports",label:"Reports"}],z') });
     const lines = [];
     await runTheme({ root, themeDir: THEME_DIR, report: true, log: (line) => lines.push(line) });
-    expect(lines.join("\n")).toContain("work=10 (new: /reports)");
+    expect(lines.join("\n")).toContain("work=9 (new: /reports)");
   });
 
   it("names a token the core stopped declaring", async () => {
