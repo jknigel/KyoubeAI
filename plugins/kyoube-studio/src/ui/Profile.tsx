@@ -295,7 +295,7 @@ function Profile({ agentRef, view }: { agentRef: string; view: "overview" | "tas
           </div>
         </div>
       )}
-      <p className="ks-classic"><a {...navigation.linkProps(profile.links.classic)}>Run charts and costs in the classic view</a></p>
+      <p className="ks-classic"><a {...navigation.linkProps(profile.links.classic)}>Open the core's own agent overview</a></p>
     </div>
   );
 }

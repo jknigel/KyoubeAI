@@ -22,6 +22,11 @@ describe("the Workspace page", () => {
     expect([...hidden, ...hiddenElsewhere].filter((route: string) => !covered(route))).toEqual([]);
   });
 
+  it("links the core's canonical routes, not the ones it only redirects", () => {
+    // Core 2026.916 folded the org chart into All agents and moved timeline and costs under Audit.
+    expect(routes.filter((to) => ["/org", "/timeline", "/costs"].includes(to))).toEqual([]);
+  });
+
   it("never lists the same card twice", () => {
     const ids = WORKSPACE_GROUPS.flatMap((group) => group.cards.map((card) => card.id));
     expect(new Set(ids).size).toBe(ids.length);

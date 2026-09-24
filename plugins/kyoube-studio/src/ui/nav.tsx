@@ -106,7 +106,7 @@ export function StudioTeam(_props: PluginSidebarProps) {
   return (
     <div data-kyoube-studio="team" className="ks-team">
       <SectionLabel text={total > 0 ? `Team · ${total}` : "Team"}>
-        <a {...navigation.linkProps("/org")} className="ks-icon-btn" title="Org chart" aria-label="Org chart"><Icon name="org" size={14} /></a>
+        <a {...navigation.linkProps("/agents/all")} className="ks-icon-btn" title="All agents and the org chart" aria-label="All agents and the org chart"><Icon name="org" size={14} /></a>
         <a {...navigation.linkProps("/agents/new")} className="ks-icon-btn" title="Hire an agent" aria-label="Hire an agent"><Icon name="plus" size={14} /></a>
       </SectionLabel>
       {team.loading ? (

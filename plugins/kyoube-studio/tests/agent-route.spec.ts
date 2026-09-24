@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { CORE_AGENT_PAGE_SCOPE, agentRedirectTarget, coreAgentPage, coreAvatarCss } from "../src/ui/agent-route.js";
+import { CORE_AGENT_HEADER, agentRedirectTarget, coreAgentPage, coreAvatarCss, cssString } from "../src/ui/agent-route.js";
 import { assignTask, BoardApiError, boardPost, setAgentOnDuty } from "../src/ui/board-api.js";
 
 describe("the core agent page", () => {
-  it("recognises agent URLs and their tab, but not the list or the new-agent page", () => {
-    expect(coreAgentPage("/BAP/agents/ai-manager")).toEqual({ ref: "ai-manager", tab: "dashboard" });
+  it("recognises agent URLs and their view, but not the list or the new-agent page", () => {
+    expect(coreAgentPage("/BAP/agents/ai-manager")).toEqual({ ref: "ai-manager", tab: "overview" });
     expect(coreAgentPage("/BAP/agents/ai-manager/instructions")).toEqual({ ref: "ai-manager", tab: "instructions" });
     expect(coreAgentPage("/BAP/agents/ai-manager/runs/run-1")).toBeNull();
     expect(coreAgentPage("/BAP/agents/all")).toBeNull();
@@ -12,24 +12,31 @@ describe("the core agent page", () => {
     expect(coreAgentPage("/BAP/team/ai-manager")).toBeNull();
   });
 
-  it("sends only the default view to the profile, and keeps the classic view on request", () => {
+  it("sends only the default view to the profile, under either name, and keeps the classic view on request", () => {
     expect(agentRedirectTarget("/BAP/agents/ai-manager", "")).toBe("/team/ai-manager");
+    expect(agentRedirectTarget("/BAP/agents/ai-manager/overview", "")).toBe("/team/ai-manager");
+    expect(agentRedirectTarget("/BAP/agents/ai-manager/overview/", "?x=1")).toBe("/team/ai-manager");
+    // The name before core 2026.916; old links and bookmarks still carry it.
     expect(agentRedirectTarget("/BAP/agents/ai-manager/dashboard", "")).toBe("/team/ai-manager");
-    expect(agentRedirectTarget("/BAP/agents/ai-manager/dashboard/", "?x=1")).toBe("/team/ai-manager");
-    expect(agentRedirectTarget("/BAP/agents/ai-manager/dashboard", "?classic=1")).toBeNull();
-    expect(agentRedirectTarget("/BAP/agents/ai-manager/configuration", "")).toBeNull();
+    expect(agentRedirectTarget("/BAP/agents/ai-manager/overview", "?classic=1")).toBeNull();
+    expect(agentRedirectTarget("/BAP/agents/ai-manager/runtime", "")).toBeNull();
+    expect(agentRedirectTarget("/BAP/agents/ai-manager/instructions", "")).toBeNull();
     expect(agentRedirectTarget("/BAP/agents/all", "")).toBeNull();
   });
 
-  it("paints the agent's character over the header icon of that agent only", () => {
+  it("paints the agent's character over that agent's header avatar only", () => {
     const css = coreAvatarCss({ name: "AI Delivery Lead", icon: "rocket" });
-    expect(css).toContain(CORE_AGENT_PAGE_SCOPE);
-    expect(css).toContain('button[data-slot="popover-trigger"]:has(> svg.lucide-rocket)');
+    expect(css).toContain(`${CORE_AGENT_HEADER} [role="img"][aria-label="AI Delivery Lead avatar"]`);
     expect(css).toContain('url("data:image/svg+xml;charset=utf-8,%3Csvg');
     expect(css).toContain("var(--kyoube-tile-sky");
-    // No icon, or one the core does not know, renders as the core's default: bot.
-    expect(coreAvatarCss({ name: "AI Manager", icon: null })).toContain("svg.lucide-bot");
-    expect(coreAvatarCss({ name: "AI Manager", icon: "not-real" })).toContain("svg.lucide-bot");
+    expect(css).toContain("> * { opacity: 0; }");
+  });
+
+  it("quotes an agent name that would otherwise break the selector", () => {
+    expect(cssString('Ada "The Builder"')).toBe('"Ada \\"The Builder\\""');
+    expect(cssString("back\\slash")).toBe('"back\\\\slash"');
+    expect(cssString("two\nlines")).toBe('"two lines"');
+    expect(coreAvatarCss({ name: 'Ada "The Builder"', icon: null })).toContain('[aria-label="Ada \\"The Builder\\" avatar"]');
   });
 });
 

@@ -1,6 +1,6 @@
 {
   "name": "@kyoube/plugin-studio",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "KyoubeAI's Studio layout: the Home page, the team roster and Build group in the sidebar, and the Workspace page (Paperclip plugin)",
   "license": "AGPL-3.0-only",
   "type": "module",

@@ -81,7 +81,7 @@ export function StudioHome(_props: PluginWidgetProps) {
             <span className="ks-step-text"><b>Give it a task</b><span>Plain words are enough</span></span>
           </a>
           <span className="ks-arrow" aria-hidden="true"><Icon name="arrow" size={18} /></span>
-          <a {...navigation.linkProps("/org")} className="ks-step" data-done={steps.teamwork}>
+          <a {...navigation.linkProps("/agents/all")} className="ks-step" data-done={steps.teamwork}>
             <span className="ks-check" data-done={steps.teamwork}>{steps.teamwork ? <Icon name="check" size={12} /> : "3"}</span>
             <span className="ks-step-text"><b>Let the team work together</b><span>Agents hand work to each other and keep memory</span></span>
             {team.length > 0 ? (

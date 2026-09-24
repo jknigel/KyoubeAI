@@ -84,13 +84,13 @@ describe("buildProfile", () => {
     expect(agentSkills({ id: "x", name: "x", status: "idle" })).toEqual([]);
   });
 
-  it("links the core's own tabs and keeps the classic dashboard reachable", () => {
+  it("links the core's own agent views, its runs under Audit, and keeps the core overview reachable", () => {
     expect(profileOf("writer").links).toEqual({
       instructions: "/agents/ambassador-content-agent/instructions",
       skills: "/agents/ambassador-content-agent/skills",
-      runs: "/agents/ambassador-content-agent/runs",
-      settings: "/agents/ambassador-content-agent/configuration",
-      classic: "/agents/ambassador-content-agent/dashboard?classic=1",
+      runs: "/activity/runs?agentId=writer",
+      settings: "/agents/ambassador-content-agent/runtime",
+      classic: "/agents/ambassador-content-agent/overview?classic=1",
     });
   });
 

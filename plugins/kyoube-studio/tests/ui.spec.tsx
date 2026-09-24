@@ -133,8 +133,10 @@ describe("Workspace", () => {
     installBridge({ workspace: { agents: 5, people: 2, projects: 3, openTasks: 7, isAdmin: false } });
     const html = render(WorkspacePage);
     expect(html).toContain('data-kyoube-page="workspace"');
-    expect(html).toContain('href="/BAP/org"');
+    expect(html).toContain('href="/BAP/agents/all"');
+    expect(html).toContain('href="/BAP/activity/costs"');
     expect(html).toContain('href="/BAP/apps"');
+    expect(html).not.toContain('href="/BAP/org"');
     expect(html).toContain("5 agents");
     expect(html).not.toContain('href="/BAP/terminal"');
     installBridge({ workspace: { agents: 1, people: 1, projects: 0, openTasks: 0, isAdmin: true } });
@@ -180,7 +182,7 @@ describe("agent profile", () => {
     stats: { doneThisWeek: 9, open: 3, spentMonthlyCents: 310, budgetMonthlyCents: 0 },
     skills: ["Kyoube Data", "Humanizer"],
     worksWith: [{ id: "m1", name: "AI Manager", icon: null, href: "/team/ai-manager", relation: "Its manager" }],
-    links: { instructions: "/agents/ambassador-content-agent/instructions", skills: "/agents/ambassador-content-agent/skills", runs: "/agents/ambassador-content-agent/runs", settings: "/agents/ambassador-content-agent/configuration", classic: "/agents/ambassador-content-agent/dashboard?classic=1" },
+    links: { instructions: "/agents/ambassador-content-agent/instructions", skills: "/agents/ambassador-content-agent/skills", runs: "/activity/runs?agentId=writer", settings: "/agents/ambassador-content-agent/runtime", classic: "/agents/ambassador-content-agent/overview?classic=1" },
   };
 
   it("parses the team path", () => {
@@ -199,14 +201,15 @@ describe("agent profile", () => {
     expect(html).toContain('role="switch" aria-checked="true"');
     expect(html).toContain(">On duty");
     expect(html).toContain('href="/BAP/agents/ambassador-content-agent/instructions"');
-    expect(html).toContain('href="/BAP/agents/ambassador-content-agent/configuration"');
+    expect(html).toContain('href="/BAP/agents/ambassador-content-agent/runtime"');
+    expect(html).toContain('href="/BAP/activity/runs?agentId=writer"');
     expect(html).toContain("Working now");
     expect(html).toContain("Writing post 2");
     expect(html).toContain('href="/BAP/issues/BAP-45"');
     expect(html).toContain("Kyoube Data");
     expect(html).toContain("Its manager");
     expect(html).toContain("Tasks done this week");
-    expect(html).toContain('href="/BAP/agents/ambassador-content-agent/dashboard?classic=1"');
+    expect(html).toContain('href="/BAP/agents/ambassador-content-agent/overview?classic=1"');
   });
 
   it("shows the task lists on the Tasks tab", () => {

@@ -70,7 +70,7 @@ export interface AgentProfile {
   stats: { doneThisWeek: number; open: number; spentMonthlyCents: number; budgetMonthlyCents: number };
   skills: string[];
   worksWith: WorkRelation[];
-  /** The core's own agent tabs, for the profile's tab row. */
+  /** The core's own agent pages, for the profile's tab row. */
   links: { instructions: string; skills: string; runs: string; settings: string; classic: string };
 }
 
@@ -100,7 +100,7 @@ export function profileHref(agent: Pick<AgentLike, "id" | "urlKey">): string {
   return `/team/${encodeURIComponent(agent.urlKey || agent.id)}`;
 }
 
-/** One of the core's own agent pages (instructions, skills, runs, configuration, dashboard). */
+/** One of the core's own agent views (instructions, skills, runtime, overview). */
 export function coreAgentHref(agent: Pick<AgentLike, "id" | "urlKey">, tab: string): string {
   return `/agents/${encodeURIComponent(agent.urlKey || agent.id)}/${tab}`;
 }
@@ -235,9 +235,10 @@ export function buildProfile(
     links: {
       instructions: coreAgentHref(agent, "instructions"),
       skills: coreAgentHref(agent, "skills"),
-      runs: coreAgentHref(agent, "runs"),
-      settings: coreAgentHref(agent, "configuration"),
-      classic: `${coreAgentHref(agent, "dashboard")}?classic=1`,
+      // Since core 2026.916 an agent's runs live under Audit, filtered to it.
+      runs: `/activity/runs?agentId=${encodeURIComponent(agent.id)}`,
+      settings: coreAgentHref(agent, "runtime"),
+      classic: `${coreAgentHref(agent, "overview")}?classic=1`,
     },
   };
 }
