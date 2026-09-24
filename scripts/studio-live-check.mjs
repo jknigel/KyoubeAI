@@ -9,9 +9,10 @@
  *
  *   node scripts/studio-live-check.mjs <base-url> <email> <password> <company-prefix> [board-token]
  *
- * It also opens an agent through the core's own URL and checks that the
- * Studio profile answers, that the core's agent tabs show the agent's
- * character, and that `?classic=1` keeps the core's view. With a board token
+ * It also opens an agent through the core's own URLs and checks that the
+ * Studio profile answers, that the core's agent views show the agent's
+ * character and display-face name, and that `?classic=1` keeps the core's
+ * overview. With a board token
  * it disables kyoube.studio, checks that the stock sidebar comes back, and
  * enables it again. Screenshots of Home (dark and light), an agent profile and
  * the Workspace page are written to STUDIO_SHOTS_DIR when that is set, for a
@@ -52,8 +53,9 @@ const INSPECT = `(() => {
     teamShown: shown(team),
     teamRows: team ? team.querySelectorAll(".ks-row").length : 0,
     firstAgentHref: team && team.querySelector(".ks-row") ? team.querySelector(".ks-row").getAttribute("href") : null,
-    orgShown: shown(coreLink("/org")),
-    stockAgentsShown: !!nav && [...nav.querySelectorAll('a[href*="/agents/"]')].some((a) => !a.closest("[data-kyoube-studio]") && shown(a)),
+    // The core's Org section (Agents, Skills, Connectors, Audit) moves to the Workspace page.
+    orgShown: shown(coreLink("/activity")),
+    stockAgentsShown: shown(coreLink("/agents")),
     coreRoutinesShown: shown(coreLink("/routines")),
     studioRoutinesShown: shown(nav && nav.querySelector('a[data-kyoube-nav="routines"]')),
     buildBeforeData: !!build && !!data && !!(build.compareDocumentPosition(data) & Node.DOCUMENT_POSITION_FOLLOWING),
@@ -141,35 +143,39 @@ async function main() {
       const back = [...document.querySelectorAll("main a")].find((a) => a.textContent.trim() === "Back");
       return { cards, backShown: !!back && back.getClientRects().length > 0, title: document.title };
     })()`);
-    for (const route of ["/org", "/timeline", "/costs", "/activity", "/company/settings", "/apps", "/skills", "/artifacts"]) {
+    for (const route of ["/agents/all", "/activity/timeline", "/activity/costs", "/activity", "/company/settings", "/apps", "/skills", "/artifacts"]) {
       if (!workspace.cards.some((href) => href && href.endsWith(route))) problems.push(`workspace: no card links ${route}`);
     }
     if (workspace.backShown) problems.push("workspace: the host's Back link is still shown");
     if (/Plugins/.test(workspace.title)) problems.push(`workspace: page title still names the plugin area (${workspace.title})`);
     if (shotsDir) await writeFile(path.join(shotsDir, "workspace-light.png"), await page.screenshot());
 
-    // The agent profile (Concept C): the core's agent URL opens it, the core's
-    // own tabs carry the agent's character, and ?classic=1 keeps the core view.
+    // The agent profile (Concept C): the core's agent URLs open it, the core's
+    // own views carry the agent's character, and ?classic=1 keeps the core view.
     const agentRef = facts.firstAgentHref ? decodeURIComponent(facts.firstAgentHref.split("/team/")[1] || "") : "";
     if (!agentRef) problems.push("profile: the team roster has no agent link to follow");
     else {
-      await page.goto(`${base}/${prefix}/agents/${encodeURIComponent(agentRef)}`);
-      try {
-        await page.waitForFunction(`location.pathname.endsWith("/team/${encodeURIComponent(agentRef)}") && !!document.querySelector('[data-kyoube-page="team"] h1') && !!document.querySelector('[data-kyoube-page="team"] [role="switch"]')`, { timeoutMs: 20_000 });
-        if (shotsDir) await writeFile(path.join(shotsDir, "profile-light.png"), await page.screenshot());
-      } catch {
-        problems.push(`profile: /agents/${agentRef} did not open the Studio profile (at ${await page.evaluate("location.pathname")})`);
+      const agentUrl = `${base}/${prefix}/agents/${encodeURIComponent(agentRef)}`;
+      for (const view of ["", "/overview"]) {
+        await page.goto(`${agentUrl}${view}`);
+        try {
+          await page.waitForFunction(`location.pathname.endsWith("/team/${encodeURIComponent(agentRef)}") && !!document.querySelector('[data-kyoube-page="team"] h1') && !!document.querySelector('[data-kyoube-page="team"] [role="switch"]')`, { timeoutMs: 20_000 });
+          if (shotsDir && view === "") await writeFile(path.join(shotsDir, "profile-light.png"), await page.screenshot());
+        } catch {
+          problems.push(`profile: /agents/${agentRef}${view} did not open the Studio profile (at ${await page.evaluate("location.pathname")})`);
+        }
       }
-      await page.goto(`${base}/${prefix}/agents/${encodeURIComponent(agentRef)}/skills`);
+      await page.goto(`${agentUrl}/skills`);
       try {
-        await page.waitForFunction(`(() => { const b = document.querySelector('main button[data-slot="popover-trigger"]'); return !!b && getComputedStyle(b).backgroundImage.startsWith('url("data:image/svg+xml'); })()`, { timeoutMs: 20_000 });
+        await page.waitForFunction(`(() => { const avatar = document.querySelector('.agent-settings-content > header [role="img"]'); return !!avatar && getComputedStyle(avatar).backgroundImage.startsWith('url("data:image/svg+xml'); })()`, { timeoutMs: 20_000 });
       } catch {
         problems.push("profile: the core agent page's header does not show the agent's character");
       }
-      const firstTab = await page.evaluate(`document.querySelector('[role="tab"][id$="-trigger-dashboard"]')?.textContent?.trim() ?? null`);
-      if (firstTab !== "Overview") problems.push(`profile: the core agent page's first tab reads ${JSON.stringify(firstTab)}, expected "Overview"`);
-      await page.goto(`${base}/${prefix}/agents/${encodeURIComponent(agentRef)}/dashboard?classic=1`, { settleMs: 2500 });
-      if (!(await page.evaluate(`location.pathname.endsWith("/dashboard")`))) problems.push("profile: ?classic=1 did not keep the core's own agent dashboard");
+      const nameFont = await page.evaluate(`(() => { const name = document.querySelector('.agent-settings-content > header h1'); return name ? getComputedStyle(name).fontFamily : null; })()`);
+      if (!nameFont || !nameFont.includes("Instrument Serif")) problems.push(`profile: the core agent page's name is not in the display face (${JSON.stringify(nameFont)})`);
+      if (shotsDir) await writeFile(path.join(shotsDir, "agent-core-light.png"), await page.screenshot());
+      await page.goto(`${agentUrl}/overview?classic=1`, { settleMs: 2500 });
+      if (!(await page.evaluate(`location.pathname.endsWith("/overview")`))) problems.push("profile: ?classic=1 did not keep the core's own agent overview");
     }
 
     // Secondary sidebars (company settings) are <aside><nav> too; the skin must leave them whole.
@@ -192,9 +198,9 @@ async function main() {
         await api(`/api/plugins/${studio.id}/disable`, "POST");
         try {
           await page.goto(`${base}/${prefix}/dashboard`, { settleMs: 500 });
-          await page.waitForFunction(`(() => { const a = [...document.querySelectorAll("aside nav a")].find((x) => (x.getAttribute("href") || "").endsWith("/org")); return !!a && a.getClientRects().length > 0; })()`, { timeoutMs: 15_000 });
+          await page.waitForFunction(`(() => { const a = [...document.querySelectorAll("aside nav a")].find((x) => (x.getAttribute("href") || "").endsWith("/activity")); return !!a && a.getClientRects().length > 0; })()`, { timeoutMs: 15_000 });
         } catch {
-          problems.push("with kyoube.studio disabled, the stock sidebar (Organization section) did not come back within 15 s");
+          problems.push("with kyoube.studio disabled, the stock sidebar (Org section) did not come back within 15 s");
         } finally {
           await api(`/api/plugins/${studio.id}/enable`, "POST");
         }

@@ -63,8 +63,10 @@ admin_role() {
 
 # Rows whose absolute path still starts with /paperclip/: every `cwd` column in
 # the core database (execution/project workspaces, operations, runtime services)
-# plus agents' adapter configs. Generic over the schema so a core bump that adds
-# a table needs no change here.
+# plus every JSON string in agents' adapter configs that starts with it. Only a
+# string's start counts: the core's own skill keys (`paperclipai/paperclip/…`,
+# listed in paperclipSkillSync) contain "/paperclip/" but are names, not paths.
+# Generic over the schema so a core bump that adds a table needs no change here.
 count_legacy_paths() {
   local admin db out
   admin="$(admin_role)" || { echo "migrate: neither a kyoubeai nor a paperclip role — is the db service up?" >&2; return 1; }
@@ -82,7 +84,7 @@ BEGIN
     total := total + n;
   END LOOP;
   IF to_regclass('public.agents') IS NOT NULL THEN
-    EXECUTE 'SELECT count(*) FROM agents WHERE adapter_config::text LIKE ''%/paperclip/%''' INTO n;
+    EXECUTE 'SELECT count(*) FROM agents WHERE adapter_config::text LIKE ''%"/paperclip/%''' INTO n;
     total := total + n;
   END IF;
   RAISE NOTICE 'legacy_paths=%', total;

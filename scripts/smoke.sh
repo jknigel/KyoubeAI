@@ -94,7 +94,8 @@ grep -q 'data-kyoube-shell' "$TMP/index.html" || { echo "index.html lacks the St
 grep -q 'const fallback = "dark";' "$TMP/index.html" || { echo "index.html does not default to the dark theme" >&2; exit 1; }
 [[ "$(curl -sS -o /dev/null -w '%{http_code} %{content_type}' "$BASE_URL/fonts/kyoube/InstrumentSerif-Regular-latin.woff2")" == "200 font/woff2"* ]] || { echo "the Instrument Serif font is not served" >&2; exit 1; }
 grep -q 'to:"/dashboard",label:"Home"' "$TMP/main.js" || { echo "the sidebar does not call the dashboard Home" >&2; exit 1; }
-grep -q 'label:"Connected apps"' "$TMP/main.js" || { echo "the core's Apps area was not renamed Connections" >&2; exit 1; }
+grep -q '{label:"Connectors",href:"/apps"}' "$TMP/main.js" || { echo "the core's last Apps breadcrumbs were not renamed Connectors" >&2; exit 1; }
+! grep -q '{label:"Apps",href:"/apps"}' "$TMP/main.js" || { echo "a core breadcrumb still calls the Connectors area Apps" >&2; exit 1; }
 echo "    $THEME_CSS is linked after the core stylesheet; fonts, dark default and renames are in place"
 
 echo "==> home and database names"
@@ -344,6 +345,19 @@ if [[ "$STUDIO_LIVE_RC" == "2" ]]; then
   echo "    studio-live-check SKIPPED (KYOUBE_ALLOW_NO_CHROME=1)"
 elif [[ "$STUDIO_LIVE_RC" != "0" ]]; then
   exit "$STUDIO_LIVE_RC"
+fi
+
+echo "==> the first-run wizard can skip the harness sign-in"
+# docker/core-patches adds "Skip for now" under an error on the wizard's
+# Connect step. This stack has no harness signed in, so Connect fails and the
+# skip must still hire the agent. The check creates its own agentless company.
+ONBOARDING_LIVE_RC=0
+node "$ROOT/scripts/onboarding-live-check.mjs" "$BASE_URL" smoke@kyoube.local smoke-password-123 "$TOKEN" || ONBOARDING_LIVE_RC=$?
+if [[ "$ONBOARDING_LIVE_RC" == "2" ]]; then
+  [[ "${KYOUBE_ALLOW_NO_CHROME:-0}" == "1" ]] || { echo "onboarding-live-check skipped for want of Chrome; install Chrome, set CHROME_PATH, or re-run with KYOUBE_ALLOW_NO_CHROME=1" >&2; exit 1; }
+  echo "    onboarding-live-check SKIPPED (KYOUBE_ALLOW_NO_CHROME=1)"
+elif [[ "$ONBOARDING_LIVE_RC" != "0" ]]; then
+  exit "$ONBOARDING_LIVE_RC"
 fi
 
 echo "==> the worker installs the Kyoube skills into the new company by itself (company.created)"
@@ -759,13 +773,15 @@ grep -q "kyoube.terminal@${BUMP2}=ready" "$TMP/doctor.log" \
   || { echo "kyoube doctor did not report kyoube.terminal@${BUMP2}=ready:" >&2; cat "$TMP/doctor.log" >&2; exit 1; }
 grep -q "kyoube.files@${FILES_SHIPPED}=ready" "$TMP/doctor.log" \
   || { echo "kyoube doctor did not report kyoube.files@${FILES_SHIPPED}=ready:" >&2; cat "$TMP/doctor.log" >&2; exit 1; }
-grep -Eq '^ok +skills .*1/1 companies' "$TMP/doctor.log" \
-  || { echo "kyoube doctor did not report the Kyoube skills present in the restored company:" >&2; cat "$TMP/doctor.log" >&2; exit 1; }
+# Every restored company: the smoke's own, and the one onboarding-live-check created.
+COMPANY_COUNT="$(curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/companies" | jq 'length')"
+grep -Eq "^ok +skills .* ${COMPANY_COUNT}/${COMPANY_COUNT} companies" "$TMP/doctor.log" \
+  || { echo "kyoube doctor did not report the Kyoube skills present in all ${COMPANY_COUNT} restored companies:" >&2; cat "$TMP/doctor.log" >&2; exit 1; }
 # The restored stack started with a company already in place, which is the
 # upgrade case: the entrypoint's ensure-plugins pass must have asked the worker
 # to install the skills there (the worker cannot do it from its own start-up).
 for i in $(seq 1 60); do
-  compose logs --no-color app 2>/dev/null | grep -q 'Kyoube skills ensured in 1/1 companies' && break
+  compose logs --no-color app 2>/dev/null | grep -q "Kyoube skills ensured in ${COMPANY_COUNT}/${COMPANY_COUNT} companies" && break
   sleep 2
   [[ $i -eq 60 ]] && { echo "the entrypoint's ensure-plugins never reported the Kyoube skills ensured after the restore:" >&2; compose logs --no-color app 2>/dev/null | grep 'kyoube:' >&2; exit 1; }
 done
