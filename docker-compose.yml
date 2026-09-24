@@ -57,6 +57,15 @@ services:
       # back in verbatim; empty (default) changes nothing for the common case
       # where KYOUBE_PORT equals PORT (3100).
       BETTER_AUTH_TRUSTED_ORIGINS: ${BETTER_AUTH_TRUSTED_ORIGINS:-}
+      # Since core 2026.916 the server honours X-Forwarded-Host only from a
+      # proxy it trusts. Behind a reverse proxy or tunnel container on the same
+      # Docker network (Caddy, Traefik, nginx, cloudflared) set
+      # TRUST_PROXY=uniquelocal in .env; empty (the default) trusts no proxy,
+      # which is right when people reach the app directly. See docs/upgrading.md.
+      TRUST_PROXY: ${TRUST_PROXY:-}
+      # The core shows Paperclip's hosted announcement cards (upstream's product
+      # news, fetched from its website) unless this is "false".
+      PAPERCLIP_ANNOUNCEMENTS_ENABLED: "false"
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET in .env}
       KYOUBE_BOARD_API_KEY: ${KYOUBE_BOARD_API_KEY:-}
       # Set to 1 in .env to stop the entrypoint from starting the
