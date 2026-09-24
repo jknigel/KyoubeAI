@@ -1,0 +1,308 @@
+/*
+ * KyoubeAI theme ("Studio"). docker/theme/theme.mjs copies this file into the
+ * core's ui/dist/assets at image build time and links it right after the
+ * core stylesheet, so it wins every tie. It never edits the core's own CSS.
+ *
+ * Two layers, in this order:
+ *
+ *  1. Tokens. The CSS custom properties the core's light/dark switch already
+ *     reads (--background, --primary, --sidebar, --radius, ...). theme.mjs
+ *     fails the build if the core stops declaring any of them, so a rename
+ *     upstream is caught before it ships.
+ *
+ *  2. Skin. Rules aimed only at stable hooks: route links (href), ARIA
+ *     labels, icon names, and the data-kyoube-* markers our own plugins
+ *     render. Every structural rule is gated on the Studio plugin's sidebar
+ *     being present (see "Everything below" in the skin), so if the plugin is
+ *     missing or a hook moves, the page falls back to the stock layout
+ *     instead of breaking. theme.mjs checks each hook against the bundle.
+ *
+ * The file is unlayered on purpose: the core's utilities live in cascade
+ * layers, and an unlayered rule beats a layered one whatever its
+ * specificity. Keep selectors narrow for the same reason.
+ */
+
+/* ── Fonts ─────────────────────────────────────────────────────────────── */
+/* Instrument Serif (SIL OFL 1.1, fonts/OFL.txt). Display lines only. */
+@font-face { font-family: "Instrument Serif"; font-style: normal; font-weight: 400; font-display: swap; src: url("../fonts/kyoube/InstrumentSerif-Regular-latin.woff2") format("woff2"); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: "Instrument Serif"; font-style: normal; font-weight: 400; font-display: swap; src: url("../fonts/kyoube/InstrumentSerif-Regular-latin-ext.woff2") format("woff2"); unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF; }
+@font-face { font-family: "Instrument Serif"; font-style: italic; font-weight: 400; font-display: swap; src: url("../fonts/kyoube/InstrumentSerif-Italic-latin.woff2") format("woff2"); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: "Instrument Serif"; font-style: italic; font-weight: 400; font-display: swap; src: url("../fonts/kyoube/InstrumentSerif-Italic-latin-ext.woff2") format("woff2"); unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF; }
+
+/* ── 1. Tokens ─────────────────────────────────────────────────────────── */
+/* Brand source: KyoubeAI-Website/app/globals.css (zinc neutrals, teal accent,
+   five section tints). Every colour set here is set again under .dark:
+   both blocks have the same specificity as the core's, and a value set only
+   in :root would otherwise leak into dark mode. */
+:root {
+  --radius: 0.625rem;
+
+  --background: #ffffff;
+  --foreground: #18181b;
+  --card: #ffffff;
+  --card-foreground: #18181b;
+  --popover: #ffffff;
+  --popover-foreground: #18181b;
+  --primary: #18181b;
+  --primary-foreground: #fafafa;
+  --secondary: #f4f4f5;
+  --secondary-foreground: #18181b;
+  --muted: #f4f4f5;
+  --muted-foreground: #6b6b74;
+  --accent: #f0f0f2;
+  --accent-foreground: #18181b;
+  --border: #e8e8eb;
+  --input: #e4e4e7;
+  --ring: #0f766e;
+  --chart-1: #0f766e;
+  --chart-2: #0369a1;
+  --chart-3: #6d28d9;
+  --chart-4: #b45309;
+  --chart-5: #be123c;
+  --sidebar: #fafafa;
+  --sidebar-foreground: #18181b;
+  --sidebar-primary: #0f766e;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #efeff1;
+  --sidebar-accent-foreground: #18181b;
+  --sidebar-border: #ececef;
+  --sidebar-ring: #0f766e;
+
+  /* Agent capsule gradients, recoloured from the brand tints. */
+  --agent-1a: #ccfbf1; --agent-1b: #0f766e;
+  --agent-2a: #e0f2fe; --agent-2b: #0369a1;
+  --agent-3a: #ede9fe; --agent-3b: #6d28d9;
+  --agent-4a: #fef3c7; --agent-4b: #b45309;
+  --agent-5a: #ffe4e6; --agent-5b: #be123c;
+  --agent-6a: #99f6e4; --agent-6b: #0369a1;
+  --agent-7a: #c4b5fd; --agent-7b: #be123c;
+  --agent-8a: #fde68a; --agent-8b: #0f766e;
+  --agent-9a: #bae6fd; --agent-9b: #6d28d9;
+  --agent-10a: #fecdd3; --agent-10b: #b45309;
+
+  /* A working agent is teal, the brand colour, rather than the stock blue. */
+  --status-agent-running: #14b8a6;
+
+  /* KyoubeAI's own tokens, read by the Studio plugin. */
+  --kyoube-accent: #0f766e;
+  --kyoube-accent-soft: #e3f5f1;
+  --kyoube-accent-ink: #ffffff;
+  --kyoube-working: #0f766e;
+  --kyoube-waiting: #c2410c;
+  --kyoube-danger: #dc2626;
+  --kyoube-idle: #a1a1aa;
+  --kyoube-strip: #f1faf8;
+  --kyoube-strip-border: #d6eee9;
+  --kyoube-tile-teal: #d3efe9;
+  --kyoube-tile-sky: #d9e9f5;
+  --kyoube-tile-rose: #f8dce2;
+  --kyoube-tile-amber: #f6e4cc;
+  --kyoube-tile-violet: #e7ddfa;
+  --kyoube-tile-zinc: #e9e9ec;
+  --kyoube-shadow: 0 1px 2px rgba(24, 24, 27, 0.05);
+  --kyoube-font-display: "Instrument Serif", Georgia, "Times New Roman", serif;
+
+  --kyoube-icon-plus: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.25' stroke-linecap='round'><path d='M12 5v14M5 12h14'/></svg>");
+  --kyoube-icon-home: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z'/></svg>");
+}
+
+.dark {
+  --background: #0e0e10;
+  --foreground: #f4f4f5;
+  --card: #141417;
+  --card-foreground: #f4f4f5;
+  --popover: #17171a;
+  --popover-foreground: #f4f4f5;
+  --primary: #f4f4f5;
+  --primary-foreground: #18181b;
+  --secondary: #1f1f23;
+  --secondary-foreground: #f4f4f5;
+  --muted: #1c1c20;
+  --muted-foreground: #a1a1aa;
+  --accent: #202025;
+  --accent-foreground: #f4f4f5;
+  --border: #26262b;
+  --input: #2c2c32;
+  --ring: #2dd4bf;
+  --chart-1: #2dd4bf;
+  --chart-2: #38bdf8;
+  --chart-3: #a78bfa;
+  --chart-4: #fbbf24;
+  --chart-5: #fb7185;
+  --sidebar: #09090b;
+  --sidebar-foreground: #f4f4f5;
+  --sidebar-primary: #2dd4bf;
+  --sidebar-primary-foreground: #042f2e;
+  --sidebar-accent: #1c1c20;
+  --sidebar-accent-foreground: #f4f4f5;
+  --sidebar-border: #1f1f23;
+  --sidebar-ring: #2dd4bf;
+
+  --status-agent-running: #2dd4bf;
+
+  --kyoube-accent: #2dd4bf;
+  --kyoube-accent-soft: #12302d;
+  --kyoube-accent-ink: #042f2e;
+  --kyoube-working: #2dd4bf;
+  --kyoube-waiting: #fb923c;
+  --kyoube-danger: #f87171;
+  --kyoube-idle: #5b5b63;
+  --kyoube-strip: #0f1d1b;
+  --kyoube-strip-border: #1b3a36;
+  --kyoube-tile-teal: #173a36;
+  --kyoube-tile-sky: #15304a;
+  --kyoube-tile-rose: #401d28;
+  --kyoube-tile-amber: #3d2c16;
+  --kyoube-tile-violet: #2c2146;
+  --kyoube-tile-zinc: #27272a;
+  --kyoube-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+::selection { background: color-mix(in oklab, var(--kyoube-accent) 28%, transparent); }
+
+/* ── 2. Skin ───────────────────────────────────────────────────────────── */
+
+/* Sidebars (`aside:has(> nav)`: the primary one and any secondary one, such
+   as company settings) get their own quiet surface, and the primary one's
+   shell (desktop panel, mobile drawer) takes the same colour so the account
+   menu at the bottom matches. Colour and a container name only: nothing
+   here hides or moves anything. */
+aside:has(> nav) { background: var(--sidebar); container: kyoube-sidebar / inline-size; }
+div:has(> div > aside > nav), div:has(> div > div > aside > nav) { background: var(--sidebar); }
+
+/* Everything below applies only while the Studio layout is on: the Studio
+   plugin's team roster is rendered, or boot.js (inlined in index.html) has
+   flagged the page while the plugin's UI loads. The flag clears itself when
+   the roster never appears, so a missing plugin shows the stock sidebar.
+   Under the flag the rules reach only the primary sidebar, the one with the
+   compose (New task) button: secondary sidebars (company settings, the
+   Connections area) are also <aside><nav> and must be left alone. */
+
+/* Search reads as a search field; New task is the one solid button. */
+:is(:root[data-kyoube-shell="studio"] aside:has(> nav button > svg.lucide-square-pen), aside:has([data-kyoube-studio="team"])) nav a[href$="/search"] {
+  order: -2;
+  margin: 0 8px 6px;
+  min-height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--background);
+  color: var(--muted-foreground);
+  font-weight: 500;
+}
+:is(:root[data-kyoube-shell="studio"] aside:has(> nav button > svg.lucide-square-pen), aside:has([data-kyoube-studio="team"])) nav a[href$="/search"]:hover { color: var(--foreground); background: var(--background); border-color: color-mix(in oklab, var(--foreground) 22%, var(--border)); }
+:is(:root[data-kyoube-shell="studio"] aside:has(> nav button > svg.lucide-square-pen), aside:has([data-kyoube-studio="team"])) nav a[href$="/search"]::after {
+  content: "Ctrl K";
+  margin-left: auto;
+  font-size: 10.5px;
+  line-height: 16px;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+:root[data-kyoube-platform="mac"][data-kyoube-shell="studio"] aside:has(> nav button > svg.lucide-square-pen) nav a[href$="/search"]::after,
+:root[data-kyoube-platform="mac"] aside:has([data-kyoube-studio="team"]) nav a[href$="/search"]::after { content: "⌘K"; }
+:is(:root[data-kyoube-shell="studio"] aside:has(> nav button > svg.lucide-square-pen), aside:has([data-kyoube-studio="team"])) nav > div > div:not([class]):has(> a[href$="/search"]) { order: -2; }
+
+:is(:root[data-kyoube-shell="studio"] aside:has(> nav button > svg.lucide-square-pen), aside:has([data-kyoube-studio="team"])) nav button:has(> svg.lucide-square-pen) {
+  order: -1;
+  justify-content: center;
+  margin: 0 8px 10px;
+  min-height: 34px;
+  border-radius: 9px;
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-weight: 600;
+}
+:is(:root[data-kyoube-shell="studio"] aside:has(> nav button > svg.lucide-square-pen), aside:has([data-kyoube-studio="team"])) nav button:has(> svg.lucide-square-pen):hover { background: color-mix(in oklab, var(--primary) 88%, var(--background)); color: var(--primary-foreground); }
+:is(:root[data-kyoube-shell="studio"] aside:has(> nav button > svg.lucide-square-pen), aside:has([data-kyoube-studio="team"])) nav button:has(> svg.lucide-square-pen) > svg { display: none; }
+:is(:root[data-kyoube-shell="studio"] aside:has(> nav button > svg.lucide-square-pen), aside:has([data-kyoube-studio="team"])) nav button:has(> svg.lucide-square-pen)::before {
+  content: "";
+  width: 16px;
+  height: 16px;
+  flex: none;
+  background: currentColor;
+  -webkit-mask: var(--kyoube-icon-plus) center / 16px 16px no-repeat;
+  mask: var(--kyoube-icon-plus) center / 16px 16px no-repeat;
+}
+
+/* Dashboard is called Home (the text is renamed at build time); give it the house icon. */
+:is(:root[data-kyoube-shell="studio"] aside:has(> nav button > svg.lucide-square-pen), aside:has([data-kyoube-studio="team"])) nav a[href$="/dashboard"] svg.lucide-layout-dashboard {
+  stroke: transparent;
+  background: currentColor;
+  -webkit-mask: var(--kyoube-icon-home) center / 16px 16px no-repeat;
+  mask: var(--kyoube-icon-home) center / 16px 16px no-repeat;
+}
+
+/* Tasks and Projects join the top group: the "Work" header row goes. The
+   header is the section's first child and the only one without links. */
+:is(:root[data-kyoube-shell="studio"] aside:has(> nav button > svg.lucide-square-pen), aside:has([data-kyoube-studio="team"])) nav > div:has(a[href$="/issues"]) > div:first-child:not(:has(a)) { display: none; }
+:is(:root[data-kyoube-shell="studio"] aside:has(> nav button > svg.lucide-square-pen), aside:has([data-kyoube-studio="team"])) nav { gap: 2px; }
+
+/* Moved to the Workspace page (or, for Routines, re-drawn by Studio under
+   Build). In the collapsed rail a link is wrapped in a class-less <div> for
+   its tooltip, so the wrapper goes too. */
+:is(:root[data-kyoube-shell="studio"] aside:has(> nav button > svg.lucide-square-pen), aside:has([data-kyoube-studio="team"])) nav a:is([href$="/routines"], [href$="/artifacts"], [href$="/skills"]):not([data-kyoube-nav]),
+:is(:root[data-kyoube-shell="studio"] aside:has(> nav button > svg.lucide-square-pen), aside:has([data-kyoube-studio="team"])) nav div:not([class]):has(> a:is([href$="/routines"], [href$="/artifacts"], [href$="/skills"]):not([data-kyoube-nav])) { display: none; }
+
+/* The Org section (Agents, Skills, Connectors, Audit) moves to the Workspace
+   page; the Studio Team roster above it replaces the agent list. Found by
+   holding both its first and its last link, which no other section does. */
+:is(:root[data-kyoube-shell="studio"] aside:has(> nav button > svg.lucide-square-pen), aside:has([data-kyoube-studio="team"])) nav > div:has(a[href$="/agents"]):has(a[href$="/activity"]):not(:has([data-kyoube-studio])) { display: none; }
+
+/* Terminal lives on the Workspace page. */
+:is(:root[data-kyoube-shell="studio"] aside:has(> nav button > svg.lucide-square-pen), aside:has([data-kyoube-studio="team"])) nav div:has(> [data-kyoube-nav="terminal"]) { display: none; }
+
+/* The Workspace link sits at the bottom of the sidebar, above the account
+   menu. Its slot wrapper draws a card border by default; drop it. */
+:is(:root[data-kyoube-shell="studio"] aside:has(> nav button > svg.lucide-square-pen), aside:has([data-kyoube-studio="team"])) nav > div:has([data-kyoube-studio="footer"]) { margin-top: auto; padding-top: 8px; }
+:is(:root[data-kyoube-shell="studio"] aside:has(> nav button > svg.lucide-square-pen), aside:has([data-kyoube-studio="team"])) nav div:has(> [data-kyoube-studio="footer"]) { border: 0; padding: 0; border-radius: 0; background: none; }
+
+/* Collapsed rail: the search field and New task shrink to icon buttons. */
+@container kyoube-sidebar (max-width: 120px) {
+  :is(:root[data-kyoube-shell="studio"] aside:has(> nav button > svg.lucide-square-pen), aside:has([data-kyoube-studio="team"])) nav a[href$="/search"] { border-color: transparent; background: none; }
+  :is(:root[data-kyoube-shell="studio"] aside:has(> nav button > svg.lucide-square-pen), aside:has([data-kyoube-studio="team"])) nav a[href$="/search"]::after { display: none; }
+  :is(:root[data-kyoube-shell="studio"] aside:has(> nav button > svg.lucide-square-pen), aside:has([data-kyoube-studio="team"])) nav button:has(> svg.lucide-square-pen) { align-self: center; justify-content: center; width: 34px; min-width: 34px; padding: 0; gap: 0; margin: 0 0 8px; }
+}
+
+/* Our own plugins' sidebar links (Data, Apps) follow the core's rail rule:
+   icon only, label kept for screen readers. */
+@container kyoube-sidebar (max-width: 120px) {
+  [data-kyoube-nav] .kyoube-nav-text { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+}
+
+/* KyoubeAI's own pages (Workspace, Data, Apps, Terminal) are sidebar
+   destinations, so the host's "Back" link above a plugin page goes. */
+main div:has(> div > [data-kyoube-page]) > div:first-child:has(> a[href$="/dashboard"]):not(:has([data-kyoube-page])) { display: none; }
+
+/* ── The core agent page ──────────────────────────────────────────────── */
+/* An agent's page is the Studio profile (/team/<agent>); the core's own views
+   (Instructions, Skills, Harness / Runtime, …) keep the core header, set like
+   the profile's: the name in the display face. The Studio plugin paints the
+   agent's character over the header avatar, since only it knows which agent
+   is on screen. Recognised by the page's agent-settings-content wrapper. */
+:root[data-kyoube-shell="studio"] .agent-settings-content > header h1 {
+  font-family: var(--kyoube-font-display);
+  font-weight: 400;
+  font-size: 34px;
+  line-height: 1.05;
+  letter-spacing: -0.01em;
+}
+
+/* The core paints every section of the agent overview with --card, which it
+   sets equal to --background in dark mode. KyoubeAI's cards are a step lighter
+   than the page, so the overview's borderless sections (Recent tasks, Audit)
+   would sit in grey bands; they sit on the page instead. The bordered cards
+   keep the card colour. */
+.agent-settings-overview section:not(.border) { background-color: transparent; }
+
+/* ── Home (the dashboard) ──────────────────────────────────────────────── */
+/* The Studio Home widget renders in the dashboard's plugin-widget slot,
+   which sits below the stock charts. Lift it to the top, full width, without
+   the slot's card frame, and drop the stock live-runs panel it replaces. */
+main div:has(> div > div > [data-kyoube-studio="home"]) { display: flex; flex-direction: column; gap: 28px; }
+main div:has(> div > div > [data-kyoube-studio="home"]) > * { margin-block: 0; }
+main div:has(> div > div > [data-kyoube-studio="home"]) > div:has(> div > [data-kyoube-studio="home"]) { order: -1; display: block; }
+main div:has(> [data-kyoube-studio="home"]) { border: 0; padding: 0; background: none; box-shadow: none; border-radius: 0; }
+main div:has(> div > div > [data-kyoube-studio="home"]) > div:not([class]):has(> h3) { display: none; }

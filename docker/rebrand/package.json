@@ -1,0 +1,13 @@
+{
+  "name": "@kyoube/rebrand",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Build-time transform that brands the upstream image as KyoubeAI (docker/Dockerfile runs rebrand.mjs after FROM)",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^5.0.0"
+  }
+}

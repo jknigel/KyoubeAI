@@ -1,0 +1,13 @@
+.git
+**/node_modules
+**/dist
+**/coverage
+data
+.env
+.env.*
+docs
+.github
+scripts
+*.md
+!README.md
+!plugins/*/src/**/*.md

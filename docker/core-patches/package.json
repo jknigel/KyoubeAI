@@ -1,0 +1,13 @@
+{
+  "name": "@kyoube/core-patches",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Build-time fixes applied to the pristine core layer until the upstream fix ships (docker/Dockerfile runs apply.mjs before the rebrand)",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^5.0.0"
+  }
+}
