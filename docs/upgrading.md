@@ -15,9 +15,17 @@ From source:
 ```bash
 bash scripts/backup.sh
 git pull
+grep '^KYOUBE_CORE_VERSION=' .env.example .env
 docker compose up -d --build
 docker compose exec app kyoube doctor
 ```
+
+**Update the core pin in `.env` before you build.** `.env` is yours, so `git pull` never changes it,
+but it pins the core with `KYOUBE_CORE_VERSION`. When a release moves to a new core, the `grep` above
+shows two different values: copy the `.env.example` one into `.env` (if your `.env` still uses the
+0.1.x name `PAPERCLIP_VERSION`, change that line the same way). Otherwise the build uses the old core
+and stops at the core-patches step with `this build uses core <old>, but this KyoubeAI release is made
+for core <new>`.
 
 To run a published image instead of building, set `KYOUBE_IMAGE=ghcr.io/jknigel/kyoubeai` and
 bump `KYOUBE_VERSION` to the release tag in `.env`, then:
@@ -55,6 +63,9 @@ that is not a failure, but `doctor` will not call it `ready` either.
 
 KyoubeAI 1.3.0 moves to core 2026.916.1, a large upstream release. Read this before you rebuild.
 
+- **Set `KYOUBE_CORE_VERSION=2026.916.1` in `.env`.** An install from an earlier release still pins
+  2026.831.1 there, and the build then fails at the core-patches step
+  ([Upgrading KyoubeAI](#upgrading-kyoubeai)).
 - **Back up first.** The core adds 49 database migrations (`0231` to `0279`). They run on the first
   start and cannot be undone: `bash scripts/backup.sh`.
 - **Behind a reverse proxy or tunnel, set `TRUST_PROXY`.** The core now believes `X-Forwarded-Host`

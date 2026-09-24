@@ -172,7 +172,7 @@ one. See **[docs/operations.md](docs/operations.md)** for what lives where, cron
 copies, logs, health, rotating the board key, and resource limits.
 
 - **The core:** run `scripts/bump-core.sh <version>` (bumps the Dockerfile pin, `.env.example`, `scripts/smoke.env`, and every plugin's `@paperclipai/plugin-sdk` pin together, then reinstalls); copy the new `KYOUBE_CORE_VERSION` into your own `.env`, then `docker compose up -d --build`.
-- **KyoubeAI:** from source, `git pull && docker compose up -d --build`. To run a prebuilt image instead, bump `KYOUBE_VERSION` (and set `KYOUBE_IMAGE`) in `.env`, then `docker compose pull && docker compose up -d`. Plugins are re-installed automatically when their version changes.
+- **KyoubeAI:** from source, `git pull`, then make the `KYOUBE_CORE_VERSION=` line in your `.env` match the one in `.env.example` (`git pull` never changes your `.env`, and a build on the old core fails at the core-patches step), then `docker compose up -d --build`. To run a prebuilt image instead, bump `KYOUBE_VERSION` (and set `KYOUBE_IMAGE`) in `.env`, then `docker compose pull && docker compose up -d`. Plugins are re-installed automatically when their version changes.
 
 Full instructions, what to read before a core bump, and how to roll back (databases migrate
 forward only — restore from backup) are in **[docs/upgrading.md](docs/upgrading.md)**.
