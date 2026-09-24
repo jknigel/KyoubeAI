@@ -6,6 +6,8 @@ transform**: `docker/rebrand/rebrand.mjs` runs inside `docker/Dockerfile` right 
 and rewrites the served surfaces in place. It runs on every build, on the pristine core layer, so a
 core bump is re-branded by construction, and it exits non-zero — failing the build — when an upstream
 change slips past its rules. The design and its rationale: `docs/superpowers/specs/2026-09-13-white-label-design.md`.
+The Studio design (colours, sidebar, Home, label renames such as Dashboard → Home) is a separate step,
+`docker/theme/`, which runs just before this one: see [`theme.md`](theme.md).
 
 ## What the transform does
 

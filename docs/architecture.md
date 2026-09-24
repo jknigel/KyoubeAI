@@ -38,7 +38,7 @@ the full security model built on top of them):
 docker compose
 ├── app   (this repo's image; FROM ghcr.io/paperclipai/paperclip:<KYOUBE_CORE_VERSION>)
 │   │
-│   ├─ core server + UI  (upstream; rebranded at build time, otherwise unmodified)
+│   ├─ core server + UI  (upstream; rebranded and themed at build time, otherwise unmodified)
 │   │    ├─ adapters: claude_local · pi_local · hermes_local
 │   │    ├─ plugin runtime
 │   │    │     ├─ worker  kyoube.terminal   — node-pty PTY sessions
@@ -291,6 +291,15 @@ right after the core layer and rewrites its served UI, server messages, skills a
 place, on every build. See [`branding.md`](branding.md) for the mechanism and what it deliberately leaves
 alone.
 
+## Theme
+
+The Studio design is applied the same way, one step earlier: `docker/theme/theme.mjs` runs before the
+rebrand, links a stylesheet of brand tokens and a skin after the core's, inlines a boot flag, and
+renames a few labels. It checks every rule, hook and token against the core before writing anything.
+The `kyoube.studio` plugin draws Home, the sidebar's Build group and Team roster, the agent profiles and
+the Workspace page through the public SDK, and every skin rule that hides or moves core UI is gated on that plugin
+being present, so without it the stock layout shows. See [`theme.md`](theme.md).
+
 ## Further reading
 
 - [`apps.md`](apps.md) — app authoring guide: the manifest, `window.kyoube`, the sandbox in full detail.
@@ -298,5 +307,6 @@ alone.
 - [`upgrading.md`](upgrading.md) — upgrading KyoubeAI and the core, and rolling back.
 - [`governance.md`](governance.md) — Kyoube's grant levels alongside the core's tool profiles/policies.
 - [`branding.md`](branding.md) — the build-time branding transform: what it changes and what it leaves alone.
+- [`theme.md`](theme.md) — the Studio design: the build-time theme, the Studio plugin, and what to do after a core bump.
 - [`../SECURITY.md`](../SECURITY.md) — the full security model built on the trust zones above.
 - [`../CONTRIBUTING.md`](../CONTRIBUTING.md) — local setup, conventions, and how to add a tool.

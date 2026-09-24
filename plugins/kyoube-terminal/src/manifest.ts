@@ -1,7 +1,7 @@
 import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
 
 export const PLUGIN_ID = "kyoube.terminal";
-export const PLUGIN_VERSION = "0.2.3";
+export const PLUGIN_VERSION = "0.2.4";
 export const PAGE_ROUTE = "terminal";
 
 // We intentionally do not set `minimumHostVersion`. Core 2026.831.1 compares
@@ -45,7 +45,7 @@ const manifest: PaperclipPluginManifestV1 = {
   ui: {
     slots: [
       { type: "page", id: "terminal-page", displayName: "Terminal", exportName: "TerminalPage", routePath: PAGE_ROUTE },
-      { type: "sidebar", id: "terminal-nav", displayName: "Terminal", exportName: "SidebarEntry" },
+      { type: "sidebar", id: "terminal-nav", displayName: "Terminal", exportName: "SidebarEntry", order: 90 },
     ],
   },
 };

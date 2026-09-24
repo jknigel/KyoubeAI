@@ -12,6 +12,7 @@ COPY docker/bootstrap/package.json docker/bootstrap/
 COPY plugins/kyoube-terminal/package.json plugins/kyoube-terminal/
 COPY plugins/kyoube-apps/package.json plugins/kyoube-apps/
 COPY plugins/kyoube-files/package.json plugins/kyoube-files/
+COPY plugins/kyoube-studio/package.json plugins/kyoube-studio/
 COPY packages/kyoube-app-sdk/package.json packages/kyoube-app-sdk/
 RUN pnpm install --frozen-lockfile
 COPY docker/bootstrap docker/bootstrap
@@ -25,10 +26,12 @@ RUN pnpm -r build \
  && pnpm --filter @kyoube/plugin-terminal deploy --prod /out/plugins/terminal \
  && pnpm --filter @kyoube/plugin-apps deploy --prod /out/plugins/apps \
  && pnpm --filter @kyoube/plugin-files deploy --prod /out/plugins/files \
+ && pnpm --filter @kyoube/plugin-studio deploy --prod /out/plugins/studio \
  && test -f /out/bootstrap/dist/kyoube.mjs \
  && test -f /out/plugins/terminal/dist/manifest.js \
  && test -f /out/plugins/apps/dist/manifest.js \
- && test -f /out/plugins/files/dist/manifest.js
+ && test -f /out/plugins/files/dist/manifest.js \
+ && test -f /out/plugins/studio/dist/manifest.js
 
 # ---------------------------------------------------------------------------
 # Stage 2: the runtime image = the upstream core image + pi + Hermes + KyoubeAI.
@@ -161,6 +164,25 @@ COPY docker/core-patches/apply.mjs docker/core-patches/lib.mjs docker/core-patch
 RUN gosu node node /opt/kyoube/core-patches/apply.mjs --root /app --report
 
 # ---------------------------------------------------------------------------
+# KyoubeAI theme ("Studio"): brand tokens, a skin aimed only at stable hooks
+# (route links, ARIA labels, and the data-kyoube-* markers the Studio plugin
+# renders), and a few display-text renames (Dashboard -> Home, the core's Apps
+# area -> Connections, dark by default). docker/theme/theme.mjs checks every
+# rule, hook and token against this core before writing anything and fails
+# the build naming what moved, so a core bump either keeps the design or stops
+# here. It runs before the rebrand so the rebrand's asset re-hashing covers
+# the theme's stylesheet. It is the second standing exception to "Never patch
+# the core" (CONTRIBUTING.md): presentation only, re-applied on every build.
+# Spec: docs/theme.md.
+# ---------------------------------------------------------------------------
+COPY docker/theme/theme.mjs docker/theme/rules.mjs docker/theme/anchors.mjs docker/theme/theme.css docker/theme/boot.js /opt/kyoube/theme/
+COPY docker/theme/fonts /opt/kyoube/theme/fonts
+RUN gosu node node /opt/kyoube/theme/theme.mjs --root /app --theme /opt/kyoube/theme --report \
+ && grep -q '/assets/kyoube-theme.css' /app/ui/dist/index.html \
+ && grep -q 'data-kyoube-shell' /app/ui/dist/index.html \
+ && test -f /app/ui/dist/fonts/kyoube/InstrumentSerif-Regular-latin.woff2
+
+# ---------------------------------------------------------------------------
 # KyoubeAI branding. The upstream layer above says "Paperclip" in its UI
 # bundle, server messages, agent skills and artwork; docker/rebrand/rebrand.mjs
 # rewrites those surfaces in place (spec: docs/superpowers/specs/2026-09-13-
@@ -174,6 +196,7 @@ COPY docker/rebrand/rebrand.mjs /opt/kyoube/rebrand/rebrand.mjs
 COPY docker/rebrand/lib /opt/kyoube/rebrand/lib
 RUN gosu node node /opt/kyoube/rebrand/rebrand.mjs --root /app --brand /opt/kyoube/brand --verify --report \
  && grep -q '<title>KyoubeAI</title>' /app/ui/dist/index.html \
+ && grep -qE '/assets/kyoube-theme-[0-9a-f]{8}\.css' /app/ui/dist/index.html \
  && test -f /app/ui/dist/kyoubeai-thinking.svg \
  && ! test -e /app/ui/dist/paperclip-thinking.svg \
  && ! ls /app/ui/dist/assets | grep -qE '^index-[A-Za-z0-9_-]{8}\.js$'
@@ -207,6 +230,8 @@ RUN chmod +x /usr/local/bin/kyoube /usr/local/bin/kyoube-entrypoint.sh \
  && gosu node sh -c 'node -e "require(\"/opt/kyoube/plugins/apps/node_modules/pg\"); require(\"/opt/kyoube/plugins/apps/node_modules/pgsql-ast-parser\"); console.log(\"apps deps ok\")"' \
  && test -f /opt/kyoube/plugins/files/dist/manifest.js \
  && test -f /opt/kyoube/plugins/files/dist/ui/index.js \
+ && test -f /opt/kyoube/plugins/studio/dist/manifest.js \
+ && test -f /opt/kyoube/plugins/studio/dist/ui/index.js \
  && HOME=/tmp/build-home node /opt/kyoube/bootstrap/dist/kyoube.mjs --help >/dev/null \
  && rm -rf /tmp/build-home \
  && test -z "$(ls -A /kyoubeai)"

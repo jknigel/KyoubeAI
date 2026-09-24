@@ -56,16 +56,19 @@ first step of CI and fails fast if `KYOUBE_CORE_VERSION` and the plugin SDK pins
 
 ## Where things live
 
-The workspace has seven `package.json`s: the private root, and six build-time or deployable members.
+The workspace is the private root and these build-time or deployable members:
 
 | Path | Package | What it is |
 |---|---|---|
 | *(root)* | `kyoubeai` | Workspace root: `docker-compose.yml`, `docker/`, `docs/`, `scripts/`, `.github/`. |
 | `docker/bootstrap/` | `@kyoube/bootstrap` | The `kyoube` CLI (`setup`, `ensure-plugins`, `doctor`). |
+| `docker/rebrand/` | `@kyoube/rebrand` | The build-time brand transform: names, logo and artwork (see `docs/branding.md`). |
 | `docker/core-patches/` | `@kyoube/core-patches` | Build-time fixes to upstream bugs, held only until the upstream fix ships (see "Never patch the core"). |
+| `docker/theme/` | `@kyoube/theme` | The build-time Studio theme: brand tokens, a gated skin and display-text renames (see `docs/theme.md`). |
 | `plugins/kyoube-terminal/` | `@kyoube/plugin-terminal` | The browser terminal plugin. |
 | `plugins/kyoube-apps/` | `@kyoube/plugin-apps` | The organisation database and Apps plugin (one worker, two modules). |
 | `plugins/kyoube-files/` | `@kyoube/plugin-files` | The project Files tab: a browser and editor for each project's working folder. |
+| `plugins/kyoube-studio/` | `@kyoube/plugin-studio` | The Studio layout: Home, the sidebar's Build group and Team roster, the Workspace page, agent characters. |
 | `packages/kyoube-app-sdk/` | `@kyoube/app-sdk` | `window.kyoube`, injected into every app's iframe. |
 
 Within `plugins/kyoube-apps/src/`: `data/` is the schema/records/permissions/SQL-validation service,
@@ -87,10 +90,19 @@ doesn't exist, a route the plugin host doesn't expose), the answer is never to v
 code — propose it upstream (open an issue or PR on
 [`paperclipai/paperclip`](https://github.com/paperclipai/paperclip)) or find a way to build it as a
 plugin. `docs/architecture.md`'s "Isolation from upstream" material and `docs/upgrading.md` explain why
-this matters: it is what makes a core version bump a one-line change instead of a rebase. The single
-standing exception is `docker/rebrand/`, a build-time transform of the core's *user-facing text and
-artwork* that is re-applied on every build; it changes no behaviour, and `docs/branding.md` lists what
-it leaves alone.
+this matters: it is what makes a core version bump a one-line change instead of a rebase. There are two
+standing exceptions, both build-time transforms re-applied to the pristine core on every build, both
+presentation only, and both failing the build when upstream moves what they rely on:
+
+- `docker/rebrand/` changes the core's *user-facing text and artwork* to KyoubeAI; `docs/branding.md`
+  lists what it leaves alone.
+- `docker/theme/` applies the Studio design: it overrides the core's CSS tokens, adds a stylesheet
+  aimed only at stable hooks (route links, ARIA labels, icon names, our own `data-kyoube-*`
+  markers), inlines a small boot flag, and renames a few labels (Dashboard → Home, the core's Apps
+  area → Connections) and the default theme (dark). Every rule declares how often it must match, and
+  every rule that hides or moves core UI is gated on the Studio plugin being present, so a miss shows
+  the stock layout. It may not change behaviour: anything that needs data or logic goes in
+  `plugins/kyoube-studio`, on the public SDK. `docs/theme.md` has the details.
 
 There is one narrow, temporary way to change behaviour: `docker/core-patches/patches.mjs`, a list that
 is meant to be empty. An entry is a fix to an upstream bug that had to ship here first, applied to the

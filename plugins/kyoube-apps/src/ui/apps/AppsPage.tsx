@@ -48,7 +48,7 @@ function Gallery(props: { companyId: string; userId: string | null }) {
 
   const canWrite = access.data?.level === "write" || access.data?.level === "schema";
   return (
-    <div className="flex flex-col gap-3 p-4">
+    <div className="flex flex-col gap-3 p-4" data-kyoube-page="apps">
       <div className="flex items-center gap-2"><h1 className="text-base font-semibold">Apps</h1><span className="text-xs text-foreground/60">{canWrite ? "Ask an agent to build an app, or create one from the Data page's tables." : "Published apps for this company."}</span></div>
       {error && <div className="text-sm text-red-600">{error}</div>}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -93,7 +93,7 @@ function Runner(props: { companyId: string; userId: string | null; slug: string 
   const reload = () => { setState(null); void load(); };
 
   return (
-    <div className="flex h-full flex-col gap-2 p-4">
+    <div className="flex h-full flex-col gap-2 p-4" data-kyoube-page="apps">
       <div className="flex items-center gap-2 text-sm">
         <a {...navigation.linkProps(appsPagePath())} className="underline">← Apps</a>
         <strong>{props.slug}</strong>

@@ -1,0 +1,13 @@
+{
+  "name": "@kyoube/theme",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Build-time KyoubeAI theme (Studio): brand tokens, a gated skin and display-text renames over the core's compiled UI (docker/Dockerfile runs theme.mjs before the rebrand)",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^5.0.0"
+  }
+}

@@ -8,7 +8,7 @@ import skillMarkdown from "./skills/kyoube-data.md";
 import { toolDeclarations } from "./tools.js";
 
 export const PLUGIN_ID = "kyoube.apps";
-export const PLUGIN_VERSION = "0.4.2";
+export const PLUGIN_VERSION = "0.4.3";
 export const DATA_PAGE_ROUTE = "data";
 export const DATA_ACCESS_SETTINGS_ROUTE = "data-access";
 export { APPS_PAGE_ROUTE };
@@ -61,10 +61,10 @@ const manifest: PaperclipPluginManifestV1 = {
   ui: {
     slots: [
       { type: "page", id: "data-page", displayName: "Data", exportName: "DataPage", routePath: DATA_PAGE_ROUTE },
-      { type: "sidebar", id: "data-nav", displayName: "Data", exportName: "SidebarEntry" },
+      { type: "sidebar", id: "data-nav", displayName: "Data", exportName: "SidebarEntry", order: 20 },
       { type: "companySettingsPage", id: "data-access", displayName: "Data access", exportName: "DataAccessSettingsPage", routePath: DATA_ACCESS_SETTINGS_ROUTE },
       { type: "page", id: "apps-page", displayName: "Apps", exportName: "AppsPage", routePath: APPS_PAGE_ROUTE },
-      { type: "sidebar", id: "apps-nav", displayName: "Apps", exportName: "AppsSidebarEntry" },
+      { type: "sidebar", id: "apps-nav", displayName: "Apps", exportName: "AppsSidebarEntry", order: 30 },
     ],
   },
 };

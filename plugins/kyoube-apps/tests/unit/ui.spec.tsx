@@ -13,6 +13,7 @@ function installBridge(overrides: Record<string, unknown> = {}) {
   (globalThis as BridgeGlobal).__paperclipPluginBridge__ = {
     sdkUi: {
       useHostContext: () => context,
+      useHostLocation: () => ({ pathname: "/acme/dashboard", search: "", hash: "" }),
       useHostNavigation: () => ({ resolveHref: (to: string) => `/acme${to}`, navigate: () => {}, linkProps: (to: string) => ({ href: `/acme${to}`, onClick: () => {} }) }),
       usePluginData: () => ({ data: { level: "read", actorKind: "user", hint: "" }, loading: false, error: null, refresh: () => {} }),
       usePluginAction: () => async () => ({ settings: { defaultAgentLevel: "none", hardDelete: false }, grants: [], agents: [] }),

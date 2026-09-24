@@ -80,6 +80,23 @@ elif [[ "$BRAND_LIVE_RC" != "0" ]]; then
 fi
 echo "    title, manifest, loading icon, bundle text and the sign-in page are branded"
 
+echo "==> the served UI carries the Studio theme"
+# docker/theme ran at image build before the rebrand: the stylesheet is linked
+# after the core's under a re-hashed name, the boot flag is inlined, the fonts
+# are served, and the display-text renames are in the bundle.
+THEME_CSS="$(grep -oE '/assets/kyoube-theme-[0-9a-f]{8}\.css' "$TMP/index.html" | head -1)"
+[[ -n "$THEME_CSS" ]] || { echo "index.html does not link a re-hashed kyoube-theme stylesheet" >&2; exit 1; }
+CORE_CSS_AT="$(grep -bo '/assets/index-[A-Za-z0-9_-]*\.css' "$TMP/index.html" | head -1 | cut -d: -f1)"
+THEME_CSS_AT="$(grep -bo "$THEME_CSS" "$TMP/index.html" | head -1 | cut -d: -f1)"
+(( THEME_CSS_AT > CORE_CSS_AT )) || { echo "the theme stylesheet is not linked after the core's" >&2; exit 1; }
+[[ "$(curl -sS -o /dev/null -w '%{http_code} %{content_type}' "$BASE_URL$THEME_CSS")" == "200 text/css"* ]] || { echo "$THEME_CSS is not served as CSS" >&2; exit 1; }
+grep -q 'data-kyoube-shell' "$TMP/index.html" || { echo "index.html lacks the Studio boot flag" >&2; exit 1; }
+grep -q 'const fallback = "dark";' "$TMP/index.html" || { echo "index.html does not default to the dark theme" >&2; exit 1; }
+[[ "$(curl -sS -o /dev/null -w '%{http_code} %{content_type}' "$BASE_URL/fonts/kyoube/InstrumentSerif-Regular-latin.woff2")" == "200 font/woff2"* ]] || { echo "the Instrument Serif font is not served" >&2; exit 1; }
+grep -q 'to:"/dashboard",label:"Home"' "$TMP/main.js" || { echo "the sidebar does not call the dashboard Home" >&2; exit 1; }
+grep -q 'label:"Connected apps"' "$TMP/main.js" || { echo "the core's Apps area was not renamed Connections" >&2; exit 1; }
+echo "    $THEME_CSS is linked after the core stylesheet; fonts, dark default and renames are in place"
+
 echo "==> home and database names"
 APP_HOME="$(compose exec -T app sh -c 'echo "$HOME:$PAPERCLIP_HOME:$HERMES_HOME"; getent passwd node | cut -d: -f6; test -e /paperclip && echo LEGACY_PATH_PRESENT || echo no-legacy-path' | tr -d '\r')"
 [[ "$APP_HOME" == $'/kyoubeai:/kyoubeai:/kyoubeai/.hermes\n/kyoubeai\nno-legacy-path' ]] \
@@ -153,19 +170,22 @@ APPS_SHIPPED="$(jq -r .version "$ROOT/plugins/kyoube-apps/package.json")"
 [[ "$APPS_SHIPPED" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected kyoube.apps version '$APPS_SHIPPED' in package.json" >&2; exit 1; }
 FILES_SHIPPED="$(jq -r .version "$ROOT/plugins/kyoube-files/package.json")"
 [[ "$FILES_SHIPPED" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected kyoube.files version '$FILES_SHIPPED' in package.json" >&2; exit 1; }
+STUDIO_SHIPPED="$(jq -r .version "$ROOT/plugins/kyoube-studio/package.json")"
+[[ "$STUDIO_SHIPPED" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected kyoube.studio version '$STUDIO_SHIPPED' in package.json" >&2; exit 1; }
 
 echo "==> install plugins via kyoube ensure-plugins"
-# Three plugins ship in the image (/opt/kyoube/plugins/{terminal,apps,files}),
-# so the first pass installs all three — `installed 3`, nothing upgraded or
+# Four plugins ship in the image (/opt/kyoube/plugins/{terminal,apps,files,studio}),
+# so the first pass installs all four — `installed 4`, nothing upgraded or
 # skipped.
 compose exec -T app kyoube ensure-plugins --api-key "$TOKEN" | tee "$TMP/ensure-first.log"
-grep -q 'installed 3, upgraded 0, skipped 0' "$TMP/ensure-first.log" \
-  || { echo "expected all three bundled plugins to install on the first pass:" >&2; cat "$TMP/ensure-first.log" >&2; exit 1; }
+grep -q 'installed 4, upgraded 0, skipped 0' "$TMP/ensure-first.log" \
+  || { echo "expected all four bundled plugins to install on the first pass:" >&2; cat "$TMP/ensure-first.log" >&2; exit 1; }
 curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/plugins" \
   | jq -e 'map(select(.pluginKey == "kyoube.terminal")) | length == 1 and .[0].status == "ready"' >/dev/null
 wait_for_plugin kyoube.apps $APPS_SHIPPED
 wait_for_plugin kyoube.files $FILES_SHIPPED
-echo "    kyoube.terminal, kyoube.apps ${APPS_SHIPPED} and kyoube.files ${FILES_SHIPPED} are installed and ready"
+wait_for_plugin kyoube.studio $STUDIO_SHIPPED
+echo "    kyoube.terminal, kyoube.apps ${APPS_SHIPPED}, kyoube.files ${FILES_SHIPPED} and kyoube.studio ${STUDIO_SHIPPED} are installed and ready"
 
 echo "==> kyoube setup (real browser-approval onboarding)"
 # Run setup detached inside the container; it prints an approval URL and then
@@ -194,10 +214,10 @@ done
 compose exec -T app sh -c 'sed "s/^/    setup| /" /tmp/setup.log'
 [[ "$SETUP_EXIT" == "0" ]] || { echo "kyoube setup exited '${SETUP_EXIT:-<timeout>}'" >&2; exit 1; }
 # setup ends by running ensure-plugins with the key it just stored; the bundled
-# plugins are already installed at the on-disk version, so it skips all three.
+# plugins are already installed at the on-disk version, so it skips all four.
 compose exec -T app sh -c 'cat /tmp/setup.log' >"$TMP/setup.log"
-grep -q 'installed 0, upgraded 0, skipped 3' "$TMP/setup.log" \
-  || { echo "expected setup's ensure-plugins to skip the three bundled plugins:" >&2; cat "$TMP/setup.log" >&2; exit 1; }
+grep -q 'installed 0, upgraded 0, skipped 4' "$TMP/setup.log" \
+  || { echo "expected setup's ensure-plugins to skip the four bundled plugins:" >&2; cat "$TMP/setup.log" >&2; exit 1; }
 # No company exists at this point, so setup has nothing to verify and says so
 # rather than waiting for skills that cannot appear yet.
 grep -q 'no company exists yet' "$TMP/setup.log" \
@@ -216,10 +236,12 @@ grep -q 'kyoube.apps skip' "$TMP/ensure-stored.log" \
   || { echo "expected kyoube.apps to be skipped:" >&2; cat "$TMP/ensure-stored.log" >&2; exit 1; }
 grep -q 'kyoube.files skip' "$TMP/ensure-stored.log" \
   || { echo "expected kyoube.files to be skipped:" >&2; cat "$TMP/ensure-stored.log" >&2; exit 1; }
+grep -q 'kyoube.studio skip' "$TMP/ensure-stored.log" \
+  || { echo "expected kyoube.studio to be skipped:" >&2; cat "$TMP/ensure-stored.log" >&2; exit 1; }
 # All bundled plugins are already at the on-disk version by now, so the whole
-# run is a no-op: three skips, nothing installed or upgraded.
-grep -q 'installed 0, upgraded 0, skipped 3' "$TMP/ensure-stored.log" \
-  || { echo "expected 'installed 0, upgraded 0, skipped 3' in the summary:" >&2; cat "$TMP/ensure-stored.log" >&2; exit 1; }
+# run is a no-op: four skips, nothing installed or upgraded.
+grep -q 'installed 0, upgraded 0, skipped 4' "$TMP/ensure-stored.log" \
+  || { echo "expected 'installed 0, upgraded 0, skipped 4' in the summary:" >&2; cat "$TMP/ensure-stored.log" >&2; exit 1; }
 sed 's/^/    /' "$TMP/ensure-stored.log"
 
 echo "==> the entrypoint plugin watcher finishes and exits"
@@ -307,6 +329,22 @@ for ADAPTER in claude_local pi_local hermes_local; do
   [[ "$STATUS" =~ ^2 ]] || { echo "agent create for $ADAPTER failed: $STATUS $(cat "$TMP/agent.json")" >&2; exit 1; }
   echo "    created agent for $ADAPTER"
 done
+
+echo "==> the Studio design renders, signed in, and falls back without its plugin"
+# docker/theme proved its hooks exist in the bundle at build time; this asks a
+# real browser whether the design lands on this core: dark by default, the
+# Studio sidebar and Home in place, the Workspace page, and the stock sidebar
+# back when kyoube.studio is disabled. Screenshots go to STUDIO_SHOTS_DIR (CI
+# uploads them) for a person to look at after a core bump.
+COMPANY_PREFIX="$(curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/companies/$COMPANY_ID" | jq -r '.issuePrefix')"
+STUDIO_LIVE_RC=0
+node "$ROOT/scripts/studio-live-check.mjs" "$BASE_URL" smoke@kyoube.local smoke-password-123 "$COMPANY_PREFIX" "$TOKEN" || STUDIO_LIVE_RC=$?
+if [[ "$STUDIO_LIVE_RC" == "2" ]]; then
+  [[ "${KYOUBE_ALLOW_NO_CHROME:-0}" == "1" ]] || { echo "studio-live-check skipped for want of Chrome; install Chrome, set CHROME_PATH, or re-run with KYOUBE_ALLOW_NO_CHROME=1" >&2; exit 1; }
+  echo "    studio-live-check SKIPPED (KYOUBE_ALLOW_NO_CHROME=1)"
+elif [[ "$STUDIO_LIVE_RC" != "0" ]]; then
+  exit "$STUDIO_LIVE_RC"
+fi
 
 echo "==> the worker installs the Kyoube skills into the new company by itself (company.created)"
 # The company was created after `kyoube setup`, so nothing but the worker's

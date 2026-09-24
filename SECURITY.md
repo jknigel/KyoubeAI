@@ -17,7 +17,7 @@ otherwise unmodified, `FROM` a published image) is out of scope here; report it 
 ## Scope
 
 KyoubeAI is a Docker overlay on the upstream core:
-a Postgres 17 cluster, the three Kyoube plugins (`kyoube.terminal`, `kyoube.apps`, `kyoube.files`), and the `kyoube`
+a Postgres 17 cluster, the four Kyoube plugins (`kyoube.terminal`, `kyoube.apps`, `kyoube.files`, `kyoube.studio`), and the `kyoube`
 bootstrap CLI that renders config, installs the plugins, and runs diagnostics. Nothing here patches
 the core — every Kyoube feature is a plugin — so this document describes the security properties of
 the overlay, not of the core's own auth, sessions, board API, or MCP tool gateway.
@@ -270,6 +270,38 @@ docked panel then goes through exactly the same actions and checks as the projec
 
 **What is logged.** Every mutation writes one line to the company's activity log — the operation, the
 path, the workspace and the user — and never file content. Reads are not logged.
+
+## Studio
+
+The Studio design is two parts. `docker/theme` adds a stylesheet, fonts and a short inline boot
+script to the served UI at build time; the script only sets two attributes on `<html>` (a platform
+hint for the ⌘K label and the layout flag) and makes no network requests. The `kyoube.studio` plugin
+draws Home, the sidebar's Build group and Team roster, the agent profiles and the Workspace page.
+
+**What it reads.** Through the host-scoped `getData` bridge only: the company's agents (name, title,
+icon, status, last run, error reason), its tasks (identifier, title, status, assignee, timestamps),
+its pending approvals (type and the title or name in the payload), its projects (a count), its
+members' roles, an agent's harness and skill names (from its adapter configuration; no other
+configuration value leaves the worker), and the agent's own comments on the task it is working on. That is the same company-wide information the core's own dashboard, inbox and task
+list show every member; hidden tasks are skipped. It has no API routes, no agent tools, no jobs, no
+outbound network, no database and no secrets, and the plugin itself writes nothing: its only
+capabilities are `agents.read`, `issues.read`, `issue.comments.read`, `approvals.read`,
+`projects.read`, `access.members.read` and the UI slot registrations.
+
+**The profile's actions.** The agent profile's **On duty** switch and **Assign task** form call the
+core's documented board API from the browser as the signed-in person (`POST /api/agents/{id}/pause`
+and `/resume`, `POST /api/companies/{companyId}/issues`), exactly as the core's own buttons do: the
+core checks that person's access and applies its own side effects (pausing cancels the agent's active
+run; the new task wakes the agent). The plugin grants no one a power they did not already have.
+
+**Which company.** The host puts the caller's authorized company into every bridge call and refuses a
+call without one unless the caller is an instance admin, so a person only ever sees their own
+company's figures. The Workspace page's owner/admin check (which cards to show) uses the user id the
+page sends and is cosmetic only: the Terminal and Plugins pages it links to enforce their own access.
+
+**In the browser.** The only thing Studio stores is a per-company flag in `localStorage` recording
+that the getting-started strip was dismissed. Agent characters are SVG generated from a fixed set of
+shapes; an agent's name only picks among them and is never put into the markup.
 
 ## Telemetry
 

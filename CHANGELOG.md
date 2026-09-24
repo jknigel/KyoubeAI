@@ -4,7 +4,61 @@ All notable changes to KyoubeAI are recorded here, in terms of what changed for 
 building on it. The format is loosely [Keep a Changelog](https://keepachangelog.com/); versioning is
 [SemVer](https://semver.org/).
 
-## Unreleased
+## 1.2.0 - 2026-09-24
+
+### Added
+
+- **Studio, KyoubeAI's own design.** The app now uses the KyoubeAI website's palette and type (zinc
+  neutrals, a deep teal accent, Instrument Serif for greetings) and opens **dark** by default; a choice
+  made with the theme toggle still wins.
+  - **Sidebar.** A search field and one solid **New task** button; Home, Inbox, Tasks, Projects; a
+    **Build** group (Data, Apps, Routines); a **Team** roster where each agent has a face, a live
+    status dot and a line saying what it is doing; and **Workspace** at the bottom. KyoubeAI's Data,
+    Apps and Terminal links now look and behave like the core's rows (icons, spacing, active state).
+  - **Workspace page** (`/<company>/workspace`): Org chart, all agents, members and invites, Activity,
+    Timeline, Costs, Approvals, Skills, Artifacts, Projects, Connections, Settings, and for owners and
+    admins Plugins and Terminal. These leave the sidebar; every one is still reachable from ⌘K.
+  - **Home.** The dashboard opens with a greeting that counts what needs you, a getting-started strip
+    for new workspaces, **Needs you** (approvals, reviews, blocked tasks, agents in error),
+    **Your team right now** and **Latest updates**, above the core's metrics and charts.
+  - **Agent profile** (`/<company>/team/<agent>`). A Concept C page for each agent: its character and
+    live status, title, manager and harness; an **On duty** switch, **Chat** and **Assign task**;
+    **Overview** (working now with its own latest notes, recent work, tasks done this week, open tasks,
+    spend this month, skills, who it works with) and **Tasks**, plus the core's Instructions, Skills,
+    Runs and Settings tabs. Every link to an agent's default view now opens the profile; the core's
+    agent tabs show the agent's character and call their first tab **Overview**, and
+    `?classic=1` keeps the core's own agent dashboard. Pausing and assigning go through the core's
+    documented board API as the signed-in person, so the core's permissions and side effects apply.
+  - **Characters.** Every agent gets a face from its icon and name; `bot`, `cpu` and `circuit-board`
+    are robots. Task assignee chips, the org chart and the agents list keep the core's icons until the
+    core supports agent pictures.
+  - **Renames.** Dashboard is **Home**; the core's Apps area (outside tools) is **Connections** and its
+    sub-page **Connected apps**; KyoubeAI's plugin pages are titled by their page and drop the host's
+    Back link.
+  - Built as a fourth plugin, `kyoube.studio` (`plugins/kyoube-studio`), and a build-time step,
+    `docker/theme`, which runs before the rebrand, checks every rule, hook and token against the core
+    before writing, and fails the build naming what moved. Every skin rule that hides or moves core UI
+    is gated on the Studio plugin, so without it the stock layout shows. `scripts/smoke.sh` now signs in
+    with headless Chrome (`scripts/studio-live-check.mjs`) to check the design and that fallback, and CI
+    keeps its screenshots. `docker/theme` is documented as the second standing exception to "Never patch
+    the core". Details: `docs/theme.md`.
+  - `kyoube.apps` 0.4.3 and `kyoube.terminal` 0.2.4 carry the sidebar changes; `kyoube ensure-plugins`
+    installs `kyoube.studio` 0.1.0 and upgrades the other two on the next start.
+
+## 1.1.1 - 2026-09-20
+
+### Added
+
+- **First-run setup can skip the harness.** The onboarding wizard's "Connect" step probes the chosen
+  harness and refused to create the first agent while the probe failed — which, on a fresh install, it
+  always does until someone has run `claude login` (or `pi`, `hermes setup`) from the Terminal page the
+  wizard itself was covering. A failed probe now reads *"This harness is not connected yet …"* and
+  offers **Skip for now and connect the harness later**: the agent is created with the chosen harness
+  unauthenticated, setup finishes, and the harness is connected afterwards from the Terminal page (or
+  by a provider key in `.env`). Applied at image build time by `docker/core-patches`
+  (`onboarding-skip-harness-handler`, `onboarding-skip-harness-button`).
+
+## 1.1.0 - 2026-09-19
 
 ### Added
 
@@ -28,14 +82,6 @@ building on it. The format is loosely [Keep a Changelog](https://keepachangelog.
   browser and editor; it follows the viewer from task to task until closed.
 - The image builds and ships the new plugin alongside the other two; `kyoube ensure-plugins` installs it
   on the next start with no operator action.
-- **First-run setup can skip the harness.** The onboarding wizard's "Connect" step probes the chosen
-  harness and refused to create the first agent while the probe failed — which, on a fresh install, it
-  always does until someone has run `claude login` (or `pi`, `hermes setup`) from the Terminal page the
-  wizard itself was covering. A failed probe now reads *"This harness is not connected yet …"* and
-  offers **Skip for now and connect the harness later**: the agent is created with the chosen harness
-  unauthenticated, setup finishes, and the harness is connected afterwards from the Terminal page (or
-  by a provider key in `.env`). Applied at image build time by `docker/core-patches`
-  (`onboarding-skip-harness-handler`, `onboarding-skip-harness-button`).
 
 ### Fixed
 

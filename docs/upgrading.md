@@ -153,6 +153,12 @@ tracked, so `bump-core.sh` cannot touch it) and `docker compose up -d --build`.
   (delete the entry — that is the intended outcome) or changed the code's shape (check the upstream
   file the entry names; redo the pattern only if the bug is still there). Never loosen a pattern to
   make the build pass.
+- **The image build stops at the `theme` step** with a line naming a text rule, an anchor, a sidebar
+  section or a token (for example `text rule "home-sidebar-label" matched 0 time(s)` or
+  `sidebar section "organization" changed: added [/reports]`). The core moved something the Studio
+  design relies on; nothing was written. `docs/theme.md` ("After a core bump") says what to change for
+  each message. Never relax a rule's `expect` to make the build pass. When it passes, look at the
+  `studio-screenshots` the smoke leaves (CI artifact, or `STUDIO_SHOTS_DIR` locally).
 - **A capability was renamed or removed upstream.** The plugin install fails outright. Fix the
   manifest in `plugins/*/src/manifest.ts`.
 - **The plugin host changed a bridge or route shape.** Usually surfaces as a plugin that installs

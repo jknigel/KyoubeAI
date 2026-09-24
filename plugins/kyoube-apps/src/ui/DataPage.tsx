@@ -34,7 +34,7 @@ export function DataPage({ context }: PluginPageProps) {
   if (access.data && access.data.level === "none") return <div className="p-4 text-sm">You do not have access to this company's data. {access.data.hint}</div>;
 
   return (
-    <div className="flex h-full gap-4 p-4">
+    <div className="flex h-full gap-4 p-4" data-kyoube-page="data">
       <aside className="w-56 shrink-0">
         <div className="mb-2 flex items-center justify-between"><strong>Tables</strong>{canSchema && <CreateTableButton companyId={companyId} onCreated={(name) => { tables.refresh(); setSelected(name); notify(`Created ${name}`); }} />}</div>
         <ul className="space-y-1 text-sm">

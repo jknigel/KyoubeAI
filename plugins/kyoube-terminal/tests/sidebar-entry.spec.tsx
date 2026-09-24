@@ -9,6 +9,7 @@ function installBridge(canOpen: { allowed: boolean; role: string | null } | null
   (globalThis as BridgeGlobal).__paperclipPluginBridge__ = {
     sdkUi: {
       useHostContext: () => ({ companyId: "c1", companyPrefix: "acme", projectId: null, entityId: null, entityType: null, userId: "u1" }),
+      useHostLocation: () => ({ pathname: "/acme/terminal", search: "", hash: "" }),
       useHostNavigation: () => ({
         resolveHref: (to: string) => `/acme${to}`,
         navigate: () => {},

@@ -261,7 +261,7 @@ export function TerminalPage({ context }: PluginPageProps) {
   // xterm mount effect (which runs once, on first commit) always finds it. Only the toolbar and
   // the company-scoped sections are gated on `companyId`.
   return (
-    <div className="flex h-full flex-col gap-3 p-4">
+    <div className="flex h-full flex-col gap-3 p-4" data-kyoube-page="terminal">
       {companyId ? (
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <strong>Terminal</strong>

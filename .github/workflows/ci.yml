@@ -60,4 +60,14 @@ jobs:
           docker system prune -af
           df -h /
       - name: Smoke test the compose stack
+        env:
+          # scripts/studio-live-check.mjs writes Home and Workspace screenshots here.
+          STUDIO_SHOTS_DIR: ${{ runner.temp }}/studio-shots
         run: bash scripts/smoke.sh
+      - name: Upload the Studio screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: studio-screenshots
+          path: ${{ runner.temp }}/studio-shots
+          if-no-files-found: ignore

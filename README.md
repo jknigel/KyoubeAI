@@ -22,6 +22,10 @@ first run of a prebuilt image.
   UI. Authoring guide: [`docs/apps.md`](docs/apps.md).
 - **[Files](#files)** — a **Files** tab on every project page: browse, edit, upload, rename and delete
   the folders and files in the project's working folder — the same folder its agents read and write.
+- **[Studio](#studio)** — KyoubeAI's own design: a Home page that opens with what needs you and what
+  your team is doing, a calmer sidebar with a live team roster, one Workspace page for everything you
+  don't need every day, and a face for every agent. How it survives core updates:
+  [`docs/theme.md`](docs/theme.md).
 - **Operations** — backups/restore, health checks, resource limits, and upgrading the core and KyoubeAI
   independently: [`docs/operations.md`](docs/operations.md), [`docs/upgrading.md`](docs/upgrading.md).
 - **Architecture** — trust zones, request paths, the data model, and the upgrade contract, in full:
@@ -64,9 +68,32 @@ The compose port binding listens on every interface, so reaching the UI from ano
 3. Check everything: `docker compose exec app kyoube doctor`.
 4. Authenticate the agent harnesses: either put provider API keys in `.env` (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`) or, once the Terminal plugin is installed, run `claude login`, `pi`, and `hermes setup` from the Terminal page. Credentials persist on the `kyoubeai-home` volume. The first-run wizard's **Connect** step probes the harness you pick; if nothing is authenticated yet, choose **Skip for now and connect the harness later** — the agent is created anyway, and it starts working once the harness is logged in from the Terminal page.
 
+## Studio
+
+KyoubeAI opens dark, in the palette and type of the KyoubeAI website. The sidebar keeps what you use
+every day: a search field, one **New task** button, Home, Inbox, Tasks and Projects, a **Build** group
+(Data, Apps, Routines) and a **Team** roster where every agent has a face, a live status dot and a line
+saying what it is doing. Everything else (Org chart, Activity, Timeline, Costs, Approvals, Skills,
+Artifacts, Connections, Settings, and for owners and admins Plugins and Terminal) is on the
+**Workspace** page at the bottom of the sidebar, and still one ⌘K away.
+
+**Home** replaces the stock dashboard's top half: how many things need you, a getting-started strip for
+new workspaces, **Needs you** (approvals, reviews, blocked tasks, agents in error), **Your team right
+now** and **Latest updates**, with the core's metrics and charts below. An agent's face comes from the
+icon picked in its settings and its name.
+
+Each agent has a **profile** (`/<company>/team/<agent>`): its character and status, whom it reports to,
+an **On duty** switch, **Chat** and **Assign task**, what it is working on now with its latest notes,
+recent work, the week's numbers, its skills and who it works with. Every link to an agent opens the
+profile; its Instructions, Skills, Runs and Settings tabs open the core's own agent pages.
+
+It is two parts, neither of which edits the core: `docker/theme/` (a build-time stylesheet, boot flag
+and label renames, checked against every core bump) and the `kyoube.studio` plugin. If the plugin is
+missing the app falls back to the stock layout. [`docs/theme.md`](docs/theme.md) has the details.
+
 ## Terminal
 
-Company owners and admins see a **Terminal** entry in the sidebar. It opens a shell inside the `app` container as the `node` user with `HOME=/kyoubeai` (the persisted volume), so `claude login`, `pi`, and `hermes setup` store credentials that survive restarts. Sessions are audited (open/close/kill, never content), idle sessions close after 30 minutes, and a session survives page reloads — use **attach** under *Sessions in this company*. Adjust roles, timeouts, and the shell under Settings → Plugins → Kyoube Terminal.
+Company owners and admins see a **Terminal** card on the **Workspace** page. It opens a shell inside the `app` container as the `node` user with `HOME=/kyoubeai` (the persisted volume), so `claude login`, `pi`, and `hermes setup` store credentials that survive restarts. Sessions are audited (open/close/kill, never content), idle sessions close after 30 minutes, and a session survives page reloads — use **attach** under *Sessions in this company*. Adjust roles, timeouts, and the shell under Settings → Plugins → Kyoube Terminal.
 
 Security note: the terminal is equivalent to shell access to the whole instance (database credentials, every agent's tokens). Keep `allowedRoles` tight and use it only over private networks or TLS.
 
@@ -119,7 +146,8 @@ change is written to the company's activity log with its path, never its content
 |---|---|
 | `docker/Dockerfile` | Overlay image: the upstream core + pinned `claude`, `pi` and `hermes` CLIs + Kyoube |
 | `docker/bootstrap/` | The `kyoube` CLI (`setup`, `ensure-plugins`, `doctor`) |
-| `plugins/` | Core plugins (`kyoube-terminal`, `kyoube-apps`, `kyoube-files`) |
+| `plugins/` | Core plugins (`kyoube-terminal`, `kyoube-apps`, `kyoube-files`, `kyoube-studio`) |
+| `docker/theme/` | The build-time Studio theme: tokens, a gated skin, label renames (`docs/theme.md`) |
 | `packages/kyoube-app-sdk/` | `window.kyoube`, the SDK injected into every app |
 | `docker-compose.yml` | `app` + `db` (Postgres 17 with databases `kyoubeai` and `kyoube`) |
 | `scripts/smoke.sh` | End-to-end smoke test used by CI |
@@ -158,8 +186,11 @@ move to the next stable core release that carries the fix.
 ## How it stays upstream-compatible
 
 - The image is built `FROM` a pinned upstream release of the core (Paperclip, `KYOUBE_CORE_VERSION`);
-  nothing in this repository is core source, and the only change applied to the core at build time is
-  the branding transform in `docker/rebrand/` (see `docs/branding.md`).
+  nothing in this repository is core source. At build time the core gets presentation-only
+  transforms that are re-applied to the pristine layer on every build and fail it when upstream moves
+  what they rely on: the branding in `docker/rebrand/` (`docs/branding.md`) and the Studio theme in
+  `docker/theme/` (`docs/theme.md`), plus any temporary bug fix in `docker/core-patches/` while its
+  upstream fix is pending.
 - Every Kyoube feature is a plugin (`kyoube.terminal`, `kyoube.apps`, `kyoube.files`) built only against the published
   `@paperclipai/plugin-sdk` — no imports from the core's own server or UI source, no undocumented routes.
 - `KYOUBE_CORE_VERSION` and the plugin SDK version are pinned together across the Dockerfile, `.env.example`,

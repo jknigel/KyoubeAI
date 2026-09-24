@@ -28,11 +28,21 @@ jobs:
           docker system prune -af
           df -h /
       - name: Smoke against the core image's beta channel
+        env:
+          # The Studio design on the next core, for a person to look at.
+          STUDIO_SHOTS_DIR: ${{ runner.temp }}/studio-shots
         run: |
           grep -q '^KYOUBE_CORE_VERSION=' scripts/smoke.env
           sed -i 's/^KYOUBE_CORE_VERSION=.*/KYOUBE_CORE_VERSION=beta/' scripts/smoke.env
           grep -q '^KYOUBE_CORE_VERSION=beta$' scripts/smoke.env
           bash scripts/smoke.sh
+      - name: Upload the Studio screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: studio-screenshots-beta
+          path: ${{ runner.temp }}/studio-shots
+          if-no-files-found: ignore
       - name: Open an issue on failure
         if: failure()
         uses: actions/github-script@v7
