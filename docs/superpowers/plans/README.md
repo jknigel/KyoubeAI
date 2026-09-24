@@ -10,6 +10,7 @@ Execute in order; each phase ends with working, tested software and its own exit
 | 3 | [Apps](2026-09-05-phase-3-apps.md) | Sandboxed single-file apps over the data layer: storage, `window.kyoube` SDK, runner, tools, skill | 2 |
 | 4 | [Hardening & release](2026-09-05-phase-4-hardening-release.md) | GHCR images, pin lock-step tooling, weekly upstream canary, backups, security/governance docs, 1.0.0 | 0–3 |
 | 5 | [White-label](2026-09-13-white-label.md) | Build-time brand transform, home/database rename, KYOUBE_* keys, 0.1.x migration, 0.2.0 | 0–4 |
+| 6 | [Core 2026.916.1 and harness bump](2026-09-24-core-916-and-harness-bump.md) | Core and SDK 2026.916.1, Claude Code 2.1.281, pi 0.87.1, Hermes 0.21.4; transforms and Studio re-targeted at the streamlined shell; 1.3.0 | 0–5 |
 
 Plan 5 implements `../specs/2026-09-13-white-label-design.md`.
 
