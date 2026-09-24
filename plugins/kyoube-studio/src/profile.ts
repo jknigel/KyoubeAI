@@ -70,7 +70,7 @@ export interface AgentProfile {
   stats: { doneThisWeek: number; open: number; spentMonthlyCents: number; budgetMonthlyCents: number };
   skills: string[];
   worksWith: WorkRelation[];
-  /** The core's own agent pages, for the profile's tab row. */
+  /** The core pages the profile's tab row links to. */
   links: { instructions: string; skills: string; runs: string; settings: string; classic: string };
 }
 

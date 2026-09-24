@@ -14,6 +14,6 @@ Execute in order; each phase ends with working, tested software and its own exit
 
 Plan 5 implements `../specs/2026-09-13-white-label-design.md`.
 
-Conventions shared by every plan: pinned upstream `2026.831.1` (image + `@paperclipai/plugin-sdk`), ESM + strict TypeScript, Vitest, Conventional Commits, no patches to Paperclip (the build-time branding transform excepted).
+Conventions shared by every plan: pinned upstream core (image + `@paperclipai/plugin-sdk`: `2026.831.1` for plans 0–5, `2026.916.1` from plan 6), ESM + strict TypeScript, Vitest, Conventional Commits, no patches to Paperclip (the build-time branding transform excepted).
 
 Deliberately deferred from the spec (candidates for a post-1.0 plan): the optional "Apps Builder" managed agent template (§8.3), multi-file app bundles and dashboard-widget surfaces (§8.4), realtime table change streams (§8.4), a WebSocket terminal transport (§7), and the upstream proposal for an operator-configurable bundled-plugin allowlist (§6.4 / Phase 4 Task 7 opens the issue).

@@ -52,7 +52,7 @@ export const PATCHES = [
   // button. An API key still works; a subscription has no way forward.
   //
   // Four patches, one feature. The footer gets a "Skip for now" button while
-  // step 4 shows an error; it calls the step's primary action with `true`,
+  // the Connect step (the wizard's internal step 4) shows an error; it calls the step's primary action with `true`,
   // which goes straight to the hire handler with `true`, which then skips the
   // two checks that need a signed-in harness (the local sign-in and the
   // environment test). Both handlers are plain function declarations, so

@@ -9,8 +9,8 @@ building on it. The format is loosely [Keep a Changelog](https://keepachangelog.
 ### Changed
 
 - **Core 2026.916.1.** The image is built on Paperclip 2026.916.1 (from 2026.831.1), and every
-  plugin on `@paperclipai/plugin-sdk` 2026.916.1. Upstream's highlights: AI credentials managed as
-  Connections, a streamlined sidebar and a rebuilt agent page, a new first-run wizard, native chat
+  plugin on `@paperclipai/plugin-sdk` 2026.916.1. Upstream's highlights: AI credentials managed in
+  upstream's new Connections, a streamlined sidebar and a rebuilt agent page, a new first-run wizard, native chat
   connectors and agent email (experimental), and 49 database migrations. Read
   [docs/upgrading.md](docs/upgrading.md#upgrading-to-130-core-20269161) before you rebuild: back up
   first, and set `TRUST_PROXY` behind a reverse proxy or tunnel.

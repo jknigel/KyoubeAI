@@ -12,6 +12,8 @@
  * subscription tile and presses Connect, which fails on a fresh instance
  * (nobody is signed in, and the server runs in `authenticated` mode); then
  * presses Skip and expects the wizard's final step and the agent to exist.
+ * It leaves that company and its agent behind, so run it against a throwaway
+ * stack such as the smoke's, never against a real instance.
  * Exit 0 on success, 1 on a failure, 2 when no Chrome is available.
  * Screenshots go to STUDIO_SHOTS_DIR when it is set.
  */

@@ -108,7 +108,7 @@ Read the `rebrand:` block in the build log, in this order:
 A moved lockup or loading icon means updating the anchor in `docker/rebrand/lib/svg.mjs` (and its
 fixture in `docker/rebrand/tests/svg.spec.mjs`).
 
-## Residual identifiers on core 2026.831.1
+## Residual identifiers
 
 On core 2026.916.1 (KyoubeAI 1.3.0, checked 2026-09-24) the build's header lines are
 

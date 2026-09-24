@@ -60,8 +60,8 @@ KyoubeAI 1.3.0 moves to core 2026.916.1, a large upstream release. Read this bef
 - **Behind a reverse proxy or tunnel, set `TRUST_PROXY`.** The core now believes `X-Forwarded-Host`
   only from a proxy it trusts. If sign-in or saving fails with an origin error behind Caddy, Traefik,
   nginx or a Cloudflare tunnel, set `TRUST_PROXY` in `.env`: `uniquelocal` trusts a proxy container
-  on the same Docker network, and a proxy on the host needs its address (for example `172.17.0.1`).
-  Leave it empty when people reach the app directly.
+  on the same Docker network, and also a proxy on the host that reaches the container over a Docker
+  bridge. Leave it empty when people reach the app directly.
 - **The streamlined shell is the default.** The core's new sidebar replaces the old one, and Studio
   is built for it. Settings → Experimental → **Streamlined UI** switches back, but the Studio sidebar
   then shows the legacy Agents and Organization sections.
