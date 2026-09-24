@@ -28,7 +28,7 @@ The Studio design (colours, sidebar, Home, label renames such as Dashboard → H
    go through a code-aware path: the phrase and URL rules apply unconditionally, and the name rule is
    held back only where a match is both outside any string or comment on its line *and*
    identifier-shaped (`import { Paperclip }`, `<Paperclip …>`, `icon: Paperclip`). Those are printed
-   as `code-shaped matches left alone` rather than rewritten; on core 2026.831.1 there are **none**.
+   as `code-shaped matches left alone` rather than rewritten; on core 2026.916.1 there are **none**.
    `.sql` is deliberately excluded — see the residual record below.
 2. **Artwork.** Favicons and PWA icons come from `docker/brand/icons/`; `favicon.svg` and the
    loading animation (`/kyoubeai-thinking.svg`) are rendered from `docker/brand/mark.svg`; the
@@ -101,7 +101,7 @@ Read the `rebrand:` block in the build log, in this order:
    in `docker/rebrand/lib/files.mjs`) or is more upstream source (extend `SWEEP_ALLOWLIST`, with the
    reason). Rows growing is normal — upstream writes more source — only *new rows* matter.
 3. **The code-shaped list.** Matches in `packages` code the transform left alone as identifiers.
-   It is empty on 2026.831.1; anything appearing there is either a genuine new identifier (fine) or
+   It is empty on 2026.916.1; anything appearing there is either a genuine new identifier (fine) or
    display text the classifier misread (add the exact string to `phrases` in `brand.json`).
 4. **The `known residual` lines** — currently only the hash-pinned `packages/db` migrations.
 
@@ -109,6 +109,18 @@ A moved lockup or loading icon means updating the anchor in `docker/rebrand/lib/
 fixture in `docker/rebrand/tests/svg.spec.mjs`).
 
 ## Residual identifiers on core 2026.831.1
+
+On core 2026.916.1 (KyoubeAI 1.3.0, checked 2026-09-24) the build's header lines are
+
+```
+rebrand: 1213 files rewritten (name 7432, phrase 336, url 269), 269 assets renamed, 1443 references rewritten
+rebrand: anchors lockup=1 thinking=1; residual 0; binaries skipped 0; symlinks skipped 0
+rebrand: code-shaped matches left alone: 0
+```
+
+and the sweep gained three allowlisted rows for upstream's new development material
+(`announcements`, the `ui/connect-*-preview.html` pages and the root `.env.example`). The lists below
+were compiled on 2026.831.1; the kinds of identifier are the same on 2026.916.1.
 
 Verified against the built image on 2026-09-14, after the final review fix wave (the history at the
 end of this section says what each round closed). That build's `rebrand:` header lines were

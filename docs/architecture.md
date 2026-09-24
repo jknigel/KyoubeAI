@@ -101,7 +101,7 @@ exact residual this leaves: `SECURITY.md`.
 A local adapter run (`claude_local`, `pi_local`, `hermes_local`) reaches Kyoube over REST: every run is
 started with `PAPERCLIP_API_URL`, `PAPERCLIP_API_KEY` (a run-scoped agent token) and `PAPERCLIP_COMPANY_ID`
 in its environment, and the managed skills tell the agent to call the plugin's API routes (next section)
-with them. That is the primary path because of how core 2026.831.1 delivers plugin tools: they are
+with them. That is the primary path because of how the core (2026.831.1 through 2026.916.1) delivers plugin tools: they are
 listed by its tool gateway, but a run only receives a gateway MCP server (`/mcp/gateways/<id>`) when the
 agent's effective tool profile permits at least one installed `mcp_remote`/`local_stdio` connection —
 `buildPaperclipRuntimeMcpServers` in upstream's `heartbeat.ts` returns nothing otherwise, and the

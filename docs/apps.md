@@ -131,7 +131,7 @@ company as `?companyId=…` on `GET` or `"companyId"` in every `POST` body. Ever
 | Roll back | `POST /apps/{slug}/rollback` | `version` |
 | Archive | `POST /apps/{slug}/archive` | — |
 
-The same operations exist as `kyoube.apps:apps_*` tools, but core 2026.831.1 only hands plugin tools
+The same operations exist as `kyoube.apps:apps_*` tools, but the core (2026.831.1 through 2026.916.1) only hands plugin tools
 to a run through an MCP gateway, which it creates only for agents that already have an MCP connection
 (`architecture.md`, "Agent run → Kyoube"); the skill therefore leads with the API.
 

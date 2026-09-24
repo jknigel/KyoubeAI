@@ -66,16 +66,16 @@ The compose port binding listens on every interface, so reaching the UI from ano
    ```
    Approve the login link it prints. From then on plugins install and upgrade automatically at start-up.
 3. Check everything: `docker compose exec app kyoube doctor`.
-4. Authenticate the agent harnesses: either put provider API keys in `.env` (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`) or, once the Terminal plugin is installed, run `claude login`, `pi`, and `hermes setup` from the Terminal page. Credentials persist on the `kyoubeai-home` volume. The first-run wizard's **Connect** step probes the harness you pick; if nothing is authenticated yet, choose **Skip for now and connect the harness later** — the agent is created anyway, and it starts working once the harness is logged in from the Terminal page.
+4. Authenticate the agent harnesses: either put provider API keys in `.env` (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`) or, once the Terminal plugin is installed, run `claude login`, `pi`, and `hermes setup` from the Terminal page. Credentials persist on the `kyoubeai-home` volume. The first-run wizard's **Connect a model** step checks the harness you pick. An API key typed there works at once; a Claude or OpenAI subscription cannot be signed in from the wizard on a KyoubeAI server, so if nothing is signed in yet choose **Skip for now and connect the harness later from the Terminal page** — the agent is created anyway, and it starts working once the harness is logged in from the Terminal page.
 
 ## Studio
 
 KyoubeAI opens dark, in the palette and type of the KyoubeAI website. The sidebar keeps what you use
 every day: a search field, one **New task** button, Home, Inbox, Tasks and Projects, a **Build** group
 (Data, Apps, Routines) and a **Team** roster where every agent has a face, a live status dot and a line
-saying what it is doing. Everything else (Org chart, Activity, Timeline, Costs, Approvals, Skills,
-Artifacts, Connections, Settings, and for owners and admins Plugins and Terminal) is on the
-**Workspace** page at the bottom of the sidebar, and still one ⌘K away.
+saying what it is doing. Everything else (All agents and the org chart, Audit, Timeline, Costs,
+Approvals, Skills, Artifacts, Connectors, Settings, and for owners and admins Plugins and Terminal) is
+on the **Workspace** page at the bottom of the sidebar, and still one ⌘K away.
 
 **Home** replaces the stock dashboard's top half: how many things need you, a getting-started strip for
 new workspaces, **Needs you** (approvals, reviews, blocked tasks, agents in error), **Your team right
@@ -85,7 +85,8 @@ icon picked in its settings and its name.
 Each agent has a **profile** (`/<company>/team/<agent>`): its character and status, whom it reports to,
 an **On duty** switch, **Chat** and **Assign task**, what it is working on now with its latest notes,
 recent work, the week's numbers, its skills and who it works with. Every link to an agent opens the
-profile; its Instructions, Skills, Runs and Settings tabs open the core's own agent pages.
+profile; its Instructions, Skills and Settings tabs open the core's own agent views, and Runs opens
+the agent's runs under Audit.
 
 It is two parts, neither of which edits the core: `docker/theme/` (a build-time stylesheet, boot flag
 and label renames, checked against every core bump) and the `kyoube.studio` plugin. If the plugin is
@@ -99,7 +100,7 @@ Security note: the terminal is equivalent to shell access to the whole instance 
 
 ## Data
 
-Every company gets its own isolated PostgreSQL schema in the `kyoube` database (separate from the core's own database). People use it from the **Data** page; agents use the REST routes under `/api/plugins/kyoube.apps/api/` with the `PAPERCLIP_API_URL`, `PAPERCLIP_API_KEY` and `PAPERCLIP_COMPANY_ID` every run already carries, guided by the managed **Kyoube Data** skill. The same operations exist as `kyoube.apps:data_*` tools, but core 2026.831.1 only hands those to a run through an MCP gateway, which it creates only for agents that already have an MCP connection — so the skill leads with the API.
+Every company gets its own isolated PostgreSQL schema in the `kyoube` database (separate from the core's own database). People use it from the **Data** page; agents use the REST routes under `/api/plugins/kyoube.apps/api/` with the `PAPERCLIP_API_URL`, `PAPERCLIP_API_KEY` and `PAPERCLIP_COMPANY_ID` every run already carries, guided by the managed **Kyoube Data** skill. The same operations exist as `kyoube.apps:data_*` tools, but the core (2026.831.1 through 2026.916.1) only hands those to a run through an MCP gateway, which it creates only for agents that already have an MCP connection — so the skill leads with the API.
 
 **Giving an agent access takes two steps.** The **Kyoube Data** and **Kyoube Apps** skills land in every company's skill library by themselves: `kyoube ensure-plugins` installs them into every company at each container start, the first visit to a company's pages does the same, and a company created later gets them on creation (`kyoube setup` and `kyoube doctor` confirm it). Then, per agent: enable the skills on the agent's **Skills** tab, and grant a level under **Company Settings → Data access**. Enabling a skill only puts its text in front of the agent; nothing runs until a task calls for company data.
 
@@ -175,13 +176,6 @@ copies, logs, health, rotating the board key, and resource limits.
 
 Full instructions, what to read before a core bump, and how to roll back (databases migrate
 forward only — restore from backup) are in **[docs/upgrading.md](docs/upgrading.md)**.
-
-Known upstream issue in core 2026.831.1 (fixed upstream in [#12502](https://github.com/paperclipai/paperclip/pull/12502),
-not yet in a stable release): open an agent's **Instructions** tab once and the next tab change can
-raise a "Discard unsaved agent configuration changes?" prompt that re-opens as fast as it is answered.
-The instructions editor normalises the default AGENTS.md on load and the page takes that as an edit.
-Per agent, open Instructions and press **Save** once; after that the prompt stays away. KyoubeAI will
-move to the next stable core release that carries the fix.
 
 ## How it stays upstream-compatible
 

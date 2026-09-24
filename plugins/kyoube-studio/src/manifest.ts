@@ -17,7 +17,7 @@ export const TEAM_ROUTE = "team";
 export const SIDEBAR_ORDER = { build: 10, data: 20, apps: 30, routines: 40, team: 50, terminal: 90 } as const;
 
 // `minimumHostVersion` is deliberately absent, for the reason recorded in the
-// terminal plugin's manifest: core 2026.831.1 compares it against a host version
+// terminal plugin's manifest: core 2026.831.1 (still in 2026.916.1) compares it against a host version
 // it never sets, so any minimum would reject the install.
 const manifest: PaperclipPluginManifestV1 = {
   id: PLUGIN_ID,

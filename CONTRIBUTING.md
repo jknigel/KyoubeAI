@@ -98,8 +98,8 @@ presentation only, and both failing the build when upstream moves what they rely
   lists what it leaves alone.
 - `docker/theme/` applies the Studio design: it overrides the core's CSS tokens, adds a stylesheet
   aimed only at stable hooks (route links, ARIA labels, icon names, our own `data-kyoube-*`
-  markers), inlines a small boot flag, and renames a few labels (Dashboard → Home, the core's Apps
-  area → Connections) and the default theme (dark). Every rule declares how often it must match, and
+  markers), inlines a small boot flag, and renames a few labels (Dashboard → Home, the core's last
+  "Apps" breadcrumbs → Connectors) and the default theme (dark). Every rule declares how often it must match, and
   every rule that hides or moves core UI is gated on the Studio plugin being present, so a miss shows
   the stock layout. It may not change behaviour: anything that needs data or logic goes in
   `plugins/kyoube-studio`, on the public SDK. `docs/theme.md` has the details.

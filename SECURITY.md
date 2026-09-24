@@ -92,7 +92,7 @@ Terminal output is pulled, never pushed: the page polls `terminal.wait`, which i
 session's owner and company exactly like `attach` (a session in another company answers `not_found`,
 another user's `forbidden`), so there is no per-session secret to guard and no channel that could be
 listed or guessed. The SSE stream channel the original design relied on is gone: upstream core
-2026.831.1 never wires its plugin stream bridge (the route answers 501), which is why the terminal
+2026.831.1 (through 2026.916.1) never wires its plugin stream bridge (the route answers 501), which is why the terminal
 does not use it.
 
 ## Data
@@ -219,7 +219,7 @@ against the plugin's `readRoles` (default: every role) or `writeRoles` (default:
 `viewer`) under **Settings → Plugins → Kyoube Files**. Reads take the same 30-second membership cache as
 the Data page; every mutation reads the members API afresh, so a demoted or removed member can browse
 for at most 30 more seconds and can change nothing from the moment the change lands. Project
-visibility in core 2026.831.1 is company-wide (`project:read` is granted to every active member in its
+visibility in core 2026.831.1 through 2026.916.1 is company-wide (`project:read` is granted to every active member in its
 simple permissions mode), so the company role is the right unit here; if a future core adds
 per-project membership the plugin will need to consult it, and this section will say so. The project
 must be in the host's company scope: `getPrimaryWorkspace` answers `null` otherwise, and a

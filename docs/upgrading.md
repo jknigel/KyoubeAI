@@ -51,6 +51,36 @@ A plugin stuck in another status has its own log under **Settings → Plugins �
 If a plugin is deliberately disabled by an operator, `ensure-plugins` leaves it alone and says so —
 that is not a failure, but `doctor` will not call it `ready` either.
 
+## Upgrading to 1.3.0 (core 2026.916.1)
+
+KyoubeAI 1.3.0 moves to core 2026.916.1, a large upstream release. Read this before you rebuild.
+
+- **Back up first.** The core adds 49 database migrations (`0231` to `0279`). They run on the first
+  start and cannot be undone: `bash scripts/backup.sh`.
+- **Behind a reverse proxy or tunnel, set `TRUST_PROXY`.** The core now believes `X-Forwarded-Host`
+  only from a proxy it trusts. If sign-in or saving fails with an origin error behind Caddy, Traefik,
+  nginx or a Cloudflare tunnel, set `TRUST_PROXY` in `.env`: `uniquelocal` trusts a proxy container
+  on the same Docker network, and a proxy on the host needs its address (for example `172.17.0.1`).
+  Leave it empty when people reach the app directly.
+- **The streamlined shell is the default.** The core's new sidebar replaces the old one, and Studio
+  is built for it. Settings → Experimental → **Streamlined UI** switches back, but the Studio sidebar
+  then shows the legacy Agents and Organization sections.
+- **Some pages moved.** The org chart is a view on All agents; Timeline, Costs and an agent's runs are
+  under Audit (`/activity/timeline`, `/activity/costs`, `/activity/runs`). Old URLs redirect, and the
+  Workspace page links the new places.
+- **Onboarding changed.** The first-run wizard's **Connect a model** step offers a Claude or OpenAI
+  subscription or an API key. A subscription cannot be signed in from the wizard on a KyoubeAI server;
+  use **Skip for now and connect the harness later from the Terminal page**, then run `claude login`
+  on the Terminal page.
+- **Announcements stay off.** The core now shows Paperclip's hosted announcement cards by default;
+  KyoubeAI's `docker-compose.yml` turns them off (`PAPERCLIP_ANNOUNCEMENTS_ENABLED: "false"`).
+- **Agent credentials are no longer echoed.** Agent API responses redact plaintext `env` values.
+  Nothing in KyoubeAI reads them; a script of your own might.
+- **The native runner gate is open.** `enableNativeRunner` now defaults to on for self-hosted
+  instances. Nothing switches automatically, and existing agents keep their adapters.
+- **Harnesses.** The image carries Claude Code 2.1.281, pi 0.87.1 and Hermes 0.21.4 (release
+  v2026.9.21). Their logins on the `kyoubeai-home` volume carry over.
+
 ## Upgrading from 0.1.x
 
 0.2.0 renamed what the container and the database are called (see the CHANGELOG's *Breaking* list):

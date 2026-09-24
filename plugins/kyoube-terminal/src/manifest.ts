@@ -4,7 +4,7 @@ export const PLUGIN_ID = "kyoube.terminal";
 export const PLUGIN_VERSION = "0.2.4";
 export const PAGE_ROUTE = "terminal";
 
-// We intentionally do not set `minimumHostVersion`. Core 2026.831.1 compares
+// We intentionally do not set `minimumHostVersion`. Core 2026.831.1 (still in 2026.916.1) compares
 // it against `instanceInfo.hostVersion`, which the server never actually sets (it
 // defaults to "0.0.0"), so declaring any minimum here would reject the install
 // outright. Revisit once upstream wires a real host version through `initialize`.

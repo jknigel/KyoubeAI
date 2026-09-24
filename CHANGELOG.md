@@ -4,6 +4,51 @@ All notable changes to KyoubeAI are recorded here, in terms of what changed for 
 building on it. The format is loosely [Keep a Changelog](https://keepachangelog.com/); versioning is
 [SemVer](https://semver.org/).
 
+## 1.3.0 - 2026-09-24
+
+### Changed
+
+- **Core 2026.916.1.** The image is built on Paperclip 2026.916.1 (from 2026.831.1), and every
+  plugin on `@paperclipai/plugin-sdk` 2026.916.1. Upstream's highlights: AI credentials managed as
+  Connections, a streamlined sidebar and a rebuilt agent page, a new first-run wizard, native chat
+  connectors and agent email (experimental), and 49 database migrations. Read
+  [docs/upgrading.md](docs/upgrading.md#upgrading-to-130-core-20269161) before you rebuild: back up
+  first, and set `TRUST_PROXY` behind a reverse proxy or tunnel.
+- **Harnesses.** Claude Code 2.1.281 (from 2.1.267), pi 0.87.1 (from 0.85.1) and Hermes 0.21.4,
+  release v2026.9.21 (from 0.21.1).
+- **Studio on the streamlined shell.** The sidebar skin now targets the core's new default sidebar:
+  its Org section (Agents, Skills, Connectors, Audit) moves to the Workspace page like the old
+  Organization section did, and the Workspace page links the core's new places (All agents with the
+  org chart, Audit, `/activity/timeline`, `/activity/costs`). `kyoube.studio` 0.2.0 follows the
+  rebuilt agent page: `/agents/<agent>` and `/agents/<agent>/overview` open the Studio profile (the
+  old `/dashboard` URL still does), the agent's character is painted over the core header's avatar,
+  **Runs** opens the agent's runs under Audit, **Settings** opens Harness / Runtime, and
+  `?classic=1` keeps the core's own overview.
+- **Connectors.** Upstream now calls its outside-tools area Connectors, which already keeps "Apps" for
+  KyoubeAI's Apps, so the theme drops its Connections renames and only fixes the three breadcrumbs
+  that still said "Apps".
+- **Announcements off.** `docker-compose.yml` sets `PAPERCLIP_ANNOUNCEMENTS_ENABLED=false`, so the
+  core's hosted Paperclip announcement cards do not appear, and passes `TRUST_PROXY` through from
+  `.env`.
+
+### Fixed
+
+- The agent **Instructions** tab no longer loops on "Discard unsaved agent configuration changes?";
+  core 2026.916 carries the upstream fix (#12502), so the README's workaround is gone.
+- The first-run wizard's **Skip for now** works again on the new wizard: its Connect step cannot sign
+  a Claude or OpenAI subscription in on a KyoubeAI server (the core allows that only to the local
+  operator of a `local_trusted` instance), and the wizard has no close button. The four
+  `onboarding-skip-harness-*` core patches add **Skip for now and connect the harness later from the
+  Terminal page** under any Connect error; it hires the agent without the sign-in and the environment
+  test. `scripts/onboarding-live-check.mjs` walks the wizard to that skip on every smoke run.
+- The pi transcript fix (`pi-transcript-non-assistant-messages`) follows the parser into the
+  code-split chunk it moved to; upstream still has the bug.
+- On the core's agent overview, sections without a border no longer sit in grey bands (the core
+  paints them with the card colour, which KyoubeAI's dark theme sets a step lighter than the page).
+- `scripts/migrate-from-0.1.sh --check` no longer counts the core's own skill keys
+  (`paperclipai/paperclip/…`, stored in an agent's config once it has skills) as legacy
+  `/paperclip/` paths, so the count can reach 0 and the compatibility link can go.
+
 ## 1.2.0 - 2026-09-24
 
 ### Added

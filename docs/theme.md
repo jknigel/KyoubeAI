@@ -19,29 +19,32 @@ KyoubeAI's own look ("Studio") comes from two parts, and neither edits the core:
   Tasks and Projects; a **Build** group (Data, Apps, Routines); a **Team** roster with each agent's
   character, a live status dot and what they are doing; and **Workspace** at the bottom. The collapsed
   rail keeps the same order, icons and faces only.
-- **Moved to the Workspace page.** Org chart, all agents, members and invites, Activity, Timeline,
-  Costs, Approvals, Skills, Artifacts, Projects, Connections, Settings, and (for owners and admins)
-  Plugins and Terminal. Every one is still reachable from ⌘K and its own URL.
+- **Moved to the Workspace page.** All agents (with the org chart), members and invites, Audit,
+  Timeline, Costs, Approvals, Skills, Artifacts, Projects, Connectors, Settings, and (for owners and
+  admins) Plugins and Terminal: the core's whole Org section, and the Artifacts and Skills links. Every
+  one is still reachable from ⌘K and its own URL.
 - **Home** (the dashboard). A greeting that says how many things need you; a three-step getting-started
   strip until each step is done (or dismissed); **Needs you** (approvals, reviews, blocked tasks, agents
   in error, each with one verb); **Your team right now**; and **Latest updates**. The core's metrics
   and charts follow below; its live-runs panel, which the team panel replaces, is hidden.
-- **Renames.** Dashboard is called **Home** (the mobile bar already said so). The core's Apps area,
-  which connects outside tools, is called **Connections**, and its own "Connections" sub-page is
-  **Connected apps**. KyoubeAI's Apps (AI-built apps over company data) keep their name. A plugin
-  page is titled by its page ("Data", "Workspace") instead of "Plugins › <plugin>", and KyoubeAI's own
-  pages drop the host's Back link.
+- **Renames.** Dashboard is called **Home** (the mobile bar already said so). The core calls its
+  outside-tools area **Connectors** (since 2026.916), which keeps "Apps" for KyoubeAI's Apps (AI-built
+  apps over company data); the three access-profile pages that still said "Apps" in their breadcrumb
+  say Connectors too. A plugin page is titled by its page ("Data", "Workspace") instead of
+  "Plugins › <plugin>", and KyoubeAI's own pages drop the host's Back link.
 - **Agent profile** (`/<company>/team/<agent>`, the Concept C page). A header with the agent's
   character and live status, its name in the display face, its title, whom it reports to and the
   harness it runs on; an **On duty** switch, **Chat** (opens the task you would talk to it in) and
   **Assign task**. Tabs: **Overview** (what it is working on now with its own latest notes, recent work,
   tasks done this week, open tasks, spend this month, its skills, who it works with) and **Tasks** are
-  Studio's; **Instructions**, **Skills**, **Runs** and **Settings** open the core's own agent tabs.
-  Every link to an agent's default view opens the profile: the roster, Home, the org chart, the agents
-  list and the task assignee links alike (the plugin redirects the core's `/agents/<agent>` and
-  `/agents/<agent>/dashboard`). The core's agent page keeps its other tabs, with the agent's character
-  and display-face name in its header and its first tab renamed **Overview**, which leads back to the
-  profile. `/agents/<agent>/dashboard?classic=1` still shows the core's own view with its run charts.
+  Studio's; **Instructions**, **Skills** and **Settings** open the core's own agent views, and **Runs**
+  opens the core's Audit runs filtered to the agent. Every link to an agent's default view opens the
+  profile: the roster, Home, the org chart, the agents list and the task assignee links alike (the
+  plugin redirects the core's `/agents/<agent>` and `/agents/<agent>/overview`, and the
+  `/agents/<agent>/dashboard` of cores before 2026.916). The core's agent page keeps its other views,
+  with the agent's character over its header avatar and its name in the display face; its **Overview**
+  entry leads back to the profile. `/agents/<agent>/overview?classic=1` still shows the core's own
+  overview.
 - **Characters.** Each agent gets a face drawn from the icon picked in its settings (tint, hairstyle,
   accessory) and its name (skin tone, hair colour), so two agents with the same icon still differ. An
   agent with no icon gets a face from its name; `bot`, `cpu` and `circuit-board` are robots. The
@@ -59,6 +62,11 @@ KyoubeAI's own look ("Studio") comes from two parts, and neither edits the core:
 | Studio plugin | the published plugin SDK (slots, `order`, `useHostNavigation`, `useHostLocation`, `ctx.agents/issues/approvals`) | the SDK pin, the plugin's tests, the smoke, and the weekly upstream-beta run |
 | Agent profile actions | the core's documented board API (`POST /api/agents/{id}/pause`, `/resume`, `POST /api/companies/{id}/issues`), called as the signed-in person | the core's own permission checks; the live check follows an agent through the profile and the core tabs |
 
+**Shell.** Core 2026.916 made its streamlined shell (a Work section, an Org section and Recent tasks)
+the default, and the skin targets it. An instance can switch back to the legacy shell under
+Settings → Experimental → **Streamlined UI**; Studio still renders there, but the legacy sidebar's
+Agents and Organization sections stay visible.
+
 **Fail safe.** Every skin rule that hides or moves core UI applies only while the Studio layout is on:
 the Studio roster (`[data-kyoube-studio="team"]`) is on the page, or `boot.js` has flagged the page
 (`<html data-kyoube-shell="studio">`) while the plugin's UI loads. The flag clears itself after six
@@ -75,9 +83,10 @@ the gate.
 3. `scripts/smoke.sh` checks the served theme with curl, then `scripts/studio-live-check.mjs` signs
    in with headless Chrome and checks the design as rendered: dark by default, the Studio sidebar,
    Home above the charts, the Workspace page, an agent opened through the core's own URL landing on
-   the profile (and the core agent tabs showing its character), and the stock sidebar returning when
-   `kyoube.studio` is disabled. It saves screenshots to `STUDIO_SHOTS_DIR`, which CI uploads as the
-   `studio-screenshots` artifact.
+   the profile (and the core agent views showing its character), and the stock sidebar returning when
+   `kyoube.studio` is disabled. `scripts/onboarding-live-check.mjs` then walks the first-run wizard to
+   a skipped harness sign-in (the onboarding patches in docker/core-patches). Both save screenshots to
+   `STUDIO_SHOTS_DIR`, which CI uploads as the `studio-screenshots` artifact.
 4. The weekly `upstream-beta` workflow does all of this against the core's `:beta` image.
 
 ## After a core bump
@@ -85,8 +94,8 @@ the gate.
 Read the `theme:` lines in the build log:
 
 ```
-theme: 20 text rules applied in 3 file(s): home-sidebar-label 1/1, …
-theme: anchors 17/17; sidebar sections top=6, work=9, organization=6
+theme: 8 text rules applied in 2 file(s): home-sidebar-label 2/2, …
+theme: anchors 16/16; sidebar sections top=6, work=8, org=4
 theme: 52 core tokens overridden, all still declared by the core
 theme: linked /assets/kyoube-theme.css after the core stylesheet; 5 font files in /fonts/kyoube
 ```
@@ -98,16 +107,18 @@ visible. When the build stops, the message says what to change:
 |---|---|
 | `text rule "<id>" matched N time(s) … expected M` | Find the string in the new bundle and update the pattern in `docker/theme/rules.mjs`. Never relax `expect`. |
 | `anchor "<id>" matched 0 time(s)` | The hook the skin uses moved. Update the selector in `theme.css` and the anchor in `anchors.mjs`. |
-| `sidebar section "organization" changed: added [/x]` | The skin hides that section, so give the new link a card in `plugins/kyoube-studio/src/ui/links.ts`, then update `SECTIONS` in `anchors.mjs`. |
+| `sidebar section "org" changed: added [/x]` | The skin hides that section, so give the new link a card in `plugins/kyoube-studio/src/ui/links.ts`, then update `SECTIONS` in `anchors.mjs`. |
+| `sidebar section "org" not found` | The literal that ends the Org section's scan (the legacy shell's Organization section) is gone upstream. Set that entry's `end` in `SECTIONS` to the next literal after the Org section in the Sidebar component. |
 | `the core no longer declares --x` | Find the token that replaced it in the core's `index.css` and update `theme.css`. |
 
 Then refresh the test fixture from the new core image and look at the Studio screenshots from the
 smoke:
 
 ```bash
+dist="$(mktemp -d)/dist"
 id=$(docker create ghcr.io/paperclipai/paperclip:<version>)
-docker cp "$id":/app/ui/dist /tmp/core-dist && docker rm "$id"
-node docker/theme/tests/fixtures/extract.mjs /tmp/core-dist docker/theme/tests/fixtures/core-<version>.mjs
+docker cp "$id":/app/ui/dist "$dist" && docker rm "$id"
+node docker/theme/tests/fixtures/extract.mjs "$dist" docker/theme/tests/fixtures/core-<version>.mjs
 ```
 
 and point `theme.spec.mjs` at the new fixture.
