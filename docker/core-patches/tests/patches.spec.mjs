@@ -3,230 +3,296 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { applyPatches, applyToText, expandGlob } from "../lib.mjs";
-import { PATCHES, SKIP_HARNESS_LABEL, SKIP_HARNESS_MESSAGE } from "../patches.mjs";
+import { PATCHES, SKIP_HARNESS_LABEL } from "../patches.mjs";
 
-// The message_end handler exactly as core 2026.831.1's minified UI bundle
-// carries it (ui/dist/assets/index-BHbrFFmp.js), with the branches on
-// either side so the pattern is proven to anchor on this handler alone.
-const PI_HANDLER_2026_831_1 =
-  'if(r==="message_start")return[];if(r==="message_update"){const i=uS(n.assistantMessageEvent);if(i){const a=sf(i.type);if(a==="text_end"){const o=sf(i.content);if(o)return[{kind:"assistant",ts:t,text:o}]}}return[]}' +
-  'if(r==="message_end"){const i=uS(n.message);if(i){const a=i.content,{text:o,thinking:l}=hS(a),c=[];return l&&c.push({kind:"thinking",ts:t,text:l}),o&&c.push({kind:"assistant",ts:t,text:o}),c}return[]}' +
-  'if(r==="tool_execution_start"){const i=sf(n.toolCallId,`tool-${Date.now()}`);return[{kind:"tool_call",ts:t,name:"x",toolUseId:i}]}';
+// Excerpts of core 2026.916.1's minified UI, copied verbatim. The pi parser
+// lives in a code-split chunk (AiConnectionCredentialStep-DHV6zd1f.js); the
+// onboarding wizard in the main bundle (index-5zyW-AFc.js).
 
-const piPatch = PATCHES.find((patch) => patch.id === "pi-transcript-non-assistant-messages");
+// The message_update / message_end / tool_execution_start branches of the pi
+// transcript parser, so the pattern is proven to anchor on message_end alone.
+const PI_HANDLER_2026_916_1 =
+  'if(r==="message_start")return[];if(r==="message_update"){const s=hn(n.assistantMessageEvent);if(s){const o=tt(s.type);if(o==="thinking_delta"){const a=tt(s.delta);if(a)return[{kind:"thinking",ts:t,text:a,delta:!0}]}if(o==="text_delta"){const a=tt(s.delta);if(a)return[{kind:"assistant",ts:t,text:a,delta:!0}]}if(o==="thinking_end"){const a=tt(s.content);if(a)return[{kind:"thinking",ts:t,text:a}]}if(o==="text_end"){const a=tt(s.content);if(a)return[{kind:"assistant",ts:t,text:a}]}}return[]}' +
+  'if(r==="message_end"){const s=hn(n.message);if(s){const o=s.content,{text:a,thinking:l}=gn(o),c=[];return l&&c.push({kind:"thinking",ts:t,text:l}),a&&c.push({kind:"assistant",ts:t,text:a}),c}return[]}' +
+  'if(r==="tool_execution_start"){return[{kind:"tool_call",ts:t,name:"x"}]}';
 
-// The onboarding wizard's hire handler (`handleGiveHeartbeat`) from the same
-// bundle: the environment-test gate and the hire call that follows it. The
-// snippet sits directly in the handler's `try` block, which is what lets the
-// patch read `arguments[0]`; the wrapper below reproduces that placement.
-const HIRE_GATE_2026_831_1 =
-  'if(Vn){const Tn=(Te&&Te.status!=="fail"?Te:null)??await lt();if(!Tn)return;if(Tn.status==="fail"){H("The environment test failed. Fix the reported checks before you hire this agent.");return}}' +
-  'if(!Xe)return;const nt=await Xt.hire(xt,{name:Ue.trim()||L3[Xe],role:Xe,adapterType:Ve,adapterConfig:ht(),runtimeConfig:zYe()});';
+// The Connect step's primary action (`handleConnectStepPrimary`).
+const CONNECT_PRIMARY_2026_916_1 =
+  'function pn(){if(Je==="ready"&&Ft){It&&window.open(It,"_blank","noreferrer,noopener"),qe("waiting");return}Je!=="connecting"&&(zs||ma())}';
 
-// The wizard's error line followed by its footer navigation, as rendered for
-// the agent-arc steps (same bundle). Two array children of the step body.
-const ERROR_AND_FOOTER_2026_831_1 =
-  'Gr&&(0,s.jsx)("div",{className:"mt-3",children:(0,s.jsx)("p",{className:"text-xs text-destructive",children:Gr})}),' +
-  'qt&&(0,s.jsx)(Spn,{onBack:jSe({currentStep:_,entryStep:C})?()=>I(zn(_)):void 0,primaryLabel:_===3?"Next":_===4?"Connect":"Get started",loadingLabel:_===4?"Connecting...":"Launching...",loading:_===3?!1:L,primaryDisabled:_===3?!Ue.trim():_===4?L||dt||_t:L||Er,onPrimary:()=>{_===3?I(4):_===4?fs():Pr()}})';
+// The subscription sign-in inside the hire handler (`handleGiveHeartbeat`, `ma`).
+const LOCAL_LOGIN_2026_916_1 =
+  'if(Le!=="api"&&vr&&gt&&!lt()&&!bt&&!Oe.storedLogin.data){if(await qn.connect(),!es())return;ze.current={companyId:$e,binding:{provider:gt,method:"subscription",mode:"responsible_user"}}}';
 
-const handlerPatch = PATCHES.find((patch) => patch.id === "onboarding-skip-harness-handler");
-const buttonPatch = PATCHES.find((patch) => patch.id === "onboarding-skip-harness-button");
+// The environment-test gate further down the same handler.
+const ENV_GATE_2026_916_1 =
+  'if(ct){const pr=(De&&Wt.current===yr&&!sH(De)?De:null)??await wn(Sa,yr,es);if(!pr||!es())return;if(sH(pr)){P(pr.status==="fail"?"The environment test failed. Fix the reported checks before you hire this agent.":"No working authentication was found. Fix the reported checks before you hire this agent.");return}}';
+
+// The wizard's error line followed by its footer navigation: two array
+// children of the step body.
+const ERROR_AND_FOOTER_2026_916_1 =
+  'tn&&(0,t.jsx)("div",{className:"mt-3",children:(0,t.jsx)("p",{className:"text-xs text-destructive",children:tn})}),' +
+  '(Y||_===1)&&(0,t.jsx)(Pwe,{onBack:_===4&&Je!=="idle"?Vs:Mze({currentStep:_,entryStep:S})?()=>I(Ha(_)):void 0,primaryLabel:_===1?"Continue":_===5?"Get started":_===4?Hn.label:"Next",primaryIcon:_===4?Hn.icon:void 0,loadingLabel:_===1?"Creating...":_===4?"Connecting":"Launching...",loading:_===3||_===4?!1:B,primaryDisabled:_===1?!M.trim()||B:_===3?!H.trim():_===4?Hn.disabled||B:B||en,onPrimary:()=>{_===1?kr():_===3?I(4):_===4?pn():Gn()}})';
+
+const patch = (id) => PATCHES.find((entry) => entry.id === id);
+const piPatch = patch("pi-transcript-non-assistant-messages");
+const primaryPatch = patch("onboarding-skip-harness-primary");
+const loginPatch = patch("onboarding-skip-harness-login");
+const gatePatch = patch("onboarding-skip-harness-gate");
+const buttonPatch = patch("onboarding-skip-harness-button");
 
 /** A bundle fragment carrying every region the declared patches target, once each. */
-const FULL_BUNDLE_2026_831_1 = `const x=1;${PI_HANDLER_2026_831_1};async function fs(){try{${HIRE_GATE_2026_831_1}}catch{}}const y=[${ERROR_AND_FOOTER_2026_831_1}];`;
+const FULL_BUNDLE_2026_916_1 =
+  `const x=1;${PI_HANDLER_2026_916_1};${CONNECT_PRIMARY_2026_916_1}` +
+  `async function ma(){try{${LOCAL_LOGIN_2026_916_1}${ENV_GATE_2026_916_1}}catch{}}const y=[${ERROR_AND_FOOTER_2026_916_1}];`;
 
-/** Runs the (patched or unpatched) handler text as the parser would, with the minified helpers stubbed. */
-function runHandler(code, message) {
-  const uS = (value) => (typeof value === "object" && value !== null ? value : null);
-  const sf = (value, fallback = "") => (typeof value === "string" ? value : fallback);
-  const hS = (content) => ({ text: content.filter((c) => c.type === "text").map((c) => c.text).join(""), thinking: "" });
-  const fn = new Function("r", "n", "t", "uS", "sf", "hS", `${code};return "fell-through"`);
-  return fn("message_end", { message }, "2026-09-19T00:00:00Z", uS, sf, hS);
+function declaredSafely(entry) {
+  expect(entry).toBeDefined();
+  expect(entry.upstream).toContain("github.com/paperclipai/paperclip");
+  expect(entry.expect).toBe(1);
+  expect(entry.pattern.flags).toContain("g");
+}
+
+/** Runs the (patched or unpatched) pi handler as the parser would, with the minified helpers stubbed. */
+function runPiHandler(code, message) {
+  const hn = (value) => (typeof value === "object" && value !== null && !Array.isArray(value) ? value : null);
+  const tt = (value, fallback = "") => (typeof value === "string" ? value : fallback);
+  const gn = (content) => ({ text: content.filter((c) => c.type === "text").map((c) => c.text).join(""), thinking: "" });
+  const fn = new Function("r", "n", "t", "hn", "tt", "gn", `${code};return "fell-through"`);
+  return fn("message_end", { message }, "2026-09-24T00:00:00Z", hn, tt, gn);
 }
 
 describe("pi-transcript-non-assistant-messages", () => {
-  it("is declared with the safety fields every patch needs", () => {
-    expect(piPatch).toBeDefined();
-    expect(piPatch.upstream).toContain("github.com/paperclipai/paperclip");
-    expect(piPatch.expect).toBe(1);
-    expect(piPatch.pattern.flags).toContain("g");
+  it("is declared with the safety fields every patch needs", () => declaredSafely(piPatch));
+
+  it("looks in every chunk, since the parser moved out of the main bundle", () => {
+    expect(piPatch.files).toEqual(["ui/dist/assets/*.js"]);
   });
 
-  it("matches the 2026.831.1 handler exactly once, whatever the minifier called the identifiers", () => {
-    const { count, text } = applyToText(PI_HANDLER_2026_831_1, piPatch);
+  it("matches the 2026.916.1 handler exactly once, whatever the minifier called the identifiers", () => {
+    const { count, text } = applyToText(PI_HANDLER_2026_916_1, piPatch);
     expect(count).toBe(1);
-    expect(text).toContain('if(r==="message_end"){const i=uS(n.message);if(i&&i.role!=="assistant")return[];if(i){');
-    const renamed = PI_HANDLER_2026_831_1.replaceAll("uS(", "Qx(").replaceAll("const i=", "const Z=").replaceAll("if(i){", "if(Z){").replaceAll("i.content", "Z.content");
+    expect(text).toContain('if(r==="message_end"){const s=hn(n.message);if(s&&s.role!=="assistant")return[];if(s){');
+    const renamed = PI_HANDLER_2026_916_1.replaceAll("hn(", "Qx(").replaceAll("const s=", "const Z=").replaceAll("if(s){", "if(Z){").replaceAll("s.content", "Z.content");
     expect(applyToText(renamed, piPatch).count).toBe(1);
   });
 
   it("does not match again once applied, so a core that already carries the fix fails the build", () => {
-    const once = applyToText(PI_HANDLER_2026_831_1, piPatch).text;
+    const once = applyToText(PI_HANDLER_2026_916_1, piPatch).text;
     expect(applyToText(once, piPatch).count).toBe(0);
   });
 
   it("keeps the assistant's text and drops the wake prompt and tool results — proven by running the patched code", () => {
     const text = (s) => [{ type: "text", text: s }];
-    const before = PI_HANDLER_2026_831_1;
+    const before = PI_HANDLER_2026_916_1;
     const after = applyToText(before, piPatch).text;
-    // Upstream: every role becomes agent text.
-    expect(runHandler(before, { role: "user", content: text("## KyoubeAI Resume Delta") })).toEqual([{ kind: "assistant", ts: "2026-09-19T00:00:00Z", text: "## KyoubeAI Resume Delta" }]);
-    expect(runHandler(before, { role: "toolResult", content: text("=== doc revisions ===") })).toHaveLength(1);
-    // Patched: only the assistant's own message does.
-    expect(runHandler(after, { role: "user", content: text("## KyoubeAI Resume Delta") })).toEqual([]);
-    expect(runHandler(after, { role: "toolResult", content: text("=== doc revisions ===") })).toEqual([]);
-    expect(runHandler(after, { role: "assistant", content: text("Done — the pack is sent.") })).toEqual([{ kind: "assistant", ts: "2026-09-19T00:00:00Z", text: "Done — the pack is sent." }]);
-    expect(runHandler(after, null)).toEqual([]);
+    expect(runPiHandler(before, { role: "user", content: text("## KyoubeAI Resume Delta") })).toEqual([{ kind: "assistant", ts: "2026-09-24T00:00:00Z", text: "## KyoubeAI Resume Delta" }]);
+    expect(runPiHandler(before, { role: "toolResult", content: text("=== doc revisions ===") })).toHaveLength(1);
+    expect(runPiHandler(after, { role: "user", content: text("## KyoubeAI Resume Delta") })).toEqual([]);
+    expect(runPiHandler(after, { role: "toolResult", content: text("=== doc revisions ===") })).toEqual([]);
+    expect(runPiHandler(after, { role: "assistant", content: text("Done — the pack is sent.") })).toEqual([{ kind: "assistant", ts: "2026-09-24T00:00:00Z", text: "Done — the pack is sent." }]);
+    expect(runPiHandler(after, null)).toEqual([]);
   });
 });
 
-/**
- * Runs the (patched or unpatched) hire gate as the wizard would: inside a plain
- * `async function` whose first argument is whatever the caller passed, with the
- * minified state and API stubbed. Returns what the handler did.
- */
-async function runHireGate(code, { envResult, cached = null, isLocal = true, arg } = {}) {
-  const calls = { probes: 0, errors: [], hired: null };
-  const fn = new Function(
-    "Vn", "Te", "lt", "H", "Xe", "Xt", "xt", "Ue", "L3", "Ve", "ht", "zYe",
-    `return async function fs(){${code}return nt}`,
-  )(
-    isLocal,
-    cached,
-    async () => { calls.probes += 1; return envResult; },
-    (message) => { calls.errors.push(message); },
-    "ceo",
-    { hire: async (companyId, payload) => { calls.hired = { companyId, payload }; return { agent: { id: "agent-1" } }; } },
-    "company-1",
-    "Lead",
-    { ceo: "CEO" },
-    "claude_local",
-    () => ({}),
-    () => ({}),
+/** Runs the (patched or unpatched) Connect primary action with the wizard's state stubbed. */
+function runConnectPrimary(code, { phase = "idle", needsLogin = false, loggingIn = false, arg } = {}) {
+  const calls = { hires: [], opened: [], phases: [] };
+  const window = { open: (...args) => calls.opened.push(args) };
+  const pn = new Function("Je", "Ft", "It", "qe", "zs", "ma", "window", `${code};return pn`)(
+    phase, needsLogin, "https://claude.example/auth", (next) => calls.phases.push(next), loggingIn,
+    (...args) => { calls.hires.push(args); }, window,
   );
-  const returned = arg === undefined ? await fn() : await fn(arg);
-  return { ...calls, returned };
+  if (arg === undefined) pn(); else pn(arg);
+  return calls;
 }
 
-describe("onboarding-skip-harness-handler", () => {
-  it("is declared with the safety fields every patch needs", () => {
-    expect(handlerPatch).toBeDefined();
-    expect(handlerPatch.upstream).toContain("github.com/paperclipai/paperclip");
-    expect(handlerPatch.expect).toBe(1);
-    expect(handlerPatch.pattern.flags).toContain("g");
-  });
+describe("onboarding-skip-harness-primary", () => {
+  it("is declared with the safety fields every patch needs", () => declaredSafely(primaryPatch));
 
-  it("matches the 2026.831.1 hire gate exactly once, whatever the minifier called the identifiers", () => {
-    const { count, text } = applyToText(HIRE_GATE_2026_831_1, handlerPatch);
+  it("matches the 2026.916.1 primary action exactly once, whatever the minifier called the identifiers", () => {
+    const { count, text } = applyToText(CONNECT_PRIMARY_2026_916_1, primaryPatch);
     expect(count).toBe(1);
-    expect(text).toContain('if(Vn&&arguments[0]!==!0){');
-    expect(text).toContain(`H(${JSON.stringify(SKIP_HARNESS_MESSAGE)});return}}`);
-    const renamed = HIRE_GATE_2026_831_1.replaceAll("Vn", "Qx").replaceAll("Tn", "Zz").replaceAll("Te", "Yy").replaceAll("lt()", "Ww()").replaceAll("H(", "Hh(");
-    expect(applyToText(renamed, handlerPatch).count).toBe(1);
+    expect(text).toContain("function pn(){if(arguments[0]===!0){ma(!0);return}");
+    const renamed = CONNECT_PRIMARY_2026_916_1.replaceAll("Je", "$q").replaceAll("ma()", "Zz()").replaceAll("pn", "Aa");
+    expect(applyToText(renamed, primaryPatch).count).toBe(1);
   });
 
   it("does not match again once applied", () => {
-    const once = applyToText(HIRE_GATE_2026_831_1, handlerPatch).text;
-    expect(applyToText(once, handlerPatch).count).toBe(0);
+    const once = applyToText(CONNECT_PRIMARY_2026_916_1, primaryPatch).text;
+    expect(applyToText(once, primaryPatch).count).toBe(0);
   });
 
-  it("still blocks the hire on a failed probe, now with the message that names the skip — proven by running the patched code", async () => {
-    const after = applyToText(HIRE_GATE_2026_831_1, handlerPatch).text;
-    const fail = { status: "fail", checks: [] };
-    const before = await runHireGate(HIRE_GATE_2026_831_1, { envResult: fail });
-    expect(before.hired).toBeNull();
-    expect(before.errors).toEqual(["The environment test failed. Fix the reported checks before you hire this agent."]);
-    const patched = await runHireGate(after, { envResult: fail });
-    expect(patched.hired).toBeNull();
-    expect(patched.probes).toBe(1);
-    expect(patched.errors).toEqual([SKIP_HARNESS_MESSAGE]);
+  it("hands an explicit `true` straight to the hire handler, and otherwise behaves as before — proven by running the patched code", () => {
+    const after = applyToText(CONNECT_PRIMARY_2026_916_1, primaryPatch).text;
+    // The skip goes to the hire, even mid sign-in.
+    expect(runConnectPrimary(after, { arg: true, phase: "ready", needsLogin: true }).hires).toEqual([[true]]);
+    expect(runConnectPrimary(after, { arg: true, phase: "connecting" }).hires).toEqual([[true]]);
+    // No argument: upstream's behaviour, unchanged.
+    expect(runConnectPrimary(after, {}).hires).toEqual([[]]);
+    const signIn = runConnectPrimary(after, { phase: "ready", needsLogin: true });
+    expect(signIn.hires).toEqual([]);
+    expect(signIn.opened).toHaveLength(1);
+    expect(signIn.phases).toEqual(["waiting"]);
+    expect(runConnectPrimary(after, { phase: "connecting" }).hires).toEqual([]);
+    expect(runConnectPrimary(after, { loggingIn: true }).hires).toEqual([]);
+    // A click event is not a skip.
+    expect(runConnectPrimary(after, { arg: { type: "click" } }).hires).toEqual([[]]);
+  });
+});
+
+/** Runs the (patched or unpatched) sign-in block inside a plain async function, as the hire handler holds it. */
+async function runLocalLogin(code, { mode = "subscription", arg } = {}) {
+  const calls = { connects: 0 };
+  const fn = new Function(
+    "Le", "vr", "gt", "lt", "bt", "Oe", "qn", "es", "ze", "$e",
+    `return async function ma(){${code}return "hired"}`,
+  )(
+    mode, true, "anthropic", () => null, null, { storedLogin: { data: null } },
+    { connect: async () => { calls.connects += 1; throw new Error("Only the local operator can connect this machine's CLI account."); } },
+    () => true, { current: null }, "company-1",
+  );
+  let outcome;
+  try { outcome = arg === undefined ? await fn() : await fn(arg); } catch (error) { outcome = `threw: ${error.message}`; }
+  return { ...calls, outcome };
+}
+
+describe("onboarding-skip-harness-login", () => {
+  it("is declared with the safety fields every patch needs", () => declaredSafely(loginPatch));
+
+  it("matches the 2026.916.1 sign-in block exactly once, whatever the minifier called the identifiers", () => {
+    const { count, text } = applyToText(LOCAL_LOGIN_2026_916_1, loginPatch);
+    expect(count).toBe(1);
+    expect(text).toContain('if(arguments[0]!==!0&&Le!=="api"&&vr&&gt&&!lt()&&!bt&&!Oe.storedLogin.data){if(await qn.connect(),');
+    const renamed = LOCAL_LOGIN_2026_916_1.replaceAll("Le", "$k").replaceAll("qn.", "Ww.").replaceAll("Oe.", "Uu.");
+    expect(applyToText(renamed, loginPatch).count).toBe(1);
   });
 
-  it("skips the probe and hires only on an explicit `true`; a click event or no argument keeps the gate", async () => {
-    const after = applyToText(HIRE_GATE_2026_831_1, handlerPatch).text;
-    const fail = { status: "fail", checks: [] };
-    const skipped = await runHireGate(after, { envResult: fail, arg: true });
-    expect(skipped.probes).toBe(0);
-    expect(skipped.errors).toEqual([]);
-    expect(skipped.hired).toEqual({ companyId: "company-1", payload: expect.objectContaining({ role: "ceo", adapterType: "claude_local", name: "Lead" }) });
-    // The non-arc footer passes the handler straight to onClick, so it
-    // receives the click event: that must not read as a skip.
-    const clicked = await runHireGate(after, { envResult: fail, arg: { type: "click" } });
-    expect(clicked.probes).toBe(1);
-    expect(clicked.hired).toBeNull();
-    // A passing probe hires as before, with or without the skip.
-    const pass = await runHireGate(after, { envResult: { status: "pass", checks: [] } });
-    expect(pass.probes).toBe(1);
-    expect(pass.hired).not.toBeNull();
+  it("does not match again once applied", () => {
+    const once = applyToText(LOCAL_LOGIN_2026_916_1, loginPatch).text;
+    expect(applyToText(once, loginPatch).count).toBe(0);
+  });
+
+  it("skips the sign-in only on an explicit `true` — proven by running the patched code", async () => {
+    const after = applyToText(LOCAL_LOGIN_2026_916_1, loginPatch).text;
+    const blocked = await runLocalLogin(LOCAL_LOGIN_2026_916_1);
+    expect(blocked).toEqual({ connects: 1, outcome: "threw: Only the local operator can connect this machine's CLI account." });
+    expect(await runLocalLogin(after)).toEqual(blocked);
+    expect(await runLocalLogin(after, { arg: { type: "click" } })).toEqual(blocked);
+    expect(await runLocalLogin(after, { arg: true })).toEqual({ connects: 0, outcome: "hired" });
+    // An API key never signs in, skip or not.
+    expect(await runLocalLogin(after, { mode: "api" })).toEqual({ connects: 0, outcome: "hired" });
+  });
+});
+
+/** Runs the (patched or unpatched) environment gate inside a plain async function, as the hire handler holds it. */
+async function runEnvGate(code, { envResult, arg } = {}) {
+  const calls = { probes: 0, errors: [] };
+  const blocks = (result) => result.status === "fail" || result.authMissing === true;
+  const fn = new Function(
+    "ct", "De", "Wt", "yr", "sH", "wn", "Sa", "es", "P",
+    `return async function ma(){${code}return "hired"}`,
+  )(
+    true, null, { current: false }, false, blocks,
+    async () => { calls.probes += 1; return envResult; }, {}, () => true, (message) => calls.errors.push(message),
+  );
+  const outcome = arg === undefined ? await fn() : await fn(arg);
+  return { ...calls, outcome };
+}
+
+describe("onboarding-skip-harness-gate", () => {
+  it("is declared with the safety fields every patch needs", () => declaredSafely(gatePatch));
+
+  it("matches the 2026.916.1 gate exactly once, whatever the minifier called the identifiers", () => {
+    const { count, text } = applyToText(ENV_GATE_2026_916_1, gatePatch);
+    expect(count).toBe(1);
+    expect(text).toContain("if(ct&&arguments[0]!==!0){const pr=(De&&Wt.current===yr&&!sH(De)?De:null)??await wn(Sa,yr,es);");
+    // Upstream's own messages are kept.
+    expect(text).toContain('"The environment test failed. Fix the reported checks before you hire this agent."');
+    const renamed = ENV_GATE_2026_916_1.replaceAll("ct", "$c").replaceAll("pr", "Rr").replaceAll("sH(", "Ss(").replaceAll("P(", "Pp(");
+    expect(applyToText(renamed, gatePatch).count).toBe(1);
+  });
+
+  it("does not match again once applied", () => {
+    const once = applyToText(ENV_GATE_2026_916_1, gatePatch).text;
+    expect(applyToText(once, gatePatch).count).toBe(0);
+  });
+
+  it("still blocks a failed probe, and skips the probe only on an explicit `true` — proven by running the patched code", async () => {
+    const after = applyToText(ENV_GATE_2026_916_1, gatePatch).text;
+    const fail = { status: "fail" };
+    const before = await runEnvGate(ENV_GATE_2026_916_1, { envResult: fail });
+    expect(before).toEqual({ probes: 1, errors: ["The environment test failed. Fix the reported checks before you hire this agent."], outcome: undefined });
+    expect(await runEnvGate(after, { envResult: fail })).toEqual(before);
+    expect(await runEnvGate(after, { envResult: fail, arg: { type: "click" } })).toEqual(before);
+    expect(await runEnvGate(after, { envResult: { status: "warn", authMissing: true } })).toEqual({ probes: 1, errors: ["No working authentication was found. Fix the reported checks before you hire this agent."], outcome: undefined });
+    expect(await runEnvGate(after, { envResult: fail, arg: true })).toEqual({ probes: 0, errors: [], outcome: "hired" });
+    expect(await runEnvGate(after, { envResult: { status: "pass" } })).toEqual({ probes: 1, errors: [], outcome: "hired" });
   });
 });
 
 /** Evaluates the (patched or unpatched) error+footer children with the wizard's render scope stubbed. */
 function renderErrorAndFooter(code, { step, error, loading = false }) {
-  const s = { jsx: (type, props) => ({ type, props }) };
-  const fsCalls = [];
+  const t = { jsx: (type, props) => ({ type, props }) };
+  const primaryCalls = [];
   const fn = new Function(
-    "s", "Gr", "qt", "Spn", "jSe", "I", "zn", "_", "C", "L", "Ue", "dt", "_t", "Er", "fs", "Pr",
+    "t", "tn", "Y", "Pwe", "Je", "Vs", "Mze", "I", "Ha", "_", "S", "Hn", "B", "M", "H", "en", "kr", "pn", "Gn",
     `return [${code}]`,
   );
   const children = fn(
-    s, error, true, "FooterNav", () => true, () => {}, (n) => n - 1, step, 3, loading, { trim: () => "Lead" }, false, false, false,
-    (...args) => { fsCalls.push(args); }, () => {},
+    t, error, true, "FooterNav", "idle", () => {}, () => true, () => {}, (n) => n - 1, step, 3,
+    { label: "Connect", icon: "arrow", disabled: false }, loading, { trim: () => "Co" }, { trim: () => "Ada" }, false,
+    () => {}, (...args) => { primaryCalls.push(args); }, () => {},
   );
-  return { children, fsCalls };
+  return { children, primaryCalls };
 }
 
 describe("onboarding-skip-harness-button", () => {
-  it("is declared with the safety fields every patch needs", () => {
-    expect(buttonPatch).toBeDefined();
-    expect(buttonPatch.upstream).toContain("github.com/paperclipai/paperclip");
-    expect(buttonPatch.expect).toBe(1);
-    expect(buttonPatch.pattern.flags).toContain("g");
-  });
+  it("is declared with the safety fields every patch needs", () => declaredSafely(buttonPatch));
 
-  it("matches the 2026.831.1 error line and footer exactly once, whatever the minifier called the identifiers", () => {
-    const { count, text } = applyToText(ERROR_AND_FOOTER_2026_831_1, buttonPatch);
+  it("matches the 2026.916.1 error line and footer exactly once, whatever the minifier called the identifiers", () => {
+    const { count, text } = applyToText(ERROR_AND_FOOTER_2026_916_1, buttonPatch);
     expect(count).toBe(1);
-    expect(text).toContain(`_===4&&Gr===${JSON.stringify(SKIP_HARNESS_MESSAGE)}&&(0,s.jsx)("div",{className:"mt-2"`);
-    expect(text).toContain('onClick:()=>fs(!0)');
+    expect(text).toContain('_===4&&tn&&(0,t.jsx)("div",{className:"mt-2"');
+    expect(text).toContain("onClick:()=>pn(!0)");
     // The footer call is re-emitted untouched.
-    expect(text).toContain(ERROR_AND_FOOTER_2026_831_1.slice(ERROR_AND_FOOTER_2026_831_1.indexOf("qt&&")));
-    const renamed = ERROR_AND_FOOTER_2026_831_1.replaceAll("Gr", "Ee").replaceAll("(0,s.jsx)", "Kt.jsx").replaceAll("fs()", "Qq()").replaceAll("_===", "St===").replaceAll("currentStep:_", "currentStep:St").replaceAll("zn(_)", "zn(St)");
+    expect(text).toContain(ERROR_AND_FOOTER_2026_916_1.slice(ERROR_AND_FOOTER_2026_916_1.indexOf("(Y||")));
+    const renamed = ERROR_AND_FOOTER_2026_916_1.replaceAll("tn", "$e").replaceAll("(0,t.jsx)", "(0,Kt.jsx)").replaceAll("pn()", "Qq()").replaceAll("_===", "St===").replaceAll("currentStep:_", "currentStep:St").replaceAll("Ha(_)", "Ha(St)");
     expect(applyToText(renamed, buttonPatch).count).toBe(1);
   });
 
   it("does not match again once applied", () => {
-    const once = applyToText(ERROR_AND_FOOTER_2026_831_1, buttonPatch).text;
+    const once = applyToText(ERROR_AND_FOOTER_2026_916_1, buttonPatch).text;
     expect(applyToText(once, buttonPatch).count).toBe(0);
   });
 
-  it("renders the skip control only on step 4 under the handler's message, and it calls the hire handler with `true` — proven by running the patched code", () => {
-    const after = applyToText(ERROR_AND_FOOTER_2026_831_1, buttonPatch).text;
-    // Upstream: error line and footer only.
-    const before = renderErrorAndFooter(ERROR_AND_FOOTER_2026_831_1, { step: 4, error: SKIP_HARNESS_MESSAGE });
+  it("renders the skip control only on step 4 under an error, and it calls the primary action with `true` — proven by running the patched code", () => {
+    const after = applyToText(ERROR_AND_FOOTER_2026_916_1, buttonPatch).text;
+    const message = "Could not verify the local subscription. Run the sign-in command shown for this connection, finish signing in, then try Connect again.";
+    const before = renderErrorAndFooter(ERROR_AND_FOOTER_2026_916_1, { step: 4, error: message });
     expect(before.children).toHaveLength(2);
     expect(before.children[1].type).toBe("FooterNav");
 
-    const shown = renderErrorAndFooter(after, { step: 4, error: SKIP_HARNESS_MESSAGE });
+    const shown = renderErrorAndFooter(after, { step: 4, error: message });
     expect(shown.children).toHaveLength(3);
-    expect(shown.children[0].props.children.props.children).toBe(SKIP_HARNESS_MESSAGE);
+    expect(shown.children[0].props.children.props.children).toBe(message);
     const button = shown.children[1].props.children;
     expect(button.type).toBe("button");
     expect(button.props.type).toBe("button");
     expect(button.props.children).toBe(SKIP_HARNESS_LABEL);
     expect(button.props.disabled).toBe(false);
     button.props.onClick();
-    expect(shown.fsCalls).toEqual([[true]]);
+    expect(shown.primaryCalls).toEqual([[true]]);
     expect(shown.children[2].type).toBe("FooterNav");
     expect(shown.children[2].props.primaryLabel).toBe("Connect");
 
-    // Any other error, any other step, or no error: the slot is falsy, so React renders nothing there.
-    expect(renderErrorAndFooter(after, { step: 4, error: "Failed to create agent" }).children[1]).toBeFalsy();
-    expect(renderErrorAndFooter(after, { step: 5, error: SKIP_HARNESS_MESSAGE }).children[1]).toBeFalsy();
+    // Any other step, or no error: the slot is falsy, so React renders nothing there.
+    expect(renderErrorAndFooter(after, { step: 3, error: message }).children[1]).toBeFalsy();
+    expect(renderErrorAndFooter(after, { step: 5, error: message }).children[1]).toBeFalsy();
     expect(renderErrorAndFooter(after, { step: 4, error: null }).children[0]).toBeFalsy();
     expect(renderErrorAndFooter(after, { step: 4, error: null }).children[1]).toBeFalsy();
-    // While the hire is in flight the control is disabled with the footer.
-    expect(renderErrorAndFooter(after, { step: 4, error: SKIP_HARNESS_MESSAGE, loading: true }).children[1].props.children.props.disabled).toBe(true);
+    // While a hire is in flight the control is disabled.
+    expect(renderErrorAndFooter(after, { step: 4, error: message, loading: true }).children[1].props.children.props.disabled).toBe(true);
   });
 });
 
@@ -245,37 +311,45 @@ describe("applyPatches", () => {
     await writeFile(path.join(root, "ui/dist/assets/index-AAAA.js.map"), "");
     await writeFile(path.join(root, "ui/dist/assets/other-BBBB.js"), "");
     expect((await expandGlob(root, "ui/dist/assets/index-*.js")).map((f) => path.basename(f))).toEqual(["index-AAAA.js"]);
+    expect((await expandGlob(root, "ui/dist/assets/*.js")).map((f) => path.basename(f))).toEqual(["index-AAAA.js", "other-BBBB.js"]);
     expect(await expandGlob(root, "nope/*.js")).toEqual([]);
   });
 
   it("rewrites the bundle in place and reports it", async () => {
-    const file = path.join(root, "ui/dist/assets/index-BHbrFFmp.js");
-    await writeFile(file, FULL_BUNDLE_2026_831_1);
+    const file = path.join(root, "ui/dist/assets/index-5zyW-AFc.js");
+    await writeFile(file, FULL_BUNDLE_2026_916_1);
     const report = await applyPatches(root, PATCHES);
-    expect(report).toEqual(PATCHES.map((patch) => ({ id: patch.id, matched: 1, expect: 1, files: ["ui/dist/assets/index-BHbrFFmp.js"] })));
+    expect(report).toEqual(PATCHES.map((entry) => ({ id: entry.id, matched: 1, expect: 1, files: ["ui/dist/assets/index-5zyW-AFc.js"] })));
     const patched = await readFile(file, "utf8");
     expect(patched).toContain('.role!=="assistant")return[]');
     expect(patched).toContain("arguments[0]!==!0");
     expect(patched).toContain(SKIP_HARNESS_LABEL);
   });
 
+  it("finds the pi parser in a code-split chunk", async () => {
+    await writeFile(path.join(root, "ui/dist/assets/index-5zyW-AFc.js"), FULL_BUNDLE_2026_916_1.replace(PI_HANDLER_2026_916_1, ""));
+    await writeFile(path.join(root, "ui/dist/assets/AiConnectionCredentialStep-DHV6zd1f.js"), PI_HANDLER_2026_916_1);
+    const report = await applyPatches(root, PATCHES);
+    expect(report.find((entry) => entry.id === piPatch.id).files).toEqual(["ui/dist/assets/AiConnectionCredentialStep-DHV6zd1f.js"]);
+  });
+
   it("fails — without writing — when a patch matches zero times or more than declared", async () => {
-    const file = path.join(root, "ui/dist/assets/index-BHbrFFmp.js");
+    const file = path.join(root, "ui/dist/assets/index-5zyW-AFc.js");
     await writeFile(file, "nothing here");
     await expect(applyPatches(root, PATCHES)).rejects.toThrow(/matched 0 time\(s\).*expected 1/);
-    await writeFile(file, FULL_BUNDLE_2026_831_1 + FULL_BUNDLE_2026_831_1);
+    await writeFile(file, FULL_BUNDLE_2026_916_1 + FULL_BUNDLE_2026_916_1);
     await expect(applyPatches(root, PATCHES)).rejects.toThrow(/matched 2 time\(s\).*expected 1/);
     // A bundle that carries only one region still fails the build on the
     // others, so a core that moved one of them cannot ship half a fix.
-    await writeFile(file, PI_HANDLER_2026_831_1);
-    await expect(applyPatches(root, PATCHES)).rejects.toThrow(/onboarding-skip-harness-handler.*matched 0 time\(s\)/);
+    await writeFile(file, PI_HANDLER_2026_916_1);
+    await expect(applyPatches(root, PATCHES)).rejects.toThrow(/onboarding-skip-harness-primary.*matched 0 time\(s\)/);
   });
 
   it("dry-run reports without touching the file", async () => {
-    const file = path.join(root, "ui/dist/assets/index-BHbrFFmp.js");
-    await writeFile(file, FULL_BUNDLE_2026_831_1);
+    const file = path.join(root, "ui/dist/assets/index-5zyW-AFc.js");
+    await writeFile(file, FULL_BUNDLE_2026_916_1);
     const report = await applyPatches(root, PATCHES, { dryRun: true });
     expect(report.map((entry) => entry.matched)).toEqual(PATCHES.map(() => 1));
-    expect(await readFile(file, "utf8")).toBe(FULL_BUNDLE_2026_831_1);
+    expect(await readFile(file, "utf8")).toBe(FULL_BUNDLE_2026_916_1);
   });
 });

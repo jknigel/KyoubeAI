@@ -15,13 +15,10 @@
  */
 
 /**
- * What the first-run wizard says under a failed harness probe once the
- * `onboarding-skip-harness-*` pair is applied. Shared by both patches: the
- * handler writes it, the button shows only while the error reads exactly this.
+ * The label of the control the `onboarding-skip-harness-*` patches add under
+ * a failed Connect step. Exported for the tests.
  */
-export const SKIP_HARNESS_MESSAGE =
-  "This harness is not connected yet: the environment test failed. Fix the reported checks and press Connect again, or skip for now and connect it later from the Terminal page.";
-export const SKIP_HARNESS_LABEL = "Skip for now and connect the harness later";
+export const SKIP_HARNESS_LABEL = "Skip for now and connect the harness later from the Terminal page";
 
 export const PATCHES = [
   {
@@ -35,56 +32,75 @@ export const PATCHES = [
     // task chat showed the prompt and every tool output as agent bubbles in
     // the body font (tool output twice: it is also threaded onto its tool
     // card). Only an assistant message may become agent text.
-    files: ["ui/dist/assets/index-*.js"],
+    // Since core 2026.916 the pi transcript parser is code-split into a chunk
+    // whose name the bundler picks (AiConnectionCredentialStep-*.js in
+    // 2026.916.1), so the patch looks in every chunk; `expect` still pins it
+    // to exactly one match.
+    files: ["ui/dist/assets/*.js"],
     pattern: /if\((\w+)==="message_end"\)\{const (\w+)=(\w+)\((\w+)\.message\);if\(\2\)\{/g,
     replacement: 'if($1==="message_end"){const $2=$3($4.message);if($2&&$2.role!=="assistant")return[];if($2){',
     expect: 1,
   },
+  // ── onboarding: "Skip for now" under a failed Connect step ──────────────
+  // Step 2 of the first-run agent wizard ("Connect a model") will not hire the
+  // agent until the chosen harness is signed in. On a fresh KyoubeAI install
+  // nothing is: the server runs in `authenticated` mode, where the wizard's
+  // Claude/OpenAI subscription sign-in ends in "Only the local operator can
+  // connect this machine's CLI account" (upstream only lets the implicit local
+  // operator of a `local_trusted` instance finish it), and the Terminal page
+  // where `claude login` works sits behind the wizard, which has no close
+  // button. An API key still works; a subscription has no way forward.
+  //
+  // Four patches, one feature. The footer gets a "Skip for now" button while
+  // step 4 shows an error; it calls the step's primary action with `true`,
+  // which goes straight to the hire handler with `true`, which then skips the
+  // two checks that need a signed-in harness (the local sign-in and the
+  // environment test). Both handlers are plain function declarations, so
+  // `arguments[0]` reads that flag without the pattern reaching a parameter
+  // list, and every existing call passes nothing (or a click event), so only
+  // the new button skips. The agent is created with the chosen harness and
+  // no credential; signing in from the Terminal page afterwards is enough.
   {
-    id: "onboarding-skip-harness-handler",
-    title: "onboarding: a failed environment test no longer blocks the first hire when the user chooses to skip",
-    upstream: "https://github.com/paperclipai/paperclip (ui/src/components/OnboardingWizard.tsx, handleGiveHeartbeat; feature request pending)",
-    // Step 4 of the first-run wizard ("Connect") probes the chosen harness and
-    // refuses to hire the agent while the probe fails. On a fresh KyoubeAI
-    // install every harness fails it — nobody has run `claude login` yet — and
-    // the only place to log in, the Terminal page, sits behind the wizard, so a
-    // new instance has no way forward except an API key in `.env`.
-    //
-    // The handler is a plain `async function` declaration, so `arguments[0]`
-    // reads its first argument without the pattern having to reach the
-    // declaration (which carries no literal to anchor on). Every existing call
-    // passes nothing or a click event, so only an explicit `true` skips the
-    // probe; the companion patch below is what passes it. The failure message
-    // is replaced with one that says the skip exists and where to connect
-    // later — that literal is also how the companion finds the failure.
-    files: ["ui/dist/assets/index-*.js"],
-    pattern:
-      /if\((\w+)\)\{const (\w+)=\((\w+)&&\3\.status!=="fail"\?\3:null\)\?\?await (\w+)\(\);if\(!\2\)return;if\(\2\.status==="fail"\)\{(\w+)\("The environment test failed\. Fix the reported checks before you hire this agent\."\);return\}\}/g,
-    replacement:
-      `if($1&&arguments[0]!==!0){const $2=($3&&$3.status!=="fail"?$3:null)??await $4();if(!$2)return;if($2.status==="fail"){$5(${JSON.stringify(SKIP_HARNESS_MESSAGE)});return}}`,
+    id: "onboarding-skip-harness-primary",
+    title: "onboarding: the Connect step's primary action accepts a skip flag",
+    upstream: "https://github.com/paperclipai/paperclip (ui/src/components/OnboardingWizard.tsx, handleConnectStepPrimary; feature request pending)",
+    files: ["ui/dist/assets/*.js"],
+    pattern: /function ([\w$]+)\(\)\{if\(([\w$]+)==="ready"&&([\w$]+)\)\{([\w$]+)&&window\.open\(\4,"_blank","noreferrer,noopener"\),([\w$]+)\("waiting"\);return\}\2!=="connecting"&&\(([\w$]+)\|\|([\w$]+)\(\)\)\}/g,
+    replacement: 'function $1(){if(arguments[0]===!0){$7(!0);return}if($2==="ready"&&$3){$4&&window.open($4,"_blank","noreferrer,noopener"),$5("waiting");return}$2!=="connecting"&&($6||$7())}',
+    expect: 1,
+  },
+  {
+    id: "onboarding-skip-harness-login",
+    title: "onboarding: a skipped hire does not start the subscription sign-in",
+    upstream: "https://github.com/paperclipai/paperclip (ui/src/components/OnboardingWizard.tsx, handleGiveHeartbeat, localLogin.connect(); feature request pending)",
+    files: ["ui/dist/assets/*.js"],
+    pattern: /if\(([\w$]+)!=="api"&&([\w$]+)&&([\w$]+)&&!([\w$]+)\(\)&&!([\w$]+)&&!([\w$]+)\.storedLogin\.data\)\{if\(await ([\w$]+)\.connect\(\),/g,
+    replacement: 'if(arguments[0]!==!0&&$1!=="api"&&$2&&$3&&!$4()&&!$5&&!$6.storedLogin.data){if(await $7.connect(),',
+    expect: 1,
+  },
+  {
+    id: "onboarding-skip-harness-gate",
+    title: "onboarding: a skipped hire does not run the environment test",
+    upstream: "https://github.com/paperclipai/paperclip (ui/src/components/OnboardingWizard.tsx, handleGiveHeartbeat, blocksAgentCreate gate; feature request pending)",
+    files: ["ui/dist/assets/*.js"],
+    pattern: /if\(([\w$]+)\)\{const ([\w$]+)=(\([^;]*?\))\?\?await ([\w$]+)\(([\w$,]*)\);if\(!\2\|\|!([\w$]+)\(\)\)return;if\(([\w$]+)\(\2\)\)\{([\w$]+)\(\2\.status==="fail"\?"The environment test failed\. Fix the reported checks before you hire this agent\.":"No working authentication was found\. Fix the reported checks before you hire this agent\."\);return\}\}/g,
+    replacement: 'if($1&&arguments[0]!==!0){const $2=$3??await $4($5);if(!$2||!$6())return;if($7($2)){$8($2.status==="fail"?"The environment test failed. Fix the reported checks before you hire this agent.":"No working authentication was found. Fix the reported checks before you hire this agent.");return}}',
     expect: 1,
   },
   {
     id: "onboarding-skip-harness-button",
-    title: "onboarding: offer \"Skip for now\" under a failed environment test",
-    upstream: "https://github.com/paperclipai/paperclip (ui/src/components/OnboardingWizard.tsx, step 4 error block; feature request pending)",
-    // Renders the skip control between the wizard's error line and its footer
-    // navigation, only on step 4 and only while the error is the one the
-    // handler patch writes. Clicking it calls the hire handler with `true`,
-    // which the handler patch reads as "skip the probe"; the handler clears
-    // the error first, so the control disappears as the hire starts. A plain
-    // <button> in the same classes as the step's "Advanced settings" toggle,
-    // because the wizard's Button component has no literal to anchor on here.
-    // The footer props are captured whole ($5) so the call is re-emitted
-    // verbatim; the inner back-references only pin the shape (step, loading
-    // and hire-handler identifiers) the replacement needs.
-    files: ["ui/dist/assets/index-*.js"],
-    pattern:
-      /(\w+)&&((?:\(0,)?[\w$.]+?\.jsx\)?)\("div",\{className:"mt-3",children:\2\("p",\{className:"text-xs text-destructive",children:\1\}\)\}\),(\w+)&&\2\((\w+),(\{onBack:\w+\(\{currentStep:(\w+),entryStep:\w+\}\)\?\(\)=>\w+\(\w+\(\6\)\):void 0,primaryLabel:\6===3\?"Next":\6===4\?"Connect":"Get started",loadingLabel:\6===4\?"Connecting\.\.\.":"Launching\.\.\.",loading:\6===3\?!1:(\w+),primaryDisabled:[^,]*,onPrimary:\(\)=>\{\6===3\?\w+\(4\):\6===4\?(\w+)\(\):\w+\(\)\}\})\)/g,
+    title: "onboarding: offer \"Skip for now\" under an error on the Connect step",
+    upstream: "https://github.com/paperclipai/paperclip (ui/src/components/OnboardingWizard.tsx, error block and FooterNav; feature request pending)",
+    // Anchors on the error line and on the footer's own literals ("Continue",
+    // "Connecting", the step numbers), and captures the step ($5), the busy
+    // flag ($7) and the Connect step's primary action ($8) from the footer's
+    // props. The footer call is re-emitted verbatim ($3).
+    files: ["ui/dist/assets/*.js"],
+    pattern: /([\w$]+)&&\(0,([\w$]+)\.jsx\)\("div",\{className:"mt-3",children:\(0,\2\.jsx\)\("p",\{className:"text-xs text-destructive",children:\1\}\)\}\),(\(([\w$]+)\|\|([\w$]+)===1\)&&\(0,\2\.jsx\)\(([\w$]+),\{onBack:[^;]*?,primaryLabel:\5===1\?"Continue":[^;]*?,loadingLabel:\5===1\?"Creating\.\.\.":\5===4\?"Connecting":"Launching\.\.\.",loading:\5===3\|\|\5===4\?!1:([\w$]+),primaryDisabled:[^;]*?,onPrimary:\(\)=>\{\5===1\?[\w$]+\(\):\5===3\?[\w$]+\(4\):\5===4\?([\w$]+)\(\):[\w$]+\(\)\}\}\))/g,
     replacement:
-      `$1&&$2("div",{className:"mt-3",children:$2("p",{className:"text-xs text-destructive",children:$1})}),` +
-      `$6===4&&$1===${JSON.stringify(SKIP_HARNESS_MESSAGE)}&&$2("div",{className:"mt-2",children:$2("button",{type:"button",className:"text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground transition-colors",disabled:$7,onClick:()=>$8(!0),children:${JSON.stringify(SKIP_HARNESS_LABEL)}})}),` +
-      `$3&&$2($4,$5)`,
+      '$1&&(0,$2.jsx)("div",{className:"mt-3",children:(0,$2.jsx)("p",{className:"text-xs text-destructive",children:$1})}),' +
+      `$5===4&&$1&&(0,$2.jsx)("div",{className:"mt-2",children:(0,$2.jsx)("button",{type:"button",className:"text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground transition-colors",disabled:$7,onClick:()=>$8(!0),children:${JSON.stringify(SKIP_HARNESS_LABEL)}})}),` +
+      "$3",
     expect: 1,
   },
 ];
