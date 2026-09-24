@@ -159,9 +159,13 @@ RUN apt-get update \
 # patch's id, which is the cue to delete it. Runs before the rebrand so the
 # asset renaming below hashes the patched bundle. See CONTRIBUTING.md,
 # "Never patch the core", for the rule this is the narrow exception to.
+# --core-version is the core this build is FROM; when it is not the one the
+# patches are written for (usually a KYOUBE_CORE_VERSION left in .env by an
+# earlier release), a failure says so before naming the patch.
 # ---------------------------------------------------------------------------
+ARG KYOUBE_CORE_VERSION
 COPY docker/core-patches/apply.mjs docker/core-patches/lib.mjs docker/core-patches/patches.mjs /opt/kyoube/core-patches/
-RUN gosu node node /opt/kyoube/core-patches/apply.mjs --root /app --report
+RUN gosu node node /opt/kyoube/core-patches/apply.mjs --root /app --report --core-version "${KYOUBE_CORE_VERSION}"
 
 # ---------------------------------------------------------------------------
 # KyoubeAI theme ("Studio"): brand tokens, a skin aimed only at stable hooks

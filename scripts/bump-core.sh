@@ -8,10 +8,11 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # the backups this run made and nothing else. The repo-wide `find -name '*.bak'`
 # it replaces would also delete a developer's own unrelated backup file, which
 # is not this script's business.
-edited=("$ROOT/docker/Dockerfile" "$ROOT/.env.example" "$ROOT/scripts/smoke.env" "$ROOT/docker-compose.yml")
+edited=("$ROOT/docker/Dockerfile" "$ROOT/.env.example" "$ROOT/scripts/smoke.env" "$ROOT/docker-compose.yml" "$ROOT/docker/core-patches/patches.mjs")
 sed -i.bak "s/^ARG KYOUBE_CORE_VERSION=.*/ARG KYOUBE_CORE_VERSION=${NEW}/" "$ROOT/docker/Dockerfile"
 sed -i.bak "s/^KYOUBE_CORE_VERSION=.*/KYOUBE_CORE_VERSION=${NEW}/" "$ROOT/.env.example" "$ROOT/scripts/smoke.env"
 sed -i.bak "s/PAPERCLIP_VERSION:-[0-9.]*}}/PAPERCLIP_VERSION:-${NEW}}}/" "$ROOT/docker-compose.yml"
+sed -i.bak "s/^export const CORE_VERSION = \".*\";$/export const CORE_VERSION = \"${NEW}\";/" "$ROOT/docker/core-patches/patches.mjs"
 for pkg in "$ROOT"/plugins/*/package.json; do
   if jq -e '.dependencies["@paperclipai/plugin-sdk"]' "$pkg" >/dev/null; then
     jq --arg v "$NEW" '.dependencies["@paperclipai/plugin-sdk"] = $v' "$pkg" > "$pkg.tmp" && mv "$pkg.tmp" "$pkg"

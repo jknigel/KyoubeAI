@@ -15,6 +15,15 @@
  */
 
 /**
+ * The core release these patches are written and tested against: always the
+ * `ARG KYOUBE_CORE_VERSION` default in docker/Dockerfile (scripts/bump-core.sh
+ * moves both, scripts/check-pins.sh fails if they differ). apply.mjs compares
+ * it with the core a build actually uses, so a patch that fails on a different
+ * core says that first.
+ */
+export const CORE_VERSION = "2026.916.1";
+
+/**
  * The label of the control the `onboarding-skip-harness-*` patches add under
  * a failed Connect step. Exported for the tests.
  */

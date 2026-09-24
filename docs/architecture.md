@@ -225,17 +225,18 @@ actor, the operation, and identifying metadata — never row contents.
 
 ### Pins
 
-`KYOUBE_CORE_VERSION` (the upstream image tag) is the single source of truth, repeated in four files plus
+`KYOUBE_CORE_VERSION` (the upstream image tag) is the single source of truth, repeated in five files plus
 each plugin's own dependency:
 
 - `ARG KYOUBE_CORE_VERSION` in `docker/Dockerfile`
 - `KYOUBE_CORE_VERSION=` in `.env.example`
 - `KYOUBE_CORE_VERSION=` in `scripts/smoke.env`
 - the `KYOUBE_CORE_VERSION:-<value>` default in `docker-compose.yml`
+- `CORE_VERSION` in `docker/core-patches/patches.mjs` (the core the patches are written for)
 - `dependencies["@paperclipai/plugin-sdk"]` in every `plugins/*/package.json`
 
 `scripts/check-pins.sh` fails (and runs first in CI) if any of these disagree.
-`scripts/bump-core.sh <version>` rewrites all five in one pass, reinstalls, and re-runs the check.
+`scripts/bump-core.sh <version>` rewrites all six in one pass, reinstalls, and re-runs the check.
 
 ### Core patches
 

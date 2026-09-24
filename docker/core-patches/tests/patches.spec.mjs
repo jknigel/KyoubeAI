@@ -1,9 +1,16 @@
+import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { applyPatches, applyToText, expandGlob } from "../lib.mjs";
-import { PATCHES, SKIP_HARNESS_LABEL } from "../patches.mjs";
+import { applyPatches, applyToText, coreVersionHint, expandGlob } from "../lib.mjs";
+import { CORE_VERSION, PATCHES, SKIP_HARNESS_LABEL } from "../patches.mjs";
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const APPLY = path.join(HERE, "..", "apply.mjs");
+const DOCKERFILE = path.join(HERE, "..", "..", "Dockerfile");
 
 // Excerpts of core 2026.916.1's minified UI, copied verbatim. The pi parser
 // lives in a code-split chunk (AiConnectionCredentialStep-DHV6zd1f.js); the
@@ -351,5 +358,70 @@ describe("applyPatches", () => {
     const report = await applyPatches(root, PATCHES, { dryRun: true });
     expect(report.map((entry) => entry.matched)).toEqual(PATCHES.map(() => 1));
     expect(await readFile(file, "utf8")).toBe(FULL_BUNDLE_2026_916_1);
+  });
+});
+
+describe("the core the patches are written for", () => {
+  let root;
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(tmpdir(), "core-patches-"));
+    await mkdir(path.join(root, "ui", "dist", "assets"), { recursive: true });
+  });
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  /** Runs apply.mjs as the Dockerfile does and returns its exit code and output. */
+  async function runApply(args) {
+    try {
+      const { stdout, stderr } = await promisify(execFile)(process.execPath, [APPLY, "--root", root, ...args]);
+      return { code: 0, stdout, stderr };
+    } catch (error) {
+      return { code: error.code, stdout: error.stdout, stderr: error.stderr };
+    }
+  }
+
+  it("is the core the Dockerfile pins", async () => {
+    const dockerfile = await readFile(DOCKERFILE, "utf8");
+    expect(dockerfile).toMatch(new RegExp(`^ARG KYOUBE_CORE_VERSION=${CORE_VERSION.replaceAll(".", "\\.")}$`, "m"));
+  });
+
+  it("says nothing extra when the build uses that core, or does not say which core it uses", () => {
+    expect(coreVersionHint(CORE_VERSION, CORE_VERSION)).toBeNull();
+    expect(coreVersionHint(null, CORE_VERSION)).toBeNull();
+    expect(coreVersionHint("", CORE_VERSION)).toBeNull();
+  });
+
+  it("names both cores and the .env line to change when they differ", () => {
+    const hint = coreVersionHint("2026.831.1", "2026.916.1");
+    expect(hint).toContain("core 2026.831.1");
+    expect(hint).toContain("core 2026.916.1");
+    expect(hint).toContain("KYOUBE_CORE_VERSION");
+    expect(hint).toContain(".env");
+  });
+
+  it("leads a failed build with the core mismatch, before the patch error", async () => {
+    await writeFile(path.join(root, "ui/dist/assets/index-OLD.js"), "an older core's bundle");
+    const { code, stderr } = await runApply(["--report", "--core-version", "2026.831.1"]);
+    expect(code).toBe(1);
+    const lines = stderr.trim().split("\n");
+    expect(lines[0]).toContain(`core 2026.831.1, but this KyoubeAI release is made for core ${CORE_VERSION}`);
+    expect(lines[1]).toMatch(/core patch ".*" matched 0 time\(s\)/);
+  });
+
+  it("fails exactly as before on the pinned core", async () => {
+    await writeFile(path.join(root, "ui/dist/assets/index-OLD.js"), "a bundle upstream changed");
+    const { code, stderr } = await runApply(["--report", "--core-version", CORE_VERSION]);
+    expect(code).toBe(1);
+    expect(stderr.trim().split("\n")).toHaveLength(1);
+    expect(stderr).not.toContain(".env");
+  });
+
+  it("still builds on another core whose code the patches match, with a note", async () => {
+    await writeFile(path.join(root, "ui/dist/assets/index-5zyW-AFc.js"), FULL_BUNDLE_2026_916_1);
+    const { code, stdout, stderr } = await runApply(["--report", "--core-version", "beta"]);
+    expect(code).toBe(0);
+    expect(stdout).toContain("applied 1/1");
+    expect(stderr).toContain(`built on core beta; these patches are written for core ${CORE_VERSION}`);
   });
 });

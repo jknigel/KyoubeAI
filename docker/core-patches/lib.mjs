@@ -67,3 +67,20 @@ export async function applyPatches(root, patches, { dryRun = false } = {}) {
   }
   return report;
 }
+
+/**
+ * Explains a build on a different core than the patches are written for. The
+ * usual cause is a `.env` left over from an earlier release: it pins
+ * KYOUBE_CORE_VERSION, and `git pull` never updates `.env`, so the new
+ * release's patches meet the old core and match nothing. Returns null when the
+ * cores agree or the build did not say which core it uses.
+ */
+export function coreVersionHint(buildCore, patchedCore) {
+  if (!buildCore || buildCore === patchedCore) return null;
+  return (
+    `this build uses core ${buildCore}, but this KyoubeAI release is made for core ${patchedCore}. ` +
+    `If you did not mean to change the core, KYOUBE_CORE_VERSION (or the older PAPERCLIP_VERSION) in your .env ` +
+    `is left over from an earlier release, and git pull does not update .env: set it to ${patchedCore}, ` +
+    `or delete the line to follow the release's pin, then build again.`
+  );
+}
