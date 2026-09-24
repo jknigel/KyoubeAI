@@ -224,6 +224,28 @@ describe("runRebrand", () => {
       expect(result.codeShaped.join("\n")).toContain("packages/foo/src/y.ts");
     });
 
+    it("allows the upstream development material core 2026.916 added", async () => {
+      const { root, brandDir } = await makeTree({
+        "announcements/examples/staging/current.json": '{ "alt": "Paperclip. Ideas become work." }\n',
+        "ui/connect-flow-preview.html": "<title>Connect flow — Paperclip onboarding</title>\n",
+        "ui/connect-model-preview.html": "<title>Connect a model — Paperclip onboarding</title>\n",
+        ".env.example": "# Optional Paperclip ID Gmail OAuth broker.\n",
+      });
+      const result = await runRebrand({ root, brandDir, verify: true, report: false, log: () => {} });
+      expect(result.sweepFailures).toEqual([]);
+      expect(result.sweep.announcements).toBe(1);
+      expect(result.sweep["ui/connect-flow-preview.html"]).toBe(1);
+      expect(result.sweep["ui/connect-model-preview.html"]).toBe(1);
+      expect(result.sweep[".env.example"]).toBe(1);
+    });
+
+    it("still fails on a preview page or root file nobody has triaged", async () => {
+      const preview = await makeTree({ "ui/other-preview.html": "<title>Paperclip preview</title>\n" });
+      await expect(runRebrand({ ...preview, verify: true, report: false, log: () => {} })).rejects.toThrow(/sweep: ui still carries 1 display match/);
+      const rootFile = await makeTree({ "NOTICE.txt": "Paperclip is great.\n" });
+      await expect(runRebrand({ ...rootFile, verify: true, report: false, log: () => {} })).rejects.toThrow(/sweep: \. still carries 1 display match/);
+    });
+
     it("prints the table, the code-shaped list and the skipped counts under --report", async () => {
       const { root, brandDir } = await makeTree();
       const lines = [];

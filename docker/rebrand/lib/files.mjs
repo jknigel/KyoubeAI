@@ -61,7 +61,8 @@ export function isCodeFile(relToRoot) {
  * upstream name in: material shipped in the image that the running product
  * never reads. Everything else must be zero after the transform, or `--verify`
  * fails the build. Determined empirically by running the sweep against
- * `ghcr.io/paperclipai/paperclip:2026.831.1` and triaging every row.
+ * `ghcr.io/paperclipai/paperclip:2026.831.1` and triaging every row (and again
+ * on each core bump; entries marked 2026.916 were added for that release).
  *
  * - `ui/src`, `ui/storybook`, `ui/index.html`, `ui/public`, `ui/README.md`,
  *   `ui/package.json`: the board is served from `ui/dist`, which is NOT
@@ -78,6 +79,15 @@ export function isCodeFile(relToRoot) {
  * - `.claude`, `.github`, `design`, `docker`, `evals`, `patches`, `releases`,
  *   `report`, `screenshots`, `scripts`, `tests`, `tools`: upstream's own
  *   development material.
+ * - `announcements` (2026.916): the source of upstream's hosted announcement
+ *   feed and its examples. The server fetches the feed from
+ *   PAPERCLIP_ANNOUNCEMENTS_FEED_URL and never reads this tree, and
+ *   docker-compose.yml turns announcements off.
+ * - `ui/connect-flow-preview.html`, `ui/connect-model-preview.html` (2026.916):
+ *   Vite entry points for upstream's onboarding previews, like `ui/index.html`;
+ *   the board is served from `ui/dist`.
+ * - `.env.example` (2026.916): upstream's sample environment file; the image
+ *   never reads it (KyoubeAI's own is the one in this repository).
  *
  * An entry may be a multi-segment prefix or an exact file path; the longest
  * match names the row a file is counted under, otherwise it is counted under
@@ -85,8 +95,10 @@ export function isCodeFile(relToRoot) {
  */
 export const SWEEP_ALLOWLIST = [
   ".claude",
+  ".env.example",
   ".github",
   "LICENSE",
+  "announcements",
   "cli",
   "design",
   "doc/plans",
@@ -104,6 +116,8 @@ export const SWEEP_ALLOWLIST = [
   "tests",
   "tools",
   "ui/README.md",
+  "ui/connect-flow-preview.html",
+  "ui/connect-model-preview.html",
   "ui/index.html",
   "ui/package.json",
   "ui/public",
