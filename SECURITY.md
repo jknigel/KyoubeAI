@@ -92,7 +92,7 @@ Terminal output is pulled, never pushed: the page polls `terminal.wait`, which i
 session's owner and company exactly like `attach` (a session in another company answers `not_found`,
 another user's `forbidden`), so there is no per-session secret to guard and no channel that could be
 listed or guessed. The SSE stream channel the original design relied on is gone: upstream core
-2026.831.1 (through 2026.916.1) never wires its plugin stream bridge (the route answers 501), which is why the terminal
+(2026.831.1 through 2026.916.1) never wires its plugin stream bridge (the route answers 501), which is why the terminal
 does not use it.
 
 ## Data
