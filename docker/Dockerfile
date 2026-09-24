@@ -37,13 +37,13 @@ RUN pnpm -r build \
 # Stage 2: the runtime image = the upstream core image + pi + Hermes + KyoubeAI.
 # ---------------------------------------------------------------------------
 FROM ghcr.io/paperclipai/paperclip:${KYOUBE_CORE_VERSION}
-ARG PI_VERSION=0.85.1
+ARG PI_VERSION=0.87.1
 # Claude Code. The base image installs `@anthropic-ai/claude-code@latest` at
 # *its* build time, so the copy it carries is whatever was current when upstream
-# cut the pinned release (2.1.258 in 2026.831.1). Pinning it here replaces that
+# cut the pinned release (2.1.278 in 2026.916.1). Pinning it here replaces that
 # copy in place -- the same root-owned global install under /usr/local -- so the
 # version is a deliberate, reproducible choice, asserted below.
-ARG CLAUDE_CODE_VERSION=2.1.267
+ARG CLAUDE_CODE_VERSION=2.1.281
 # Hermes publishes release tags (vYYYY.M.D) but no package; the installer clones
 # NousResearch/hermes-agent. HERMES_COMMIT is the commit behind the newest
 # release tag and pins BOTH the installer script (fetched from that commit's raw
@@ -58,10 +58,10 @@ ARG CLAUDE_CODE_VERSION=2.1.267
 # newest release tag (`git ls-remote --tags https://github.com/NousResearch/hermes-agent`),
 # re-download scripts/install.sh from its raw URL, sha256 it, and read the new
 # version off `hermes --version`.
-# HERMES_COMMIT is release v2026.9.7.
-ARG HERMES_COMMIT=2237be355906fbe6065ce1815711eee52b2d646e
-ARG HERMES_INSTALLER_SHA256=5854b15670b51a8daae8f59ddfa917062de9f74be261eb73b4b8d719710f8968
-ARG HERMES_VERSION=0.21.1
+# HERMES_COMMIT is release v2026.9.21.
+ARG HERMES_COMMIT=d337b736aa1e8ebecfab043842d13e4a2d2f48a3
+ARG HERMES_INSTALLER_SHA256=00f9080c6452bf87f03ef2fffb4b2c23b9f43f946aaae956e4c547d17e310b22
+ARG HERMES_VERSION=0.21.4
 USER root
 
 # KyoubeAI's home. The base image sets HOME=PAPERCLIP_HOME=/paperclip and gives
