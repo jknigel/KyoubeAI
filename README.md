@@ -1,16 +1,13 @@
 # KyoubeAI
 
-**A multi-user AI operating system for organisations.**
+**An AI operating system for organisations to create AI employees, AI native mini-apps in a multi-user collaborative environment with extensive connectivity & integrations.**
 
-KyoubeAI turns one Docker Compose stack into a shared workspace for a whole company. Everyone signs in
-with their own account, and AI agents (Claude Code, pi or Hermes Agent) work under the same permission
-model as the people. The agents design and fill a real Postgres database for the company, and build
-the CRMs, trackers and dashboards that anyone can then open as ordinary pages in the browser. None of
-it patches the core KyoubeAI runs on.
+<p align="center">
+  <img src="docs/images/kyoubeai-world.webp" alt="Isometric world of KyoubeAI: people and AI employees working across hospitals, factories, banks, farms, ports and offices around a glowing world map, with apps, dashboards and data flowing into a central AI core" width="100%">
+</p>
 
 ## Contents
 
-- [What you get](#what-you-get)
 - [Install](#install)
 - [Update](#update)
 - [Back up and restore](#back-up-and-restore)
@@ -20,26 +17,6 @@ it patches the core KyoubeAI runs on.
 - [Development](#development)
 - [Roadmap](#roadmap)
 - [Licence](#licence)
-- [Built on](#built-on)
-
-## What you get
-
-- [Studio](#studio), KyoubeAI's own design: a Home page that opens with what needs you and what your
-  team is doing, a sidebar with a live roster of your agents, a Workspace page for everything you do
-  not need every day, and a face for every agent.
-- [Data](#data), a Postgres database for each company that people and agents design and fill through
-  tools, a REST API and the Data page, with an access level for every agent.
-- [Apps](#apps), database-backed single-file apps that agents build and people open inside KyoubeAI,
-  in a sandbox.
-- [Files](#files), a Files tab on every project for the folder its agents work in.
-- [Terminal](#terminal), a browser shell for company owners and admins to sign the agent harnesses in
-  and administer the box.
-- Operations: backups and restore, health checks, resource limits, and upgrading the core and KyoubeAI
-  independently ([docs/operations.md](docs/operations.md), [docs/upgrading.md](docs/upgrading.md)).
-
-Trust zones, request paths, the data model and the upgrade contract are in
-[docs/architecture.md](docs/architecture.md). Screenshots of the Data, Apps and Terminal pages are
-not captured yet; they will go in `docs/images/`.
 
 ## Install
 
@@ -225,13 +202,13 @@ would otherwise reject sign-ins from the new one.
 
 ### Troubleshooting
 
-| What you see | What to do |
-|---|---|
-| `docker compose pull` reports `denied` | The image is not public yet, or this machine must log in to GHCR ([how](docs/operations.md#the-published-image-on-ghcr)). Do not run `docker compose up -d` until the pull works. |
-| Sign-in fails with a 403 or an origin error | `KYOUBE_PUBLIC_URL` must match the address in the browser exactly. On another localhost port, set `BETTER_AUTH_TRUSTED_ORIGINS`; behind a proxy, set `TRUST_PROXY`. |
-| "Browser first-admin claim is not available" | `KYOUBE_DEPLOYMENT_EXPOSURE` is `public`. Set it to `private`, run `docker compose up -d`, claim the instance, then switch back. |
-| The build stops at the core-patches step and names two core versions | `KYOUBE_CORE_VERSION` in `.env` is left over from an older release. Copy the value from `.env.example` and build again. |
-| `kyoube doctor` shows a plugin that is not `=ready` | Read the plugin's log under **Settings → Plugins → *plugin* → Logs**, and `docker compose logs -f app`. |
+| What you see                                                         | What to do                                                                                                                                                                         |
+| -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `docker compose pull` reports `denied`                           | The image is not public yet, or this machine must log in to GHCR ([how](docs/operations.md#the-published-image-on-ghcr)). Do not run `docker compose up -d` until the pull works. |
+| Sign-in fails with a 403 or an origin error                          | `KYOUBE_PUBLIC_URL` must match the address in the browser exactly. On another localhost port, set `BETTER_AUTH_TRUSTED_ORIGINS`; behind a proxy, set `TRUST_PROXY`.          |
+| "Browser first-admin claim is not available"                         | `KYOUBE_DEPLOYMENT_EXPOSURE` is `public`. Set it to `private`, run `docker compose up -d`, claim the instance, then switch back.                                           |
+| The build stops at the core-patches step and names two core versions | `KYOUBE_CORE_VERSION` in `.env` is left over from an older release. Copy the value from `.env.example` and build again.                                                      |
+| `kyoube doctor` shows a plugin that is not `=ready`              | Read the plugin's log under**Settings → Plugins → *plugin* → Logs**, and `docker compose logs -f app`.                                                                |
 
 ## Update
 
@@ -249,7 +226,6 @@ between.
    ```bash
    bash scripts/backup.sh
    ```
-
 2. Check out the new release, so `docker-compose.yml`, the scripts and `.env.example` match the image
    you are about to pull.
 
@@ -257,21 +233,17 @@ between.
    git fetch --tags
    git checkout v1.0.1
    ```
-
 3. See which settings the release added or changed, and copy any new ones into your `.env`.
 
    ```bash
    git diff v1.0.0 v1.0.1 -- .env.example
    ```
-
 4. In `.env`, change the `KYOUBE_VERSION=` line under `KYOUBE_IMAGE` to the new version (`1.0.1`).
-
 5. Download the new image, and check that the pull succeeded before you go on.
 
    ```bash
    docker compose pull
    ```
-
 6. Restart on the new image and check it.
 
    ```bash
@@ -289,13 +261,11 @@ between.
    ```bash
    bash scripts/backup.sh
    ```
-
 2. Pull the new code.
 
    ```bash
    git pull
    ```
-
 3. Bring `.env` up to date. `git pull` never changes `.env`, and the core version is pinned there too.
 
    ```bash
@@ -306,7 +276,6 @@ between.
    If the two `KYOUBE_CORE_VERSION` values differ, copy the one from `.env.example` into `.env`: a
    build on the old core stops at the core-patches step. The `git diff` lists any other settings the
    update added.
-
 4. Rebuild, restart and check.
 
    ```bash
@@ -488,26 +457,26 @@ the company's activity log with its path, never its content.
 
 ## Repository layout
 
-| Path | What it is |
-|---|---|
-| `docker/Dockerfile` | Overlay image: the upstream core, pinned `claude`, `pi` and `hermes` CLIs, and Kyoube |
-| `docker/bootstrap/` | The `kyoube` CLI (`setup`, `ensure-plugins`, `doctor`) |
-| `plugins/` | Core plugins (`kyoube-terminal`, `kyoube-apps`, `kyoube-files`, `kyoube-studio`) |
-| `docker/theme/` | The build-time Studio theme: tokens, a gated skin, label renames (`docs/theme.md`) |
-| `docker/rebrand/` | The build-time branding transform (`docs/branding.md`) |
-| `docker/core-patches/` | Temporary fixes for upstream bugs, applied at build time until upstream ships them |
-| `packages/kyoube-app-sdk/` | `window.kyoube`, the SDK injected into every app |
-| `docker-compose.yml` | `app` and `db` (Postgres 17 with the databases `kyoubeai` and `kyoube`) |
-| `scripts/smoke.sh` | End-to-end smoke test used by CI |
-| `scripts/backup.sh`, `scripts/restore.sh` | Backup and restore of both databases, the Kyoube roles and the home volume |
-| `scripts/check-pins.sh`, `scripts/bump-core.sh` | Keep the core image and plugin SDK version pins in lock-step |
-| `docs/architecture.md` | Trust zones, request paths, the data model and the upgrade contract |
-| `docs/apps.md` | App authoring guide (manifest, `window.kyoube`, security model) |
-| `docs/operations.md` | Volumes, backups, restore, logs, health, key rotation, limits |
-| `docs/upgrading.md` | Upgrading KyoubeAI and the core, and rolling back |
-| `docs/governance.md` | Recommended agent tool profiles and policies |
-| `SECURITY.md` | The security model and how to report a vulnerability |
-| `CONTRIBUTING.md` | Local setup, conventions, and how to add a tool |
+| Path                                                | What it is                                                                                 |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `docker/Dockerfile`                               | Overlay image: the upstream core, pinned`claude`, `pi` and `hermes` CLIs, and Kyoube |
+| `docker/bootstrap/`                               | The`kyoube` CLI (`setup`, `ensure-plugins`, `doctor`)                              |
+| `plugins/`                                        | Core plugins (`kyoube-terminal`, `kyoube-apps`, `kyoube-files`, `kyoube-studio`)   |
+| `docker/theme/`                                   | The build-time Studio theme: tokens, a gated skin, label renames (`docs/theme.md`)       |
+| `docker/rebrand/`                                 | The build-time branding transform (`docs/branding.md`)                                   |
+| `docker/core-patches/`                            | Temporary fixes for upstream bugs, applied at build time until upstream ships them         |
+| `packages/kyoube-app-sdk/`                        | `window.kyoube`, the SDK injected into every app                                         |
+| `docker-compose.yml`                              | `app` and `db` (Postgres 17 with the databases `kyoubeai` and `kyoube`)            |
+| `scripts/smoke.sh`                                | End-to-end smoke test used by CI                                                           |
+| `scripts/backup.sh`, `scripts/restore.sh`       | Backup and restore of both databases, the Kyoube roles and the home volume                 |
+| `scripts/check-pins.sh`, `scripts/bump-core.sh` | Keep the core image and plugin SDK version pins in lock-step                               |
+| `docs/architecture.md`                            | Trust zones, request paths, the data model and the upgrade contract                        |
+| `docs/apps.md`                                    | App authoring guide (manifest,`window.kyoube`, security model)                           |
+| `docs/operations.md`                              | Volumes, backups, restore, logs, health, key rotation, limits                              |
+| `docs/upgrading.md`                               | Upgrading KyoubeAI and the core, and rolling back                                          |
+| `docs/governance.md`                              | Recommended agent tool profiles and policies                                               |
+| `SECURITY.md`                                     | The security model and how to report a vulnerability                                       |
+| `CONTRIBUTING.md`                                 | Local setup, conventions, and how to add a tool                                            |
 
 ## Development
 
@@ -546,12 +515,8 @@ KyoubeAI to others as a hosted, managed or embedded service. AI agents do not co
 Anything beyond that needs a commercial licence: self-hosted for more users, hosted by us, or
 enterprise terms. Plans and prices are at [kyoubeai.com/pricing](https://kyoubeai.com/pricing).
 
+
+
 Four years after each version is published, that version becomes available under the Apache License,
 Version 2.0. [LICENSE](LICENSE) is the binding text, [NOTICE.md](NOTICE.md) has the copyright line and
 the third-party notices, and contributions need the agreement in [CLA.md](CLA.md).
-
-## Built on
-
-KyoubeAI is built on the [Paperclip](https://github.com/paperclipai/paperclip) engine (MIT, © Paperclip
-AI; the notice is in `NOTICE.md`). It uses the core as a published image and rebrands it at build
-time; [docs/branding.md](docs/branding.md) says what that transform does and does not change.
