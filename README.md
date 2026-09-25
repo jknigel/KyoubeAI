@@ -5,7 +5,7 @@
 **An AI operating system for organisations to create AI employees, AI native mini-apps in a multi-user collaborative environment with extensive connectivity & integrations.**
 
 <p align="center">
-  <img src="docs/images/kyoubeai-world.webp" alt="Isometric world of KyoubeAI: people and AI employees working across hospitals, factories, banks, farms, ports and offices around a glowing world map, with apps, dashboards and data flowing into a central AI core" width="100%">
+  <img src="docs/images/kyoubeai-world-vivid.webp" alt="Isometric world of KyoubeAI, with its name glowing in the middle: people and AI employees working across hospitals, factories, banks, farms, ports and offices around a glowing world map, with apps, dashboards and data flowing into a central AI core" width="100%">
 </p>
 
 ## Contents
