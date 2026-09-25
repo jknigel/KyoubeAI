@@ -14,8 +14,6 @@
 - [Update](#update)
 - [Back up and restore](#back-up-and-restore)
 - [Using KyoubeAI](#using-kyoubeai)
-- [How it stays upstream-compatible](#how-it-stays-upstream-compatible)
-- [Repository layout](#repository-layout)
 - [Development](#development)
 - [Roadmap](#roadmap)
 - [Licence](#licence)
@@ -428,57 +426,6 @@ company role can browse and download, and everyone but `viewer` can change files
 1 MiB open as download-only, and single uploads are capped at 5 MiB (the core's JSON body limit keeps
 the ceiling at 7); larger transfers belong in the Terminal or with an agent. Every change is written to
 the company's activity log with its path, never its content.
-
-## How it stays upstream-compatible
-
-- The image is built `FROM` a pinned upstream release of the core (`KYOUBE_CORE_VERSION`),
-  and nothing in this repository is core source. At build time the core gets presentation-only
-  transforms that are re-applied to the pristine layer on every build and fail it when upstream moves
-  what they rely on: the branding in `docker/rebrand/` ([docs/branding.md](docs/branding.md)) and the
-  Studio theme in `docker/theme/` ([docs/theme.md](docs/theme.md)), plus any temporary bug fix in
-  `docker/core-patches/` while its upstream fix is pending.
-- Every Kyoube feature is a plugin (`kyoube.terminal`, `kyoube.apps`, `kyoube.files`,
-  `kyoube.studio`) built only against the published `@paperclipai/plugin-sdk`, with no imports from
-  the core's own server or UI source and no undocumented routes.
-- `KYOUBE_CORE_VERSION` and the plugin SDK version are pinned together across the Dockerfile,
-  `.env.example`, `scripts/smoke.env`, `docker-compose.yml` and every plugin's `package.json`.
-  `scripts/check-pins.sh` fails CI as soon as any of them drift apart, and
-  `scripts/bump-core.sh <version>` bumps them all in one pass.
-- The image sets `DO_NOT_TRACK=1` and `DISABLE_TELEMETRY=1` in the container, and the terminal plugin
-  sets the same two in every shell it spawns (which does not inherit the container's environment).
-  That turns off the core's own telemetry, which is on by default, and Claude Code's, in the server
-  and in a Terminal session alike. The image still bundles third-party harnesses this project does not
-  build, so it is not telemetry-free; what was verified, and what could not be, is in
-  [SECURITY.md](SECURITY.md#telemetry).
-- A weekly CI job (`upstream-beta`) builds and smoke-tests this repository against the core image's
-  `:beta` channel, and opens an issue as soon as something upstream would break the plugins, before it
-  reaches a stable version bump.
-
-[docs/architecture.md](docs/architecture.md) has the full upgrade contract, and
-[docs/upgrading.md](docs/upgrading.md) the bump procedure.
-
-## Repository layout
-
-| Path                                                | What it is                                                                                 |
-| --------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `docker/Dockerfile`                               | Overlay image: the upstream core, pinned`claude`, `pi` and `hermes` CLIs, and Kyoube |
-| `docker/bootstrap/`                               | The`kyoube` CLI (`setup`, `ensure-plugins`, `doctor`)                              |
-| `plugins/`                                        | Core plugins (`kyoube-terminal`, `kyoube-apps`, `kyoube-files`, `kyoube-studio`)   |
-| `docker/theme/`                                   | The build-time Studio theme: tokens, a gated skin, label renames (`docs/theme.md`)       |
-| `docker/rebrand/`                                 | The build-time branding transform (`docs/branding.md`)                                   |
-| `docker/core-patches/`                            | Temporary fixes for upstream bugs, applied at build time until upstream ships them         |
-| `packages/kyoube-app-sdk/`                        | `window.kyoube`, the SDK injected into every app                                         |
-| `docker-compose.yml`                              | `app` and `db` (Postgres 17 with the databases `kyoubeai` and `kyoube`)            |
-| `scripts/smoke.sh`                                | End-to-end smoke test used by CI                                                           |
-| `scripts/backup.sh`, `scripts/restore.sh`       | Backup and restore of both databases, the Kyoube roles and the home volume                 |
-| `scripts/check-pins.sh`, `scripts/bump-core.sh` | Keep the core image and plugin SDK version pins in lock-step                               |
-| `docs/architecture.md`                            | Trust zones, request paths, the data model and the upgrade contract                        |
-| `docs/apps.md`                                    | App authoring guide (manifest,`window.kyoube`, security model)                           |
-| `docs/operations.md`                              | Volumes, backups, restore, logs, health, key rotation, limits                              |
-| `docs/upgrading.md`                               | Upgrading KyoubeAI and the core, and rolling back                                          |
-| `docs/governance.md`                              | Recommended agent tool profiles and policies                                               |
-| `SECURITY.md`                                     | The security model and how to report a vulnerability                                       |
-| `CONTRIBUTING.md`                                 | Local setup, conventions, and how to add a tool                                            |
 
 ## Development
 
