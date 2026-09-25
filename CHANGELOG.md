@@ -7,8 +7,8 @@ building on it. The format is loosely [Keep a Changelog](https://keepachangelog.
 ## 1.0.0 - 2026-09-25
 
 The first release: KyoubeAI as a self-hosted, multi-user AI operating system for an organisation, built
-entirely as an overlay and four plugins on top of the upstream core (Paperclip 2026.916.1), and branded
-as KyoubeAI on every surface.
+entirely as an overlay and four plugins on a pinned core release (2026.916.1), and branded as KyoubeAI
+on every surface.
 
 ### Docker packaging
 
@@ -26,8 +26,8 @@ as KyoubeAI on every surface.
   which `docker-compose.yml` maps onto the core's own settings. `TRUST_PROXY` is passed through for
   deployments behind a reverse proxy or tunnel.
 - Telemetry is off by default in the container and in every Terminal shell (`DO_NOT_TRACK=1`,
-  `DISABLE_TELEMETRY=1`), and the core's hosted announcement cards are turned off
-  (`PAPERCLIP_ANNOUNCEMENTS_ENABLED=false`). `SECURITY.md` records what was and was not verified for
+  `DISABLE_TELEMETRY=1`), and the core's hosted announcement cards are turned off.
+  `SECURITY.md` records what was and was not verified for
   each bundled component.
 
 ### Branding
@@ -37,9 +37,9 @@ as KyoubeAI on every surface.
   harness docs and Skills-tab origin labels an operator reads, the built-in skills, the `kyoube` CLI and
   the docs. The core image is transformed at build time by `docker/rebrand/` (re-applied on every build,
   verified, fails the build on drift), and the build also sweeps the whole image: every tree outside a
-  documented allowlist of never-executed upstream source must contain no display-text "Paperclip" or
-  the build fails, so a future core bump that moves a user-facing string into a new place cannot ship
-  unbranded. `docs/branding.md` lists what is deliberately left alone (`PAPERCLIP_*` variables agents
+  documented allowlist of never-executed upstream source must contain no display text of the core's own
+  brand or the build fails, so a future core bump that moves a user-facing string into a new place cannot ship
+  unbranded. `docs/branding.md` lists what is deliberately left alone (the environment variables agents
   read, skill keys, enum values, the header) and the known residuals (the hash-pinned `packages/db`
   migrations, one of which seeds the default execution environment's description).
 - The brand is data: `docker/brand/` holds the name, URLs, mark and lockup; a rename or a new logo is a
