@@ -1,5 +1,7 @@
 # KyoubeAI
 
+[![Licence: BSL 1.1](https://img.shields.io/badge/licence-BSL_1.1-0f766e)](LICENSE)
+
 **An AI operating system for organisations to create AI employees, AI native mini-apps in a multi-user collaborative environment with extensive connectivity & integrations.**
 
 <p align="center">
@@ -429,7 +431,7 @@ the company's activity log with its path, never its content.
 
 ## How it stays upstream-compatible
 
-- The image is built `FROM` a pinned upstream release of the core (Paperclip, `KYOUBE_CORE_VERSION`),
+- The image is built `FROM` a pinned upstream release of the core (`KYOUBE_CORE_VERSION`),
   and nothing in this repository is core source. At build time the core gets presentation-only
   transforms that are re-applied to the pristine layer on every build and fail it when upstream moves
   what they rely on: the branding in `docker/rebrand/` ([docs/branding.md](docs/branding.md)) and the
