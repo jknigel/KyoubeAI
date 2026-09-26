@@ -33,6 +33,12 @@
  *   4. when a sibling above the frame grows after mount (the source panel
  *      opening), the observers shrink the frame to match.
  *
+ * The pages load over CDP (scripts/lib/cdp.mjs), not `--dump-dom`. Shape 4
+ * depends on ResizeObserver, whose callbacks are delivered only when the
+ * browser renders a frame, and `--dump-dom` under a virtual-time budget runs
+ * the page's timers without reliably rendering any: the observers fired or
+ * not by chance, and the shape failed on CI for commits that never touched it.
+ *
  * No network. Exit codes as browser-check.mjs: 0 when every shape passes *or*
  * no Chrome is installed (`SKIPPED`), 1 when a shape fails or the browser
  * cannot be driven.
@@ -42,7 +48,8 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { dumpDom, findChrome } from "./lib/headless-chrome.mjs";
+import { Cdp, Page, launchChrome } from "./lib/cdp.mjs";
+import { findChrome } from "./lib/headless-chrome.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PLUGIN_DIR = path.join(ROOT, "plugins", "kyoube-apps");
@@ -55,6 +62,8 @@ const PLUGIN_DIR = path.join(ROOT, "plugins", "kyoube-apps");
 const DEFAULT_IFRAME_HEIGHT = 150 + 2;
 /** How much the sibling above the frame grows in the observer shape. */
 const GROWTH = 200;
+/** The viewport for shapes that do not set their own; the desktop shells are at most 1000px tall. */
+const DESKTOP_WINDOW = "1440,1000";
 
 /** Exactly the sizing code the UI bundle ships, resolved from the plugin's own source. */
 async function bundleFrameSizing() {
@@ -231,11 +240,15 @@ function pageFor(shape, bundle) {
 }
 
 /** The checker's verdict, read back off the attribute it set on `<html>`. */
-function readVerdict(dom) {
-  const match = /data-kyoube-frame="([^"]*)"/.exec(dom);
-  if (!match) throw new Error("the checker script did not run (no data-kyoube-frame attribute in the dumped DOM)");
-  const decoded = match[1].replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
-  return JSON.parse(decoded);
+/** Loads `file` in `page` at `windowSize` ("width,height") and waits for the checker's verdict. */
+async function readVerdict(page, file, windowSize) {
+  const [width, height] = windowSize.split(",").map(Number);
+  await page.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
+  await page.goto(`file://${file.replace(/\\/g, "/")}`, { settleMs: 0 });
+  const raw = await page.waitForFunction("document.documentElement.getAttribute('data-kyoube-frame')", { timeoutMs: 10_000 })
+    .catch(() => null);
+  if (!raw) throw new Error("the checker script did not run (no data-kyoube-frame attribute on the page)");
+  return JSON.parse(raw);
 }
 
 const px = (value) => `${Math.round(value * 100) / 100}px`;
@@ -291,16 +304,20 @@ async function main() {
   console.log(`app-frame-check: ${chrome}`);
   const bundle = await bundleFrameSizing();
   const dir = await mkdtemp(path.join(tmpdir(), "kyoube-frame-check-"));
-  const profile = await mkdtemp(path.join(tmpdir(), "kyoube-chrome-profile-"));
+  let browser;
+  let cdp;
   let failures = 0;
   try {
+    browser = await launchChrome(chrome, { windowSize: DESKTOP_WINDOW });
+    cdp = await Cdp.connect(browser.wsUrl);
+    const page = await Page.open(cdp);
     for (const [index, shape] of SHAPES.entries()) {
       const file = path.join(dir, `shape-${index}.html`);
       await writeFile(file, pageFor(shape, bundle), "utf8");
       let problems;
       let verdict;
       try {
-        verdict = readVerdict(dumpDom(chrome, profile, file, { windowSize: shape.windowSize }));
+        verdict = await readVerdict(page, file, shape.windowSize ?? DESKTOP_WINDOW);
         problems = problemsFor(verdict, shape);
       } catch (error) {
         problems = [error instanceof Error ? error.message : String(error)];
@@ -315,8 +332,9 @@ async function main() {
       }
     }
   } finally {
+    cdp?.close();
+    await browser?.close();
     await rm(dir, { recursive: true, force: true });
-    await rm(profile, { recursive: true, force: true }).catch(() => {});
   }
   console.log(failures === 0
     ? `app-frame-check: ${SHAPES.length} shapes, the frame fills the page without scrolling it in all of them`

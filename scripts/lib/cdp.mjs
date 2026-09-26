@@ -1,9 +1,11 @@
 /**
  * A minimal Chrome DevTools Protocol driver for the live browser checks that
- * need a signed-in page (scripts/studio-live-check.mjs). The other checks only
- * need `--dump-dom` (scripts/lib/headless-chrome.mjs); these need to set a
- * session cookie, run script in the page, wait for the React app to settle
- * and take screenshots, which `--dump-dom` cannot do.
+ * need a signed-in page (scripts/studio-live-check.mjs), and for
+ * scripts/app-frame-check.mjs, whose ResizeObserver shape needs rendered
+ * frames. The other checks only need `--dump-dom`
+ * (scripts/lib/headless-chrome.mjs); these need to set a session cookie, run
+ * script in the page, wait for the React app to settle, take screenshots or
+ * see observers fire, which `--dump-dom` cannot do.
  *
  * No dependencies: Node's global WebSocket (22+) speaks to the browser, and
  * the browser is the one `findChrome()` already locates.
