@@ -161,12 +161,15 @@ release_image_repo() {
   printf '%s\n' "$repo"
 }
 
-# runs_source_build: true when .env selects the image `docker compose build` makes (kyoubeai:dev; empty means that default).
-runs_source_build() {
+# image_ref [FILE]: the image FILE (default .env) selects, as compose reads it (empty values mean kyoubeai:dev).
+image_ref() {
   local image version
-  image="$(env_get .env KYOUBE_IMAGE)"; version="$(env_get .env KYOUBE_VERSION)"
-  [ "${image:-kyoubeai}" = kyoubeai ] && [ "${version:-dev}" = dev ]
+  image="$(env_get "${1:-.env}" KYOUBE_IMAGE)"; version="$(env_get "${1:-.env}" KYOUBE_VERSION)"
+  printf '%s:%s\n' "${image:-kyoubeai}" "${version:-dev}"
 }
+
+# runs_source_build [FILE]: true when FILE (default .env) selects the image `docker compose build` makes, kyoubeai:dev.
+runs_source_build() { [ "$(image_ref "${1:-.env}")" = kyoubeai:dev ]; }
 
 update_release() {
   local want="$1" current target from image_repo new_ref
@@ -290,7 +293,7 @@ resume_update() {
 }
 
 do_rollback() {
-  local mode ref branch backup from again
+  local mode ref branch backup from again previous
   [ -f "$STATE" ] || die "there is no update to roll back. To restore any backup: bash scripts/restore.sh backups/<timestamp>"
   mode="$(env_get "$STATE" mode)"; ref="$(env_get "$STATE" ref)"; branch="$(env_get "$STATE" branch)"
   backup="$(env_get "$STATE" backup)"; from="$(env_get "$STATE" from)"
@@ -302,6 +305,15 @@ do_rollback() {
   say "Roll back to $from and restore $backup."
   say "Everything written since that backup (tasks, data, files) is replaced."
   confirm "Roll back?" || { say "Nothing was changed."; exit 1; }
+  # A published image is never rebuilt here (a build would tag source code with the release's name);
+  # make sure it is on this machine before anything is stopped.
+  if ! runs_source_build "$ENV_BEFORE"; then
+    previous="$(image_ref "$ENV_BEFORE")"
+    if ! docker image inspect "$previous" >/dev/null 2>&1; then
+      say "==> downloading $previous before changing anything"
+      docker pull "$previous" || die "could not download $previous, the image this rollback returns to; nothing was changed. Check the network, then run ./update.sh --rollback again"
+    fi
+  fi
   # A step that fails leaves $STATE in place, so the same command continues.
   again="Fix what is reported above, then run ./update.sh --rollback again."
   docker compose stop app || die "could not stop the app. $again"
@@ -312,7 +324,7 @@ do_rollback() {
     git -c advice.detachedHead=false checkout --quiet "$ref" || die "could not switch this checkout back to ${ref}. $again"
   fi
   cp "$ENV_BEFORE" .env || die "could not restore .env from $ENV_BEFORE. $again"
-  if [ "$mode" = edge ]; then docker compose build app || die "the build of the previous code failed. $again"; fi
+  if [ "$mode" = edge ] && runs_source_build; then docker compose build app || die "the build of the previous code failed. $again"; fi
   # Recreate the app container on the old image without starting it, so the
   # new version never boots onto the restored data; restore.sh starts it.
   docker compose up -d --no-build --no-start app || die "could not recreate the app on the previous image. $again"
