@@ -17,7 +17,7 @@ export function defaultHarnessDeps(env: NodeJS.ProcessEnv): HarnessCommandDeps {
   return {
     probe: systemProbe(env),
     runInstaller: (command) => new Promise((resolve) => {
-      const child = spawn("bash", ["-c", command], { env, stdio: "inherit" });
+      const child = spawn("bash", ["-o", "pipefail", "-c", command], { env, stdio: "inherit" });
       child.on("error", () => resolve(127));
       child.on("close", (code) => resolve(code ?? 1));
     }),

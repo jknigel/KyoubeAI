@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { runHarness, type HarnessCommandDeps } from "../src/commands/harness.js";
+import { runHarness, defaultHarnessDeps, type HarnessCommandDeps } from "../src/commands/harness.js";
 
 function setup(paths: Record<string, string>, opts: { installExit?: number; afterInstall?: Record<string, string> } = {}) {
   const lines: string[] = [];
@@ -76,5 +76,12 @@ describe("kyoube harness", () => {
     const { deps, lines } = setup({});
     expect(await runHarness(["frobnicate"], env, deps)).toBe(2);
     expect(lines[0]).toContain("usage: kyoube harness");
+  });
+});
+
+describe("defaultHarnessDeps", () => {
+  it("uses pipefail so failed pipes report non-zero exit", async () => {
+    const deps = defaultHarnessDeps(process.env);
+    expect(await deps.runInstaller("false | true")).not.toBe(0);
   });
 });
