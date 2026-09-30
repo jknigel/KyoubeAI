@@ -37,6 +37,9 @@ version_ge() {
   return 0
 }
 
+# is_release_version X: three dot-separated numbers, nothing else.
+is_release_version() { [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; }
+
 # latest_release [MIN]: reads tag names on stdin; prints the newest vX.Y.Z >= MIN (never a pre-release), or nothing.
 latest_release() {
   local min="${1:-$KYOUBE_MIN_RELEASE}" best="" tag v

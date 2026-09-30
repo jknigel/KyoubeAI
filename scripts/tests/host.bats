@@ -14,6 +14,17 @@ setup() {
   ! version_ge 1.1 1.1.1
 }
 
+@test "is_release_version accepts exactly three dot-separated numbers" {
+  is_release_version 1.2.3
+  is_release_version 10.0.1
+  ! is_release_version 1.2
+  ! is_release_version v1.2.3
+  ! is_release_version 1.2.3-rc1
+  ! is_release_version 1.2.3.4
+  ! is_release_version abc
+  ! is_release_version ""
+}
+
 @test "latest_release picks the newest vX.Y.Z at or above the minimum, ignoring pre-releases and junk" {
   run latest_release 1.1.0 <<< $'v1.0.0\nv1.1.0\nv1.2.0-beta.1\nv1.10.0\nv1.9.3\nnightly\nv1.2.3.4\r'
   [ "$output" = "v1.10.0" ]
