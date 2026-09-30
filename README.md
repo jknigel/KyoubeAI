@@ -12,6 +12,7 @@
 
 - [Install](#install)
 - [Update](#update)
+- [Harnesses](#harnesses)
 - [Back up and restore](#back-up-and-restore)
 - [Using KyoubeAI](#using-kyoubeai)
 - [Development](#development)
@@ -20,292 +21,184 @@
 
 ## Install
 
-These steps take you from nothing to a running instance with its first agent. You can run the
-**published image**, which Docker downloads from GHCR, or build the image **from source** on your own
-machine. The published image is the tested release, built for amd64 and arm64, and it is the right
-choice unless you want to run your own changes or `main` between releases. Where the steps differ,
-both ways are shown.
-
 ### What you need
 
-- Docker Engine 24 or later with Docker Compose v2 (Docker Desktop includes both), on amd64 or arm64.
-- At least 4 GB of RAM.
-- `git` and `openssl`.
-- Access to a model: an API key from Anthropic, OpenAI or OpenRouter, or a subscription you sign in
-  to from the Terminal page in step 8.
+- Docker Desktop (macOS, Windows) or Docker Engine 24 or later with Docker Compose v2.17 or later
+  (Linux), on amd64 or arm64, with at least 4 GB of memory for Docker. On Windows, run the commands
+  below in WSL2.
+- `git`.
 
-### Step 1. Download KyoubeAI
-
-Published image: clone the release you will run.
-
-```bash
-git clone --branch v1.0.0 https://github.com/jknigel/KyoubeAI.git
-cd KyoubeAI
-```
-
-Git reports a "detached HEAD" here. That is expected, because the checkout is pinned to the release
-tag.
-
-From source: clone `main`.
+### Install
 
 ```bash
 git clone https://github.com/jknigel/KyoubeAI.git
 cd KyoubeAI
+./install.sh
 ```
 
-### Step 2. Create your settings file
+The script:
 
-`.env` holds your settings and secrets. Create it from the template and fill the three required
-secrets with random values:
+1. switches the checkout to the newest release;
+2. writes `.env` with generated secrets, asking one question, the address people will use (Enter keeps
+   `http://localhost:3100`; if that port is taken it asks for another);
+3. downloads the release's image (about 3 GB);
+4. starts KyoubeAI and waits until it is healthy;
+5. asks you to open that address, create your account and claim the instance (the first account becomes
+   the instance admin);
+6. prints a link that installs the Kyoube plugins: open it in the same browser and approve it;
+7. checks the result with `kyoube doctor`.
 
-```bash
-cp .env.example .env
-for key in BETTER_AUTH_SECRET POSTGRES_PASSWORD KYOUBE_DB_PASSWORD; do
-  sed -i.bak "s/^$key=\$/$key=$(openssl rand -hex 32)/" .env
-done
-rm .env.bak
-```
+It is safe to run again at any point, and continues where it stopped. Keep a copy of `.env` somewhere
+safe: restoring a backup onto a new machine needs its secrets.
 
-The loop only fills empty values, so running it twice is safe. To do it by hand instead, run
-`openssl rand -hex 32` three times and paste one result after each of the three keys. The two
-database passwords must contain only letters and digits, which is what that command produces.
+Then install the agent harnesses you want ([Harnesses](#harnesses)).
 
-Keep a copy of `.env` somewhere safe. Restoring a backup onto a new machine needs the same
-`BETTER_AUTH_SECRET` and database passwords.
-
-Two optional settings are worth adding while the file is open:
-
-- A model provider key (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY` or `OPENROUTER_API_KEY`), so agents can
-  work as soon as KyoubeAI starts.
-- `KYOUBE_PUBLIC_URL`, if people will open KyoubeAI from other machines
-  ([Reaching KyoubeAI from other machines](#reaching-kyoubeai-from-other-machines)).
-
-### Step 3. Point `.env` at the published image
-
-Skip this step if you build from source.
-
-Near the bottom of `.env`, under "Optional: prebuilt image", uncomment the two lines so they read:
-
-```bash
-KYOUBE_IMAGE=ghcr.io/jknigel/kyoubeai
-KYOUBE_VERSION=1.0.0
-```
-
-This command does the same:
-
-```bash
-sed -i.bak -e 's/^# KYOUBE_IMAGE=/KYOUBE_IMAGE=/' -e 's/^# KYOUBE_VERSION=/KYOUBE_VERSION=/' .env && rm .env.bak
-```
-
-The version must match the tag you cloned.
-
-### Step 4. Start KyoubeAI
-
-Published image: download the image, then start.
-
-```bash
-docker compose pull
-docker compose up -d
-```
-
-Run the pull on its own and read how it ends. If it reports `denied`, stop there: the image is not
-public, or this machine has to log in to GHCR first
-([the published image on GHCR](docs/operations.md#the-published-image-on-ghcr)). A
-`docker compose up -d` after a failed pull quietly builds the image from source instead.
-
-From source: build and start in one go.
-
-```bash
-docker compose up -d --build
-```
-
-Then watch the services come up:
-
-```bash
-docker compose ps
-```
-
-Wait until `app` reads `healthy`. The first start runs the database migrations, and the health check
-allows up to three minutes for them.
-
-### Step 5. Sign up and claim the instance
-
-Open http://localhost:3100 (or the `KYOUBE_PUBLIC_URL` you set), sign up, and claim the instance.
-Whoever claims it becomes the instance admin.
-
-The first-run wizard then sets up your company and its first agent. On its **Connect a model** step,
-an API key works straight away. A Claude or OpenAI subscription cannot be signed in from the wizard on
-a KyoubeAI server, so if you have no key, choose **Skip for now and connect the harness later from the
-Terminal page**. The agent is created anyway, and it starts working once its harness is connected in
-step 8.
-
-The browser claim only works while `KYOUBE_DEPLOYMENT_EXPOSURE=private`, which is the default. For an
-instance on the internet, claim it first and switch to `public` afterwards.
-
-### Step 6. Install the Kyoube plugins
-
-Run this once:
-
-```bash
-docker compose exec app kyoube setup
-```
-
-It prints a link and asks you to approve the command-line login as an instance admin. Open the link
-in the browser where you are signed in and approve it before it expires. From then on the plugins
-install and upgrade themselves every time KyoubeAI starts.
-
-### Step 7. Check the installation
-
-```bash
-docker compose exec app kyoube doctor
-```
-
-Every check should pass, and each `kyoube.*` plugin should read `=ready`. The harness credential lines
-at the end only report what is signed in, so they say "not found" until the next step.
-
-### Step 8. Connect the agent harnesses
-
-Agents work through Claude Code, pi or Hermes Agent, and each harness needs access to a model. Use
-either way, or both:
-
-- API keys: put `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` or `OPENROUTER_API_KEY` in `.env`, then run
-  `docker compose up -d` to apply them.
-- Signing in from the browser: open the **Workspace** page at the bottom of the sidebar, then
-  **Terminal**, and run `claude login` for Claude Code, `pi` for pi, or `hermes setup` for Hermes
-  Agent. The credentials are stored on the `kyoubeai-home` volume, so they survive restarts and
-  updates.
-
-Run `kyoube doctor` again to see the harnesses you connected.
-
-To let an agent work with company data, enable the **Kyoube Data** and **Kyoube Apps** skills on its
-**Skills** tab and give it an access level under **Company Settings → Data access**. [Data](#data)
-explains the levels.
-
-### Reaching KyoubeAI from other machines
-
-KyoubeAI listens on every network interface, so other machines can already reach it on port 3100.
-Tell it the address people will use:
-
-1. Set `KYOUBE_PUBLIC_URL` in `.env` to the exact address people type, such as
-   `http://192.168.1.10:3100` or `https://kyoube.example.com`. Sign-in and the `kyoube setup` link are
-   built from it, so a wrong value sends people to the wrong host.
-2. Behind a reverse proxy or tunnel on the same Docker network (Caddy, Traefik, nginx or cloudflared),
-   also set `TRUST_PROXY=uniquelocal`.
-3. For an instance on the internet, put TLS in front and set `KYOUBE_DEPLOYMENT_EXPOSURE=public`.
-   `kyoube doctor` fails a public instance whose address does not start with `https://`.
-4. Apply the changes with `docker compose up -d`.
-
-To use a port other than 3100, set `KYOUBE_PORT` and put the same port in `KYOUBE_PUBLIC_URL`. On a
-`localhost` or `127.0.0.1` address, also set `BETTER_AUTH_TRUSTED_ORIGINS` to that origin (for
-example `http://localhost:3199`). The core maps a loopback address back to its internal port and
-would otherwise reject sign-ins from the new one.
+Options: `--url <address>` and `--port <n>` answer the address question, `--name <project>` names the
+Compose project (for a second instance on one machine), `--yes` accepts every default and asks nothing
+(a taken port then stops the script, so add `--port`), `--version <x.y.z>` installs a particular release
+(1.1.0 or later), and `--edge` builds the current branch from source instead
+([CONTRIBUTING.md](CONTRIBUTING.md)). People on other machines, TLS and reverse proxies are covered in
+[docs/operations.md](docs/operations.md#reaching-kyoubeai-from-other-machines).
 
 ### Troubleshooting
 
-| What you see                                                         | What to do                                                                                                                                                                         |
-| -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `docker compose pull` reports `denied`                           | The image is not public yet, or this machine must log in to GHCR ([how](docs/operations.md#the-published-image-on-ghcr)). Do not run `docker compose up -d` until the pull works. |
-| Sign-in fails with a 403 or an origin error                          | `KYOUBE_PUBLIC_URL` must match the address in the browser exactly. On another localhost port, set `BETTER_AUTH_TRUSTED_ORIGINS`; behind a proxy, set `TRUST_PROXY`.          |
-| "Browser first-admin claim is not available"                         | `KYOUBE_DEPLOYMENT_EXPOSURE` is `public`. Set it to `private`, run `docker compose up -d`, claim the instance, then switch back.                                           |
-| The build stops at the core-patches step and names two core versions | `KYOUBE_CORE_VERSION` in `.env` is left over from an older release. Copy the value from `.env.example` and build again.                                                      |
-| `kyoube doctor` shows a plugin that is not `=ready`              | Read the plugin's log under**Settings → Plugins → *plugin* → Logs**, and `docker compose logs -f app`.                                                                |
+| What you see | What to do |
+| --- | --- |
+| "Docker is installed but not reachable" | Start Docker Desktop. On Linux, start the daemon and add your user to the `docker` group, then log in again. |
+| The download fails, or says `denied` | Check the network and run `./install.sh` again; completed layers are kept. `denied` means this machine cannot read the image ([docs/operations.md](docs/operations.md#the-published-image-on-ghcr)). |
+| "did not become healthy" | Read the log lines it printed. `docker compose logs -f app` shows more. |
+| Sign-in fails with a 403 or an origin error | The address in the browser must match `KYOUBE_PUBLIC_URL` in `.env` exactly. Behind a proxy, set `TRUST_PROXY` ([docs/operations.md](docs/operations.md#reaching-kyoubeai-from-other-machines)). |
+| "blocks the browser claim" | `KYOUBE_DEPLOYMENT_EXPOSURE` is `public`. Set it to `private`, run `./install.sh`, claim, then switch back and run `docker compose up -d`. |
+| `kyoube doctor` shows a plugin that is not `=ready` | Read the plugin's log under **Settings → Plugins → *plugin* → Logs**, and `docker compose logs -f app`. |
 
 ## Update
 
-Updates keep your data, and the plugins upgrade themselves on the next start. Databases only migrate
-forward, though, so take a backup before every update: restoring it is the only way back.
-
-The newest release is at the top of [CHANGELOG.md](CHANGELOG.md), and every release has a
-`v<version>` tag. The examples below move from 1.0.0 to 1.0.1; use the versions you are moving
-between.
-
-### Updating a published-image install
-
-1. Back up.
-
-   ```bash
-   bash scripts/backup.sh
-   ```
-2. Check out the new release, so `docker-compose.yml`, the scripts and `.env.example` match the image
-   you are about to pull.
-
-   ```bash
-   git fetch --tags
-   git checkout v1.0.1
-   ```
-3. See which settings the release added or changed, and copy any new ones into your `.env`.
-
-   ```bash
-   git diff v1.0.0 v1.0.1 -- .env.example
-   ```
-4. In `.env`, change the `KYOUBE_VERSION=` line under `KYOUBE_IMAGE` to the new version (`1.0.1`).
-5. Download the new image, and check that the pull succeeded before you go on.
-
-   ```bash
-   docker compose pull
-   ```
-6. Restart on the new image and check it.
-
-   ```bash
-   docker compose up -d
-   docker compose exec app kyoube doctor
-   ```
-
-   Every `kyoube.*` plugin should read `=ready` at its new version. `docker compose logs -f app`
-   shows the plugins upgrading.
-
-### Updating a source install
-
-1. Back up.
-
-   ```bash
-   bash scripts/backup.sh
-   ```
-2. Pull the new code.
-
-   ```bash
-   git pull
-   ```
-3. Bring `.env` up to date. `git pull` never changes `.env`, and the core version is pinned there too.
-
-   ```bash
-   grep '^KYOUBE_CORE_VERSION=' .env.example .env
-   git diff ORIG_HEAD -- .env.example
-   ```
-
-   If the two `KYOUBE_CORE_VERSION` values differ, copy the one from `.env.example` into `.env`: a
-   build on the old core stops at the core-patches step. The `git diff` lists any other settings the
-   update added.
-4. Rebuild, restart and check.
-
-   ```bash
-   docker compose up -d --build
-   docker compose exec app kyoube doctor
-   ```
-
-### Rolling back
-
-If an update goes wrong, go back to the version you came from and restore the backup you took before
-updating:
-
 ```bash
-git checkout v1.0.0
-# Published image: set KYOUBE_VERSION back to 1.0.0 in .env, then
-docker compose pull && docker compose up -d
-# From source: docker compose up -d --build
-bash scripts/restore.sh backups/<timestamp>
-docker compose exec app kyoube doctor
+./update.sh
 ```
 
-On a source install, check out the commit you were on before `git pull` (`git reflog` lists it).
-The restore replaces both databases and the home volume, so anything written since the backup is
-lost. [docs/upgrading.md](docs/upgrading.md) has the details, and covers moving KyoubeAI to a new
-core release yourself.
+It downloads the newest release's image before it changes anything, then:
+
+1. backs up (`scripts/backup.sh`);
+2. switches the checkout to the new release;
+3. adds any new settings to `.env` and moves `KYOUBE_VERSION` and `KYOUBE_CORE_VERSION` to the new
+   release; your other settings are never changed;
+4. restarts;
+5. offers to install any harness your agents use that is not installed;
+6. runs `kyoube doctor`.
+
+`--version <x.y.z>` picks a release (not one older than the release you are on), and `--yes` answers every
+question. An update that stops part way continues when you run `./update.sh` again, without a second
+backup. Harnesses, their logins and kept system packages carry over ([Harnesses](#harnesses)).
+
+If an update goes wrong, `./update.sh --rollback` goes back to the previous release and restores the
+backup taken just before the update. Anything written since then is replaced, because databases only
+migrate forward.
+
+An install built from source (`./install.sh --edge`) updates with `./update.sh --edge`, which
+fast-forwards the current branch and rebuilds. [docs/upgrading.md](docs/upgrading.md) covers moving to
+1.1 from an earlier install, and moving KyoubeAI to a new core release.
+
+## Harnesses
+
+Agents work through an agent harness: Claude Code, Codex, Hermes Agent, pi, Gemini CLI, OpenCode or Kimi
+Code. You install the ones you want from the **Terminal** (the **Workspace** page, then **Terminal**, for
+company owners and admins), the same way you would on your own machine.
+
+What you install stays:
+
+- Harnesses land in `/kyoubeai/.local`, on the `kyoubeai-home` volume, which comes first on the `PATH` of
+  every agent and every Terminal shell.
+- Their logins (`~/.claude`, `~/.codex`, `~/.hermes`, `~/.pi`, and so on) live on the same volume.
+- System packages you add with `sudo apt install` are put back automatically after a restart, an update or
+  a core upgrade.
+
+All of it survives `docker compose down`, `./update.sh` and core upgrades, and `scripts/backup.sh`
+carries it to a new machine. The Terminal runs as the same user as your agents and has `sudo`, so treat
+Terminal access as root on the container ([SECURITY.md](SECURITY.md#terminal)).
+
+```bash
+kyoube harness install claude   # also: codex, hermes, pi, gemini, opencode, kimi
+kyoube harness list             # what is installed, which version, and whether it is yours
+```
+
+`kyoube harness install` runs the harness's official installer. The core image carries its own copies of
+Claude Code, Codex, Gemini CLI, Kimi Code and OpenCode as fallbacks; yours take precedence.
+`kyoube doctor` flags any harness your agents use that is not installed or no longer runs. KyoubeAI has
+no installer for Grok: install it from its own instructions so that `grok` lands in
+`/kyoubeai/.local/bin`.
+
+### How agents reach a model
+
+- **AI connections** hold a subscription sign-in or an API key centrally, and hand it to each run. You add
+  one from an agent's **Runtime** tab, under **AI connection**. Claude Code, Codex, OpenCode and Grok can
+  use them.
+- **The harness's own login**, made in the Terminal, or provider keys in `.env` (`ANTHROPIC_API_KEY`,
+  `OPENAI_API_KEY`, `OPENROUTER_API_KEY`; `docker compose up -d` applies them). pi and Hermes always work
+  this way; the others do for agents that have no AI connection.
+
+### Claude Code
+
+1. `kyoube harness install claude`. This is the official native installer, and it keeps Claude Code up to
+   date.
+2. Connect it, one of these ways:
+   - **Pro or Max subscription, as an AI connection.** On the agent's **Runtime** tab, choose Claude Code,
+     then add a Claude subscription under **AI connection**. It shows a command ending in
+     `kyoube connect claude`. Paste it into the Terminal, sign in at the link it prints, and paste the code
+     back (if it then asks for the token Claude printed, paste that). When the Terminal says *Done*, click
+     **Connect**. The connection holds a one-year token; connect it again once a year.
+   - **Anthropic API key:** add it as an AI connection, or set `ANTHROPIC_API_KEY` in `.env`.
+   - **Just your own login:** run `claude` in the Terminal and use `/login`. Agents without an AI
+     connection use it, and Claude keeps it refreshed.
+3. Choose Claude Code and the connection on the agent's **Runtime** tab.
+
+Claude subscription connections made before 1.1 hold an 8-hour token and stop working; connect them again
+once, as above.
+
+### Codex
+
+1. `kyoube harness install codex`.
+2. Add an OpenAI subscription (the page shows a device sign-in) or an OpenAI API key as an AI connection,
+   or run `codex login` in the Terminal for agents without one.
+3. Choose Codex on the agent's **Runtime** tab. Keep **Bypass sandbox** on: Codex's own sandbox needs
+   kernel features a container does not have, and the container is the sandbox.
+
+### Hermes Agent
+
+1. `kyoube harness install hermes`.
+2. Run `hermes setup` in the Terminal to pick a provider and model and enter keys (OpenRouter and others).
+   Its settings, sessions and memory live in `~/.hermes`.
+3. Choose Hermes on the agent's **Runtime** tab. Hermes does not use AI connections.
+
+### pi
+
+1. `kyoube harness install pi`.
+2. Run `pi` in the Terminal and use `/login`, or put provider keys in `~/.pi`.
+3. Choose pi on the agent's **Runtime** tab. pi does not use AI connections.
+
+### Gemini CLI, OpenCode, Kimi Code
+
+The core image carries a copy of each. `kyoube harness install gemini` (or `opencode`, `kimi`) installs
+your own, newer copy, which then takes precedence. Sign in from the Terminal as each one's documentation
+describes.
+
+### Switching an agent's harness
+
+On the **Runtime** tab, pick the new harness and, in the same save, an AI connection that works with it,
+or none. The save is refused while the agent still has a connection for another provider. **Test** works
+before you save.
+
+### After an update or a core upgrade
+
+`kyoube doctor` lists each installed harness and whether it still starts. One that no longer runs, for
+example after the core moves to a new Node.js, shows its reinstall command. It also reports the kept
+system packages, and fails if they could not be put back at the last start.
 
 ## Back up and restore
 
 `bash scripts/backup.sh` writes both database dumps, the cluster-level Kyoube roles and the
-`/kyoubeai` home volume (agent credentials and workspaces) to `backups/<timestamp>/`.
+`/kyoubeai` home volume (the board key, agent workspaces, your harnesses and their logins, and the list
+of kept system packages; download caches are left out) to `backups/<timestamp>/`.
 `bash scripts/restore.sh backups/<timestamp>` puts all of it back, onto this machine or a new one. The
 app is stopped while the restore runs, and everything written since the backup is replaced.
 
@@ -341,14 +234,14 @@ plugin, the app falls back to the stock layout. [docs/theme.md](docs/theme.md) h
 
 ### Terminal
 
-Company owners and admins see a **Terminal** card on the **Workspace** page. It opens a shell inside
-the `app` container as the `node` user with `HOME=/kyoubeai` (the persisted volume), so `claude login`,
-`pi` and `hermes setup` store credentials that survive restarts. Sessions are audited (open, close
-and kill, never content), idle sessions close after 30 minutes, and a session survives page reloads:
-use **attach** under *Sessions in this company*. Roles, timeouts and the shell are set under
-**Settings → Plugins → Kyoube Terminal**.
+Company owners and admins see a **Terminal** card on the **Workspace** page. It opens a login shell
+inside the `app` container as the `node` user, with `HOME=/kyoubeai` (the persisted volume) and
+passwordless `sudo`, so you can install and manage anything there: harnesses, their logins, and system
+packages ([Harnesses](#harnesses)). Sessions are audited (open, close and kill, never content), idle
+sessions close after 30 minutes, and a session survives page reloads: use **attach** under *Sessions in
+this company*. Roles, timeouts and the shell are set under **Settings → Plugins → Kyoube Terminal**.
 
-The terminal is equivalent to shell access to the whole instance, including the database credentials
+The terminal is equivalent to root access to the whole container, including the database credentials
 and every agent's tokens. Keep `allowedRoles` tight, and use it only over a private network or TLS.
 The security model is in [SECURITY.md](SECURITY.md#terminal).
 
@@ -434,6 +327,7 @@ pnpm install     # plain pnpm switches to the pinned version itself; `corepack e
 pnpm test        # unit tests for the bootstrap CLI and plugins
 pnpm build       # builds dist/ for every package
 pnpm smoke       # full docker smoke test (needs docker, curl, jq)
+pnpm test:sh     # bats tests for install.sh, update.sh and the container scripts
 ```
 
 [CONTRIBUTING.md](CONTRIBUTING.md) covers the integration test setup, commit conventions and how to
@@ -451,8 +345,6 @@ These were left out of 1.0, roughly in order of how often they come up:
   unpublished app version without publishing it.
 - Dashboard-widget apps. The core's UI slot exists, but an app manifest's `surfaces` are not wired to
   it yet.
-- An upstream proposal to let operators configure the core's bundled-plugin allowlist, so the one-time
-  `kyoube setup` step is no longer needed on first boot.
 
 ## Licence
 
