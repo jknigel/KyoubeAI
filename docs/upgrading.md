@@ -77,12 +77,13 @@ Terminal `sudo`. Take a backup first: `bash scripts/backup.sh`.
 
 - **`./update.sh` is the new way to update.** Move the checkout to 1.1 once with `./install.sh`, and use
   `./update.sh` from then on. A 1.0 checkout has neither script. `./update.sh` on a checkout you
-  moved to v1.1.0 by hand still updates the stack: it reads what the stack runs from `KYOUBE_VERSION`
-  in `.env` (an older release, `dev` or nothing for a source build), takes a backup and moves the stack
-  up, and `./update.sh --rollback` works afterwards. It refuses, before changing anything, when the stack
-  runs a newer release than the one it would move to, or when the code the stack was built from is not
-  part of that release's history; its message says which checkout to make first. `./update.sh --edge`
-  likewise rebuilds a source image that is behind the checkout. `./install.sh`
+  moved to v1.1.0 by hand still updates the stack: it works out which code the stack runs (the release in
+  `KYOUBE_VERSION` in `.env`; for a source build, the commit `.kyoube/built-commit` records, or else where
+  the checkout was before), takes a backup and moves the stack up, and `./update.sh --rollback` works
+  afterwards. It refuses, before changing anything, when that code is not part of the history of the code
+  it would move to (a newer release, or a source build newer than the release), or when `KYOUBE_VERSION`
+  is neither a release nor `dev`; its message says which checkout to make first. `./update.sh --edge`
+  follows the same rule and rebuilds a source image that is behind the checkout. `./install.sh`
   keeps the `.env`, the data and the plugins of an existing install: it adds the settings 1.1 introduced
   to `.env`, pins `COMPOSE_PROJECT_NAME` to the name the install already uses, points `KYOUBE_IMAGE` and
   `KYOUBE_VERSION` at the release, downloads the image, restarts, sees the instance is claimed and the
