@@ -41,6 +41,18 @@ main() {
     esac
     shift
   done
+  if [ -n "$want" ]; then
+    is_release_version "${want#v}" || die "not a release version: $want (use e.g. --version 1.1.0)"
+    want="${want#v}"
+  fi
+  if [ -n "$port" ]; then
+    valid_port "$port" || die "not a port: $port (use a number from 1 to 65535)"
+    port="$((10#$port))"
+  fi
+  if [ -n "$name" ]; then
+    [ "$(normalize_project_name "$name")" = "$name" ] \
+      || die "not a valid project name: $name (use lowercase letters, digits, - and _, starting with a letter or digit)"
+  fi
   [ -t 0 ] || YES=1
 
   say "==> checking Docker"
@@ -52,10 +64,13 @@ main() {
     release="edge-$(git rev-parse --short HEAD)"
   else
     git diff --quiet HEAD -- || die "tracked files in $KYOUBE_DIR have local changes; stash them (git stash) or use --edge"
-    current="$(git describe --tags --exact-match HEAD 2>/dev/null || true)"
+    # A commit can carry several tags (v1.2.0 and v1.2.0-rc1); only a release tag counts.
+    current="$(git tag --points-at HEAD 2>/dev/null | latest_release || true)"
     if [ -n "$want" ]; then
       version_ge "$want" "$KYOUBE_MIN_RELEASE" || die "install.sh installs $KYOUBE_MIN_RELEASE or later; see README for older releases"
       tag="v$want"
+      # HEAD may carry more than one release tag; the one asked for is enough.
+      if git tag --points-at HEAD 2>/dev/null | grep -Fx "$tag" >/dev/null; then current="$tag"; fi
     elif [ -n "$current" ] && [ "$(printf '%s\n' "$current" | latest_release)" = "$current" ]; then
       tag="$current"
     else
@@ -65,7 +80,10 @@ main() {
     fi
     if [ "$current" != "$tag" ]; then
       [ "$reexeced" = 0 ] || die "could not switch this checkout to $tag"
-      git rev-parse -q --verify "refs/tags/$tag" >/dev/null || die "release $tag does not exist"
+      if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+        git fetch --tags --quiet origin 2>/dev/null || warn "could not fetch releases from origin; using the tags this checkout has"
+        git rev-parse -q --verify "refs/tags/$tag" >/dev/null || die "release $tag does not exist"
+      fi
       say "==> switching this checkout to $tag"
       git -c advice.detachedHead=false checkout --quiet "$tag"
       exec "$KYOUBE_DIR/install.sh" --reexeced ${original[@]+"${original[@]}"}
@@ -74,7 +92,7 @@ main() {
   fi
 
   # 2. Settings.
-  local repo version_tag project added
+  local repo version_tag project added ignored=""
   if [ -n "$image" ]; then
     read -r repo version_tag <<<"$(split_image_ref "$image")"
   elif [ "$edge" = 1 ]; then
@@ -97,6 +115,10 @@ main() {
     say "    wrote .env. Keep a copy somewhere safe: restoring a backup onto a new machine needs its secrets."
   else
     say "    keeping the existing .env"
+    [ -z "$port" ] || ignored="${ignored:+$ignored, }--port (KYOUBE_PORT)"
+    [ -z "$url" ] || ignored="${ignored:+$ignored, }--url (KYOUBE_PUBLIC_URL)"
+    [ -z "$name" ] || ignored="${ignored:+$ignored, }--name (COMPOSE_PROJECT_NAME)"
+    [ -z "$ignored" ] || warn "$ignored ignored because the existing .env is kept; edit those keys in .env, or remove .env and run ./install.sh again to start over"
     [ -n "$(env_get .env COMPOSE_PROJECT_NAME)" ] || env_set .env COMPOSE_PROJECT_NAME "$(resolve_project_name "$KYOUBE_DIR")"
     added="$(env_merge .env.example .env "$release")"
     # shellcheck disable=SC2086  # word splitting turns the newline-separated keys into one line
@@ -134,7 +156,7 @@ main() {
   # 5. Claim.
   local public status
   public="$(env_get .env KYOUBE_PUBLIC_URL)"
-  status="$(health_field bootstrapStatus)"
+  status="$(health_field bootstrapStatus || true)"
   if [ "$status" = "bootstrap_pending" ]; then
     [ "$(env_get .env KYOUBE_DEPLOYMENT_EXPOSURE)" != "public" ] \
       || die "the instance is not claimed yet and KYOUBE_DEPLOYMENT_EXPOSURE=public blocks the browser claim. Set it to private in .env, run ./install.sh, claim, then switch back."
@@ -163,6 +185,15 @@ main() {
   say "Next: open Workspace -> Terminal and install a harness (README, 'Harnesses'), e.g.  kyoube harness install claude"
 }
 
+# is_release_version X: three dot-separated numbers, nothing else.
+is_release_version() { [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; }
+
+# valid_port N: an integer from 1 to 65535.
+valid_port() {
+  case "$1" in ''|*[!0-9]*) return 1 ;; esac
+  [ "${#1}" -le 5 ] && [ "$((10#$1))" -ge 1 ] && [ "$((10#$1))" -le 65535 ]
+}
+
 # choose_address FILE: KYOUBE_PUBLIC_URL, KYOUBE_PORT and, for another loopback port, BETTER_AUTH_TRUSTED_ORIGINS.
 # Reads url, port and YES from main's scope.
 choose_address() {
@@ -178,7 +209,8 @@ choose_address() {
     [ "$YES" = 0 ] || die "port $p is already in use on this machine; run again with --port <a free port>"
     printf 'Port %s is already in use. Port to use instead: ' "$p"
     IFS= read -r p </dev/tty || die "no port given"
-    case "$p" in ''|*[!0-9]*) die "not a port: $p" ;; esac
+    valid_port "$p" || die "not a port: $p (use a number from 1 to 65535)"
+    p="$((10#$p))"
   done
   env_set "$file" KYOUBE_PORT "$p"
   if is_loopback_url "$url"; then
