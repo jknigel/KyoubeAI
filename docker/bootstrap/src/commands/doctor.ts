@@ -1,10 +1,10 @@
-import { spawn } from "node:child_process";
-import { access } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import { readConfig, resolveConfigPath, type KyoubeConfig } from "../config.js";
 import { readBoardKey, resolveBoardApiKey, resolveBoardKeyPath } from "../key-store.js";
 import { createCoreClient, type CompanySkill, type CompanySummary } from "../core-api.js";
+import { describeHarness, missingHarnesses, probeHarnesses, systemProbe, type HarnessStatus } from "../harnesses.js";
 import { describeMissing, KYOUBE_SKILLS, missingKyoubeSkills } from "../skills.js";
 
 export interface Check { name: string; ok: boolean; detail: string }
@@ -23,18 +23,6 @@ export function skillsCheck(companies: CompanySummary[], skillsByCompany: Map<st
   const names = KYOUBE_SKILLS.map((skill) => skill.slug).join(" + ");
   if (missing.length === 0) return { name: "skills", ok: true, detail: `${names} present in ${companies.length}/${companies.length} companies` };
   return { name: "skills", ok: false, detail: `missing in ${describeMissing(missing)} — open Company Settings → Data access there and click "Install the Kyoube Data skill"` };
-}
-
-function runCommand(command: string, args: string[], env: NodeJS.ProcessEnv): Promise<{ ok: boolean; output: string }> {
-  return new Promise((resolve) => {
-    const child = spawn(command, args, { env, stdio: ["ignore", "pipe", "pipe"] });
-    let output = "";
-    const timer = setTimeout(() => { child.kill("SIGKILL"); }, 20_000);
-    child.stdout.on("data", (chunk) => { output += String(chunk); });
-    child.stderr.on("data", (chunk) => { output += String(chunk); });
-    child.on("error", (error) => { clearTimeout(timer); resolve({ ok: false, output: error.message }); });
-    child.on("close", (code) => { clearTimeout(timer); resolve({ ok: code === 0, output: output.trim() }); });
-  });
 }
 
 function tcpReachable(url: string): Promise<{ ok: boolean; detail: string }> {
@@ -113,6 +101,53 @@ export async function legacyHomeLinkCheck(home: string, exists: (file: string) =
   };
 }
 
+async function readOptional(filePath: string): Promise<string | null> {
+  try {
+    return await readFile(filePath, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+/** One informational line per harness CLI on PATH; the image ships none of its own. */
+export function harnessChecks(statuses: HarnessStatus[]): Check[] {
+  const installed = statuses.filter((status) => status.path);
+  if (installed.length === 0) return [{ name: "harnesses", ok: true, detail: "none installed — see README → Harnesses (kyoube harness install <name>)" }];
+  return installed.map((status) => ({ name: `${status.spec.name} cli`, ok: true, detail: describeHarness(status) }));
+}
+
+/** Fails when an agent's harness is not installed: that agent's runs would fail. */
+export function harnessesInUseCheck(statuses: HarnessStatus[], inUse: Map<string, number>): Check {
+  if (inUse.size === 0) return { name: "harnesses in use", ok: true, detail: "no agents yet" };
+  const used = [...inUse.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([type, count]) => `${type} (${count})`).join(", ");
+  const missing = missingHarnesses(statuses, inUse.keys());
+  if (missing.length === 0) return { name: "harnesses in use", ok: true, detail: used };
+  const fixes = missing.map((spec) => (spec.install ? `kyoube harness install ${spec.name}` : `install ${spec.label}`)).join("; ");
+  return { name: "harnesses in use", ok: false, detail: `${used} — not installed: ${missing.map((spec) => spec.name).join(", ")} (${fixes})` };
+}
+
+/** The packages `sudo apt install` kept (docker/system/apt-record) and whether the last start put them back. */
+export function systemPackagesCheck(list: string | null, status: string | null, logPath: string): Check {
+  const packages = (list ?? "").split("\n").map((line) => line.trim()).filter((line) => line.length > 0 && !line.startsWith("#"));
+  if (/^failed\b/.test(status?.trim() ?? "")) {
+    return { name: "system packages", ok: false, detail: `reinstalling the kept packages failed at the last start — see ${logPath} (${packages.join(", ")})` };
+  }
+  if (packages.length === 0) return { name: "system packages", ok: true, detail: "none kept (sudo apt install <package> keeps one across restarts and updates)" };
+  const shown = packages.slice(0, 8).join(", ") + (packages.length > 8 ? `, … (${packages.length - 8} more)` : "");
+  return { name: "system packages", ok: true, detail: `${packages.length} kept: ${shown}` };
+}
+
+export function claudeCredentialDetail(raw: string | null, filePath: string): string {
+  if (raw === null) return `not found (${filePath}) — only agents without an AI connection use it`;
+  try {
+    const expiresAt = (JSON.parse(raw) as { claudeAiOauth?: { expiresAt?: unknown } }).claudeAiOauth?.expiresAt;
+    if (typeof expiresAt === "number") return `present (${filePath}); access token until ${new Date(expiresAt).toISOString()}, which Claude refreshes itself`;
+    return `present (${filePath})`;
+  } catch {
+    return `present but unreadable (${filePath})`;
+  }
+}
+
 export async function runDoctor(env: NodeJS.ProcessEnv): Promise<number> {
   const checks: Check[] = [];
   const configPath = resolveConfigPath(env);
@@ -164,6 +199,7 @@ export async function runDoctor(env: NodeJS.ProcessEnv): Promise<number> {
         : `stored (user ${storedKey?.userId ?? "?"})`,
   });
 
+  let inUse: Map<string, number> | null = null;
   if (apiKey) {
     try {
       const authed = createCoreClient({ apiBase: config.paperclipApiUrl, apiKey });
@@ -183,22 +219,41 @@ export async function runDoctor(env: NodeJS.ProcessEnv): Promise<number> {
     } catch (error) {
       checks.push({ name: "skills", ok: false, detail: error instanceof Error ? error.message : String(error) });
     }
+    try {
+      const authed = createCoreClient({ apiBase: config.paperclipApiUrl, apiKey });
+      const counts = new Map<string, number>();
+      for (const company of await authed.listCompanies()) {
+        for (const agent of await authed.listAgents(company.id)) {
+          if (agent.status === "terminated" || !agent.adapterType) continue;
+          counts.set(agent.adapterType, (counts.get(agent.adapterType) ?? 0) + 1);
+        }
+      }
+      inUse = counts;
+    } catch (error) {
+      checks.push({ name: "harnesses in use", ok: false, detail: error instanceof Error ? error.message : String(error) });
+    }
   }
 
   const harnessEnv = { ...env, HOME: config.home, HERMES_HOME: config.hermesHome };
-  for (const [name, args] of [["claude", ["--version"]], ["pi", ["--version"]], ["hermes", ["--version"]]] as const) {
-    const result = await runCommand(name, [...args], harnessEnv);
-    checks.push({ name: `${name} cli`, ok: result.ok, detail: result.output.split("\n")[0] ?? "" });
-  }
+  const statuses = await probeHarnesses(config.home, systemProbe(harnessEnv));
+  checks.push(...harnessChecks(statuses));
+  if (inUse) checks.push(harnessesInUseCheck(statuses, inUse));
 
-  const credentialHints: Array<[string, string]> = [
-    ["claude credentials", path.posix.join(config.home, ".claude", ".credentials.json")],
+  const stateDir = path.posix.join(config.home, ".kyoube");
+  checks.push(systemPackagesCheck(
+    await readOptional(path.posix.join(stateDir, "apt-packages.txt")),
+    await readOptional(path.posix.join(stateDir, "apt-restore.status")),
+    path.posix.join(stateDir, "apt-restore.log"),
+  ));
+
+  const claudeFile = path.posix.join(config.home, ".claude", ".credentials.json");
+  checks.push({ name: "claude credentials", ok: true, detail: claudeCredentialDetail(await readOptional(claudeFile), claudeFile) });
+  for (const [name, filePath] of [
     ["pi config dir", path.posix.join(config.home, ".pi")],
     ["hermes config", path.posix.join(config.hermesHome, "config.yaml")],
-  ];
-  for (const [name, filePath] of credentialHints) {
+  ] as const) {
     const present = await fileExists(filePath);
-    checks.push({ name, ok: true, detail: present ? `present (${filePath})` : `not found (${filePath}) — authenticate from the Terminal page or set provider API keys` });
+    checks.push({ name, ok: true, detail: present ? `present (${filePath})` : `not found (${filePath}) — set up from the Terminal once the harness is installed` });
   }
   checks.push(await legacyHomeLinkCheck(config.home));
 
