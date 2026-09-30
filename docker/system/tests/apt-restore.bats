@@ -37,11 +37,12 @@ case "$1" in
     done
     # Determine the exit code
     rc="${FAKE_INSTALL_EXIT:-0}"
-    # Only record successful installations in the file (skip flags)
+    # Only record successful installations in the file (package names only:
+    # skip the subcommand and the flags)
     if [ "$rc" -eq 0 ]; then
       for arg in "$@"; do
         case "$arg" in
-          -y|--no-install-recommends) continue ;;
+          install|-y|--no-install-recommends) continue ;;
           -*) continue ;;
           *) printf '%s\n' "$arg" >> "$FAKE_INSTALLED_FILE" ;;
         esac
@@ -171,22 +172,18 @@ EOF
   # Without early pending write, jq would be lost after tree succeeds
   FAKE_BAD="jq" FAKE_RUN_HOOK="$BATS_TEST_DIRNAME/../apt-record" run "$SCRIPT"
   [ "$status" -eq 0 ]
-  # Assert: jq must be in the list (proof that pending was kept)
-  grep -q "jq" "$KYOUBE_STATE_DIR/apt-packages.txt"
-  # Assert: tree and ffmpeg should be in the list (they succeeded)
-  grep -q "tree" "$KYOUBE_STATE_DIR/apt-packages.txt"
-  grep -q "ffmpeg" "$KYOUBE_STATE_DIR/apt-packages.txt"
-  [ "$(cat "$KYOUBE_STATE_DIR/apt-restore.status")" = "failed 100" ]
+  # The kept list is exactly the three packages, jq included (kept via pending)
+  [ "$(cat "$KYOUBE_STATE_DIR/apt-packages.txt")" = "$(printf 'ffmpeg\njq\ntree')" ]
   [ "$(cat "$KYOUBE_STATE_DIR/apt-pending.txt")" = "jq" ]
+  [ "$(cat "$KYOUBE_STATE_DIR/apt-restore.status")" = "failed 100" ]
 
-  # Start 2: same state, jq still bad; should still have jq in list and pending
+  # Start 2: same state, jq still bad; the list and pending must be unchanged
   : > "$CALLS"
   FAKE_BAD="jq" FAKE_RUN_HOOK="$BATS_TEST_DIRNAME/../apt-record" run "$SCRIPT"
   [ "$status" -eq 0 ]
-  # Assert: jq must still be in the list after start 2
-  grep -q "jq" "$KYOUBE_STATE_DIR/apt-packages.txt"
-  [ "$(cat "$KYOUBE_STATE_DIR/apt-restore.status")" = "failed 100" ]
+  [ "$(cat "$KYOUBE_STATE_DIR/apt-packages.txt")" = "$(printf 'ffmpeg\njq\ntree')" ]
   [ "$(cat "$KYOUBE_STATE_DIR/apt-pending.txt")" = "jq" ]
+  [ "$(cat "$KYOUBE_STATE_DIR/apt-restore.status")" = "failed 100" ]
 }
 
 @test "bulk success with n > 0 missing packages removes pre-existing apt-pending.txt and reports ok n" {
