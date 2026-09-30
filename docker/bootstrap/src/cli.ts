@@ -1,5 +1,6 @@
 import { runDoctor } from "./commands/doctor.js";
 import { runEnsurePlugins } from "./commands/ensure-plugins.js";
+import { runHarness } from "./commands/harness.js";
 import { runSetup } from "./commands/setup.js";
 import { runWriteConfig } from "./commands/write-config.js";
 
@@ -42,7 +43,11 @@ Usage: kyoube <command> [flags]
 Commands:
   setup                 One-time: log in as instance admin (browser approval), store a board key, install plugins
   ensure-plugins        Install/upgrade Kyoube plugins into the core host (flags: --watch, --api-key <key>, --api-base <url>)
-  doctor                Check config, databases, plugins, and the claude/pi/hermes CLIs
+  doctor                Check config, databases, plugins, harnesses and kept system packages
+  harness list          Show the agent harness CLIs on PATH, their versions and where they come from
+  harness install <name>  Install a harness with its official installer (claude, codex, hermes, pi, gemini, opencode, kimi)
+  harness which <name>  Print where a harness CLI is (exit 1 when it is not installed)
+  harness missing <adapterType...>  Print the harnesses those adapter types need that are not installed
   write-config          (internal) Render /kyoubeai/kyoube/config.json from the environment
 `;
 
@@ -59,6 +64,8 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
       return runEnsurePlugins(parsed.flags, env);
     case "doctor":
       return runDoctor(env);
+    case "harness":
+      return runHarness(parsed.positionals, env);
     case "write-config":
       return runWriteConfig(env);
     default:
