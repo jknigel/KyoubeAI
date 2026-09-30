@@ -101,6 +101,7 @@ save_state() {
   env_set "$STATE" to "$3"
   env_set "$STATE" "done" 0
   env_set "$STATE" ref "$ref"
+  env_set "$STATE" head "$(git rev-parse HEAD)"
   env_set "$STATE" branch "$(git symbolic-ref --quiet --short HEAD || true)"
   env_set "$STATE" image "$(env_get .env KYOUBE_IMAGE)"
   env_set "$STATE" version "$(env_get .env KYOUBE_VERSION)"
@@ -173,22 +174,26 @@ image_ref() {
 # runs_source_build [FILE]: true when FILE (default .env) selects the image `docker compose build` makes, kyoubeai:dev.
 runs_source_build() { [ "$(image_ref "${1:-.env}")" = kyoubeai:dev ]; }
 
-# is_ancestor A B: true when commit A is part of B's history (or is B). A rollback point has to be, or the "update"
-# would put older or unrelated code on data a newer release migrated.
+# is_ancestor A B: true when commit A is part of B's history (or is B). The code a stack runs has to be, or the
+# "update" would put older or unrelated code on data a newer release migrated.
 is_ancestor() { git merge-base --is-ancestor "$1" "$2" 2>/dev/null; }
 
-# previous_commit [TAG]: the commit to record as the rollback point for a stack that runs behind this checkout: TAG's
-# commit when that tag exists here, else where HEAD was before it last moved. Prints nothing (status 1) when neither is
-# a commit other than HEAD. The caller still has to check it with is_ancestor.
-previous_commit() {
-  local ref=""
-  if [ -n "${1:-}" ]; then ref="$(git rev-parse -q --verify "refs/tags/$1^{commit}" 2>/dev/null || true)"; fi
-  if [ -z "$ref" ]; then
-    ref="$(git rev-parse -q --verify 'HEAD@{1}^{commit}' 2>/dev/null || true)"
-    [ "$ref" != "$(git rev-parse HEAD)" ] || ref=""
-  fi
-  [ -n "$ref" ] || return 1
+# earlier_commit: where HEAD was before it last moved, when that is an earlier commit of this checkout; else status 1.
+earlier_commit() {
+  local ref
+  ref="$(git rev-parse -q --verify 'HEAD@{1}^{commit}' 2>/dev/null || true)"
+  [ -n "$ref" ] && [ "$ref" != "$(git rev-parse HEAD)" ] && is_ancestor "$ref" HEAD || return 1
   printf '%s\n' "$ref"
+}
+
+# build_record: prints the commit .kyoube/built-commit says the image here was built from, when the record describes
+# this very image (same id) and the commit is still in this repository; status 1 otherwise.
+build_record() {
+  local id commit
+  id="$(docker image inspect -f '{{.Id}}' "$(image_ref)" 2>/dev/null </dev/null || true)"
+  commit="$(env_get "$KYOUBE_BUILT" commit)"
+  [ -n "$id" ] && [ -n "$commit" ] && [ "$(env_get "$KYOUBE_BUILT" image)" = "$id" ] && git cat-file -e "$commit^{commit}" 2>/dev/null || return 1
+  printf '%s\n' "$commit"
 }
 
 # iso_epoch TIMESTAMP: seconds since the epoch of an RFC 3339 time (2026-09-30T12:34:56.789Z, 2026-09-30T14:34:56+02:00);
@@ -217,25 +222,13 @@ iso_epoch() {
     }'
 }
 
-# source_image_behind: status 0 when the source image (kyoubeai:dev) is missing or behind this checkout, with BEHIND_WHY
-# set to the reason and, when .kyoube/built-commit names the commit the image was built from, BEHIND_POINT set to it.
-# Status 1 when the image is as new as the checkout, or when that cannot be told.
-# The record counts only while it names this very image (an image built by hand since is not covered by it); without
-# one the image's creation time is compared with the checkout's commit time.
+# source_image_behind: status 0 when the source image (kyoubeai:dev) is missing or was built before this checkout's
+# commit, with BEHIND_WHY set to the reason; status 1 when it is as new, or when the two times cannot be compared.
 source_image_behind() {
-  local ref id rec_commit rec_id built committed
-  BEHIND_WHY=""; BEHIND_POINT=""
+  local ref built committed
   ref="$(image_ref)"
-  id="$(docker image inspect -f '{{.Id}}' "$ref" 2>/dev/null </dev/null)" \
+  built="$(docker image inspect -f '{{.Created}}' "$ref" 2>/dev/null </dev/null)" \
     || { BEHIND_WHY="the image $ref is not on this machine; rebuilding"; return 0; }
-  rec_commit="$(env_get "$KYOUBE_BUILT" commit)"; rec_id="$(env_get "$KYOUBE_BUILT" image)"
-  if [ -n "$rec_commit" ] && [ -n "$id" ] && [ "$rec_id" = "$id" ] && git cat-file -e "$rec_commit^{commit}" 2>/dev/null; then
-    [ "$rec_commit" != "$(git rev-parse HEAD)" ] || return 1
-    BEHIND_WHY="the image was built from $(git rev-parse --short "$rec_commit"), not from this checkout; rebuilding"
-    BEHIND_POINT="$rec_commit"
-    return 0
-  fi
-  built="$(docker image inspect -f '{{.Created}}' "$ref" 2>/dev/null </dev/null || true)"
   built="$(iso_epoch "$built")"
   committed="$(iso_epoch "$(git log -1 --format=%cI HEAD 2>/dev/null || true)")"
   if [ -n "$built" ] && [ -n "$committed" ] && [ "$built" -lt "$committed" ]; then
@@ -245,8 +238,64 @@ source_image_behind() {
   return 1
 }
 
+# stack_position MODE [TARGET]: the commit the running stack's code came from, read once before anything changes (MODE is
+# release or edge). What .env selects is what runs, whatever this checkout is on: a release's tag; the commit a source
+# build was recorded as built from; failing that a guess from where this checkout was before. Sets POS_COMMIT, POS_LABEL
+# and POS_KIND (release | record | guess); for a guess in edge mode POS_STALE=1 (with BEHIND_WHY) when the image is
+# missing or older than the checkout. Dies when the code cannot be told.
+stack_position() {
+  local mode="$1" target="${2:-the release}" stack tag
+  POS_KIND=""; POS_COMMIT=""; POS_LABEL=""; POS_STALE=0; BEHIND_WHY=""
+  stack="$(env_get .env KYOUBE_VERSION)"
+  if is_release_version "$stack"; then
+    tag="v$stack"
+    git rev-parse -q --verify "refs/tags/$tag^{commit}" >/dev/null 2>&1 || git fetch --tags --quiet origin 2>/dev/null || true
+    POS_COMMIT="$(git rev-parse -q --verify "refs/tags/$tag^{commit}" 2>/dev/null || true)"
+    [ -n "$POS_COMMIT" ] \
+      || die "this stack runs $tag (KYOUBE_VERSION in .env), but git has no tag $tag here, so the code it runs cannot be found; nothing was changed. Run git fetch --tags; if origin has no such tag, set KYOUBE_VERSION in .env to the release the stack really runs (docker compose images shows it), then run ./update.sh again"
+    POS_KIND=release; POS_LABEL="$tag"
+  elif runs_source_build; then
+    POS_LABEL="source build"
+    if POS_COMMIT="$(build_record)"; then
+      POS_KIND=record
+    else
+      POS_KIND=guess
+      if [ "$mode" = edge ]; then
+        # An image at least as new as the checkout was built from it; an older one, from where this branch was before.
+        if source_image_behind; then POS_STALE=1; POS_COMMIT="$(earlier_commit || true)"; fi
+        [ -n "$POS_COMMIT" ] || POS_COMMIT="$(git rev-parse HEAD)"
+      else
+        POS_COMMIT="$(earlier_commit || true)"
+        [ -n "$POS_COMMIT" ] \
+          || die "this stack runs a source build, and nothing shows which code it was built from (there is no record of the image here in $KYOUBE_BUILT, and this checkout has no earlier position to go by), so there is no rollback point to record; nothing was changed. If it was built from older code, check out that commit (git checkout <commit>), then git checkout $target, then run ./update.sh again. To keep running from source instead: git checkout <your branch>, then ./update.sh --edge"
+      fi
+    fi
+  else
+    die "KYOUBE_VERSION=$stack and KYOUBE_IMAGE=$(env_get .env KYOUBE_IMAGE) in .env are neither a release (x.y.z) nor the source build (kyoubeai:dev), so update.sh cannot tell which code the stack runs; nothing was changed. Set KYOUBE_VERSION in .env to the release the stack runs (for example KYOUBE_VERSION=1.1.0 with KYOUBE_IMAGE=$KYOUBE_IMAGE_DEFAULT), then run ./update.sh again (./install.sh instead moves this install to the newest release, without a backup)"
+  fi
+}
+
+# require_forward NEW_COMMIT NEW_LABEL MODE: databases only migrate forward, so the code the stack runs (stack_position)
+# has to be part of the history of the code the update moves to. Dies, before anything is changed, when it is not.
+require_forward() {
+  local new="$1" label="$2" mode="$3" short fix
+  is_ancestor "$POS_COMMIT" "$new" && return 0
+  short="$(git rev-parse --short "$POS_COMMIT")"
+  case "$POS_KIND" in
+    release)
+      if [ "$mode" = edge ]; then
+        fix="Check out a branch that contains $POS_LABEL (git branch -a --contains $POS_LABEL lists them), then run ./update.sh --edge there"
+      else
+        fix="Check out $POS_LABEL (git checkout $POS_LABEL) and run ./update.sh --version <x.y.z> with a release that contains it (releases: https://github.com/jknigel/KyoubeAI/releases)"
+      fi ;;
+    record) fix="Check out the branch the stack was built from (git branch --contains $short lists them), then run ./update.sh --edge there" ;;
+    *) fix="Check out the commit the stack was built from (git checkout <commit>), then update again from there" ;;
+  esac
+  die "the code this stack runs ($POS_LABEL, $short) is not part of $label's history, so the update could put older or different code on data that newer code has migrated; nothing was changed. $fix"
+}
+
 update_release() {
-  local want="$1" current target from="" image_repo new_ref point="" stack here
+  local want="$1" current target from image_repo new_ref point stack newcode here
   # A commit can carry several tags (v1.2.0 and v1.2.0-rc1); only a release tag counts.
   current="$(git tag --points-at HEAD 2>/dev/null | latest_release || true)"
   git fetch --tags --quiet origin || die "could not fetch releases from origin; check the network and run ./update.sh again"
@@ -261,7 +310,7 @@ update_release() {
   if git tag --points-at HEAD 2>/dev/null | grep -Fx "$target" >/dev/null; then current="$target"; fi
   here="${current:-$(git rev-parse --short HEAD)}"
   if [ "$current" = "$target" ]; then
-    :  # nothing to check out; what the stack runs is checked below
+    :  # nothing to check out
   elif [ -n "$current" ]; then
     version_ge "${target#v}" "${current#v}" \
       || die "$target is older than $current; databases only migrate forward. To go back after an update: ./update.sh --rollback"
@@ -276,34 +325,22 @@ update_release() {
   if is_release_version "$stack"; then
     version_ge "${target#v}" "$stack" \
       || die "$target is older than v$stack, the release this stack runs; databases only migrate forward. Check out v$stack or a newer release (git fetch --tags, then git checkout v$stack) and run ./update.sh again"
-    if [ "$current" = "$target" ] && [ "$stack" = "${target#v}" ]; then say "already on $target"; return; fi
-    # The rollback point is the code the stack runs: its release tag, or where this checkout was before it moved.
-    from="v$stack"
-    if [ "v$stack" != "$current" ]; then
-      point="$(previous_commit "$from" || true)"
-      # Without the tag, where this checkout was before stands in for it, but only when that is an earlier commit of this
-      # checkout (the reflog also remembers a checkout that came back from a newer release).
-      if [ -n "$point" ] && ! git rev-parse -q --verify "refs/tags/$from" >/dev/null && ! is_ancestor "$point" HEAD; then point=""; fi
-      [ -n "$point" ] \
-        || die "this stack runs $from and this checkout is at $here, but git has no tag $from and no earlier position of this checkout to record as the rollback point; nothing was changed. Check out the code the stack runs (git checkout <the commit it was installed from>), then git checkout $target, then run ./update.sh again"
-      is_ancestor "$point" "refs/tags/$target" \
-        || die "$from (at $(git rev-parse --short "$point")) is not part of $target's history, so $target may not contain everything the database of this stack has been through; nothing was changed. Update to a release that contains $from (./update.sh --version <x.y.z>; releases: https://github.com/jknigel/KyoubeAI/releases)"
-      say "    the stack runs $from; this checkout is at $here"
-    fi
-  elif [ "$current" = "$target" ]; then
-    case "$stack" in
-      ""|dev) ;;
-      *) die "this checkout is on $target, but KYOUBE_VERSION=$stack in .env is neither a release (x.y.z) nor dev (a source build), so update.sh cannot tell what the stack runs; nothing was changed. Set KYOUBE_VERSION in .env to the release the stack runs, then run ./update.sh again (./install.sh instead moves this install to $target without a backup)" ;;
-    esac
-    # A source build of unknown code: where this checkout was before is the best guess, and only if $target contains it.
-    from="source build"
-    point="$(previous_commit)" \
-      || die "this stack runs a source build and this checkout is already on $target, but git has no earlier position of this checkout to record as the rollback point; nothing was changed. Check out the commit the stack was built from (git checkout <commit>), then git checkout $target, then run ./update.sh again"
-    is_ancestor "$point" "refs/tags/$target" \
-      || die "this stack runs a source build, and where this checkout was before ($(git rev-parse --short "$point")) is not part of $target's history, so the build may contain newer code than $target and its migrations; nothing was changed. To keep running from source: git checkout <your branch>, then ./update.sh --edge. If the stack was built from older code, check out that commit (git checkout <commit>), then git checkout $target, then run ./update.sh again"
-    say "    this checkout is on $target, but the stack runs a source build"
   fi
-  [ -n "$from" ] || from="${current:-$(git rev-parse --short HEAD)}"
+  stack_position release "$target"
+  newcode="$(git rev-parse "refs/tags/$target^{commit}")"
+  if [ "$POS_COMMIT" = "$newcode" ]; then
+    # The stack already runs this code: nothing to back up or restart; only the checkout may need to match.
+    if ! git tag --points-at HEAD 2>/dev/null | grep -Fx "$target" >/dev/null; then
+      git -c advice.detachedHead=false checkout --quiet "$target" \
+        || die "the stack already runs $target, but this checkout could not be switched to it; nothing else was changed. Fix what git reported (git status), then run ./update.sh again"
+      say "    moved this checkout to $target"
+    fi
+    say "already on $target"
+    return
+  fi
+  require_forward "$newcode" "$target" release
+  from="$POS_LABEL"; point="$POS_COMMIT"
+  [ "$from" = "$current" ] || say "    the stack runs $from; this checkout is at $here"
   image_repo="$(release_image_repo)"
   [ "$image_repo" = "$(env_get .env KYOUBE_IMAGE)" ] \
     || say "    this install built its own image; from now on it uses the published one (./update.sh --edge keeps building from source)"
@@ -338,56 +375,60 @@ release_apply() {
 }
 
 update_edge() {
-  local branch upstream behind from to rebuild=0 point=""
-  BEHIND_WHY=""; BEHIND_POINT=""
+  local branch upstream behind from to newcode newlabel why=""
   branch="$(git symbolic-ref --quiet --short HEAD)" || die "--edge follows a branch, but this checkout is on a release tag; git checkout main first"
   upstream="$(git rev-parse --abbrev-ref '@{u}' 2>/dev/null)" || die "branch $branch has no upstream to pull from; git branch --set-upstream-to origin/$branch"
   git fetch --quiet || die "could not fetch from origin; check the network and run ./update.sh --edge again"
   behind="$(git rev-list --count "HEAD..@{u}")" || die "could not compare $branch with $upstream; run git status"
-  # An install on a published image gets one rebuild from source even when the branch has nothing new.
-  runs_source_build || rebuild=1
-  if [ "$behind" = 0 ] && [ "$rebuild" = 0 ]; then
-    # The checkout can be newer than the image it runs (git pull without a rebuild, the first update from 1.0).
-    source_image_behind || { say "already up to date with $upstream"; return; }
-  fi
-  from="$branch@$(git rev-parse --short HEAD)"
+  # The code the update moves to, and the code the stack runs; the first has to contain the second.
+  if [ "$behind" != 0 ]; then newcode="$(git rev-parse '@{u}')"; newlabel="$upstream"; else newcode="$(git rev-parse HEAD)"; newlabel="this checkout"; fi
+  stack_position edge
+  case "$POS_KIND" in
+    record)
+      # The image is exactly as new as the checkout when it was built from the commit the update moves to.
+      if [ "$behind" = 0 ]; then
+        [ "$POS_COMMIT" != "$newcode" ] || { say "already up to date with $upstream"; return; }
+        why="the image was built from $(git rev-parse --short "$POS_COMMIT"), not from this checkout; rebuilding"
+      fi ;;
+    guess)
+      if [ "$behind" = 0 ]; then
+        [ "$POS_STALE" = 1 ] || { say "already up to date with $upstream"; return; }
+        why="$BEHIND_WHY"
+      fi ;;
+  esac
+  # A published image gets one rebuild from source even when the branch has nothing new.
+  from="$branch@$(git rev-parse --short "$POS_COMMIT")"
   if [ "$behind" != 0 ]; then
     git merge-base --is-ancestor HEAD '@{u}' \
       || die "branch $branch has diverged from $upstream (it has commits $upstream lacks, and the other way round); nothing was changed. Rebase it onto $upstream or merge $upstream into it (git status), then run ./update.sh --edge again"
     to="$branch@$(git rev-parse --short '@{u}')"
-    say "Update KyoubeAI $from -> $upstream ($behind new commits), then rebuild from source"
-  elif [ -n "${BEHIND_WHY:-}" ]; then
-    to="$from"
-    # The checkout already holds the new code. What the image was built from is in .kyoube/built-commit, or else
-    # guessed from where this branch was before; either way it has to be older than this checkout, or rebuilding
-    # would be a downgrade.
-    point="$BEHIND_POINT"
-    if [ -n "$point" ]; then
-      is_ancestor "$point" HEAD \
-        || die "the image here was built from $(git rev-parse --short "$point"), which is not part of this checkout's history ($branch is at $(git rev-parse --short HEAD)), so rebuilding could put older code on data that newer code has migrated; nothing was changed. Check out the branch the stack was built from (git branch --contains $(git rev-parse --short "$point") lists them), then run ./update.sh --edge again"
-    elif point="$(previous_commit)"; then
-      is_ancestor "$point" HEAD \
-        || die "where $branch was before ($(git rev-parse --short "$point")) is not part of its history, so there is no telling which code the image here was built from, and rebuilding $branch could put older code on data that newer code has migrated; nothing was changed. Check out the commit the stack was built from (git checkout <commit>), then back to the branch (git checkout $branch), then run ./update.sh --edge again"
-    fi
-    if [ -n "$point" ]; then from="$branch@$(git rev-parse --short "$point")"; fi
-    say "Update KyoubeAI $from -> $to: no new commits, but $BEHIND_WHY"
-    [ -n "$point" ] || say "    no earlier commit of this branch is known here, so ./update.sh --rollback returns the data but not older code"
   else
-    to="$from"
-    say "Update KyoubeAI $from -> $from: no new commits, but this install runs a published image; it will be rebuilt from source"
+    to="$branch@$(git rev-parse --short HEAD)"
+  fi
+  require_forward "$newcode" "$newlabel" edge
+  if [ "$behind" != 0 ]; then
+    say "Update KyoubeAI $from -> $upstream ($behind new commits), then rebuild from source"
+  elif [ -n "$why" ]; then
+    say "Update KyoubeAI $from -> $to: no new commits, but $why"
+  else
+    say "Update KyoubeAI $from -> $to: no new commits, but this install runs a published image; it will be rebuilt from source"
+  fi
+  if [ "$POS_KIND" = guess ] && [ "$POS_STALE" = 1 ] && [ "$POS_COMMIT" = "$(git rev-parse HEAD)" ]; then
+    say "    no earlier commit of this branch is known here, so ./update.sh --rollback returns the data but not older code"
   fi
   confirm "A backup is taken first. Continue?" || { say "Nothing was changed."; exit 1; }
   USED="$(harness_types_in_use)"
   run_backup
-  save_state edge "$from" "$to" "$point"
+  save_state edge "$from" "$to" "$POS_COMMIT"
   edge_apply "$from"
 }
 
 # edge_apply FROM: everything after the backup; safe to run again (resume_update does).
 edge_apply() {
-  local from="$1" pending
-  # The fast-forward is still to do while the branch sits where the update started.
-  if [ "$(git rev-parse HEAD)" = "$(env_get "$STATE" ref)" ]; then
+  local from="$1" pending started
+  # The fast-forward is still to do while the branch sits where the update started (ref is the rollback point, which can be earlier).
+  started="$(env_get "$STATE" head)"; [ -n "$started" ] || started="$(env_get "$STATE" ref)"
+  if [ "$(git rev-parse HEAD)" = "$started" ]; then
     pending="$(git rev-list --count "HEAD..@{u}")" || die "could not compare this branch with its upstream; run git status"
     if [ "$pending" != 0 ]; then
       git merge --ff-only --quiet '@{u}' \

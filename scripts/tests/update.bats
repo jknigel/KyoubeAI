@@ -306,40 +306,29 @@ came_from() {
   [ ! -e "$INST/.kyoube/update-state" ]
 }
 
-@test "the first update from 1.0 records where the checkout was before when the old release has no tag here" {
+@test "the first update from 1.0 is refused when the old release has no tag here, even if the checkout has an earlier position" {
+  # the code the stack runs is found by the release's tag; a guess from the reflog is not good enough
   came_from "$(git -C "$INST" rev-parse v1.2.0~1)"
   printf 'KYOUBE_VERSION=1.0.0\nKYOUBE_IMAGE=ghcr.io/jknigel/kyoubeai\nCOMPOSE_PROJECT_NAME=inst\n' > "$INST/.env"
   run_update --yes
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"Update KyoubeAI v1.0.0 -> v1.2.0"* ]]
-  [ "$(grep '^from=' "$INST/.kyoube/update-state")" = "from=v1.0.0" ]
-  [ "$(grep '^ref=' "$INST/.kyoube/update-state")" = "ref=$(git -C "$INST" rev-parse v1.2.0~1)" ]
-  [ "$(grep '^done=' "$INST/.kyoube/update-state")" = "done=1" ]
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"git has no tag v1.0.0 here"* ]]
+  [[ "$output" == *"git fetch --tags"* ]]
+  nothing_happened
+  [ ! -e "$INST/.kyoube/update-state" ]
 }
 
-@test "the first update from 1.0 is refused before the backup when no rollback point can be recorded" {
+@test "the first update from 1.0 is refused before the backup when the old release's tag cannot be found" {
   printf 'KYOUBE_VERSION=1.0.0\nKYOUBE_IMAGE=ghcr.io/jknigel/kyoubeai\nCOMPOSE_PROJECT_NAME=inst\n' > "$INST/.env"
   cp "$INST/.env" "$BATS_TEST_TMPDIR/env-before"
   run_update --yes
   [ "$status" -ne 0 ]
-  [[ "$output" == *"rollback point"* ]]
+  [[ "$output" == *"git has no tag v1.0.0 here"* ]]
   [[ "$output" == *"nothing was changed"* ]]
-  # the sequence that works: the code the stack runs, then the release, then update.sh
-  [[ "$output" == *"git checkout <the commit it was installed from>), then git checkout v1.2.0, then run ./update.sh again"* ]]
+  [[ "$output" == *"set KYOUBE_VERSION in .env to the release the stack really runs"* ]]
   nothing_happened
   [ ! -e "$INST/.kyoube/update-state" ]
   cmp "$INST/.env" "$BATS_TEST_TMPDIR/env-before"
-}
-
-@test "the first update from 1.0 does not take a newer position of the checkout for the old release's code" {
-  # no tag for 1.0.0 here, and the only earlier position of the checkout (v1.2.0) is newer than where it is now (v1.1.0)
-  git -C "$INST" -c advice.detachedHead=false checkout -q v1.1.0
-  printf 'KYOUBE_VERSION=1.0.0\nKYOUBE_IMAGE=ghcr.io/jknigel/kyoubeai\nCOMPOSE_PROJECT_NAME=inst\n' > "$INST/.env"
-  run_update --yes
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"no earlier position of this checkout to record as the rollback point"* ]]
-  nothing_happened
-  [ ! -e "$INST/.kyoube/update-state" ]
 }
 
 @test "a checkout on an older release than the one the stack runs is refused as a downgrade, before the backup" {
@@ -507,7 +496,7 @@ release_1_3_0() {
   git -C "$INST" -c advice.detachedHead=false checkout -q v1.2.0
   run_update --yes
   [ "$status" -ne 0 ]
-  [[ "$output" == *"is not part of v1.2.0's history"* ]]
+  [[ "$output" == *"nothing shows which code it was built from"* ]]
   [[ "$output" == *"./update.sh --edge"* ]]
   nothing_happened
   [ ! -e "$INST/.kyoube/update-state" ]
@@ -520,17 +509,26 @@ release_1_3_0() {
   grep -Fx "compose build app" "$STUB_LOG"
 }
 
-@test "a stack on a release that v1.2.0 does not contain is not moved onto v1.2.0" {
+@test "a stack on a release that v1.2.0 does not contain is not moved onto v1.2.0, and the fix the message names works" {
   git -C "$SEED" checkout -q -b side v1.1.0
-  git -C "$SEED" commit -q --allow-empty -m hotfix && git -C "$SEED" tag v1.1.1
+  git -C "$SEED" commit -q --allow-empty -m hotfix-a && git -C "$SEED" tag v1.1.1
+  git -C "$SEED" commit -q --allow-empty -m hotfix-b && git -C "$SEED" tag v1.1.2
   git -C "$SEED" checkout -q main
   printf 'KYOUBE_VERSION=1.1.1\nKYOUBE_IMAGE=ghcr.io/jknigel/kyoubeai\nCOMPOSE_PROJECT_NAME=inst\n' > "$INST/.env"
   run_update --yes
   [ "$status" -ne 0 ]
-  [[ "$output" == *"v1.1.1"*"is not part of v1.2.0's history"* ]]
+  [[ "$output" == *"(v1.1.1,"*") is not part of v1.2.0's history"* ]]
+  [[ "$output" == *"git checkout v1.1.1"* ]]
   [[ "$output" == *"./update.sh --version <x.y.z>"* ]]
   nothing_happened
   [ ! -e "$INST/.kyoube/update-state" ]
+  # the fix it names: the release the stack runs, then a release that contains it
+  git -C "$INST" -c advice.detachedHead=false checkout -q v1.1.1
+  run_update --version 1.1.2 --yes
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Update KyoubeAI v1.1.1 -> v1.1.2"* ]]
+  [ "$(grep '^ref=' "$INST/.kyoube/update-state")" = "ref=$(git -C "$INST" rev-parse v1.1.1)" ]
+  [ "$(grep '^done=' "$INST/.kyoube/update-state")" = "done=1" ]
 }
 
 # hotfix_upstream: origin has a maintenance branch cut from v1.1.0 (it lacks what v1.2.0 migrated), committed later than anything else.
@@ -541,19 +539,16 @@ hotfix_upstream() {
   git -C "$INST" fetch -q
 }
 
-@test "update.sh --edge on an older branch than the image was built from is refused (guessing from the reflog)" {
+@test "update.sh --edge with no record of the build cannot tell an older branch from the one the image was built from: it rebuilds and says rollback returns no older code" {
   hotfix_upstream
   printf 'KYOUBE_VERSION=dev\nKYOUBE_IMAGE=kyoubeai\nCOMPOSE_PROJECT_NAME=inst\n' > "$INST/.env"
   git -C "$INST" checkout -q hotfix
-  head_before="$(git -C "$INST" rev-parse HEAD)"
   STUB_IMAGE_CREATED=2030-01-01T00:00:00Z run_update --edge --yes
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"is not part of its history"* ]]
-  [[ "$output" == *"nothing was changed"* ]]
-  [[ "$output" == *"git checkout <commit>"* ]]
-  nothing_happened
-  [ ! -e "$INST/.kyoube/update-state" ]
-  [ "$(git -C "$INST" rev-parse HEAD)" = "$head_before" ]
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"the image is older than this checkout; rebuilding"* ]]
+  [[ "$output" == *"returns the data but not older code"* ]]
+  [ "$(grep '^ref=' "$INST/.kyoube/update-state")" = "ref=$(git -C "$INST" rev-parse HEAD)" ]
+  [ "$(git -C "$INST" rev-parse HEAD)" = "$(git -C "$INST" rev-parse origin/hotfix)" ]
 }
 
 @test "update.sh --edge on an older branch than the image was built from is refused (from the record of the build)" {
@@ -565,25 +560,25 @@ hotfix_upstream() {
   head_before="$(git -C "$INST" rev-parse HEAD)"
   STUB_IMAGE_CREATED=2000-01-01T00:00:00Z run_update --edge --yes
   [ "$status" -ne 0 ]
-  [[ "$output" == *"the image here was built from $(git -C "$INST" rev-parse --short main)"* ]]
-  [[ "$output" == *"which is not part of this checkout's history"* ]]
-  [[ "$output" == *"git branch --contains"* ]]
+  [[ "$output" == *"the code this stack runs (source build, $(git -C "$INST" rev-parse --short main)) is not part of this checkout's history"* ]]
+  [[ "$output" == *"git branch --contains $(git -C "$INST" rev-parse --short main)"* ]]
   [ "$(backups_taken)" = 1 ]
   [ "$(grep -c '^compose build' "$STUB_LOG")" = 1 ]
   [ "$(git -C "$INST" rev-parse HEAD)" = "$head_before" ]
 }
 
-@test "update.sh --edge after a visit to another branch never moves the branch onto that branch's commit" {
+@test "update.sh --edge after a visit to another branch never moves the branch onto that branch's commit, not even by a rollback" {
   printf 'KYOUBE_VERSION=dev\nKYOUBE_IMAGE=kyoubeai\nCOMPOSE_PROJECT_NAME=inst\n' > "$INST/.env"
   git -C "$INST" checkout -q -b experiment v1.1.0
   git -C "$INST" commit -q --allow-empty -m experiment
   git -C "$INST" checkout -q main
   main_before="$(git -C "$INST" rev-parse main)"
+  # the reflog's last position (the experiment branch) is not an earlier commit of main, so it is not used as one
   STUB_IMAGE_CREATED=2000-01-01T00:00:00Z run_update --edge --yes
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"is not part of its history"* ]]
-  nothing_happened
-  [ ! -e "$INST/.kyoube/update-state" ]
+  [ "$status" -eq 0 ]
+  [ "$(grep '^ref=' "$INST/.kyoube/update-state")" = "ref=$main_before" ]
+  run_update --rollback --yes
+  [ "$status" -eq 0 ]
   [ "$(git -C "$INST" rev-parse main)" = "$main_before" ]
 }
 
@@ -670,9 +665,133 @@ hotfix_upstream() {
     printf 'KYOUBE_VERSION=%s\nKYOUBE_IMAGE=ghcr.io/jknigel/kyoubeai\nCOMPOSE_PROJECT_NAME=inst\n' "$value" > "$INST/.env"
     run_update --yes
     [ "$status" -ne 0 ]
-    [[ "$output" == *"KYOUBE_VERSION=$value in .env is neither a release (x.y.z) nor dev"* ]]
+    [[ "$output" == *"KYOUBE_VERSION=$value and KYOUBE_IMAGE=ghcr.io/jknigel/kyoubeai in .env are neither a release (x.y.z) nor the source build"* ]]
     [[ "$output" == *"./install.sh"* ]]
     [[ "$output" != *"already on"* ]]
     nothing_happened
   done
+}
+
+# One invariant: the code the stack runs (its release's tag, or the commit a source build was recorded as built from)
+# has to be part of the history of the code the update moves to, on every path.
+
+# recorded_source_build: the stack is a source build of main past v1.2.0 that update.sh recorded (published 1.1.0 -> --edge).
+recorded_source_build() {
+  git -C "$SEED" commit -q --allow-empty -m after-1.2.0-with-new-migrations
+  git -C "$INST" pull -q
+  printf 'KYOUBE_VERSION=1.1.0\nKYOUBE_IMAGE=ghcr.io/jknigel/kyoubeai\nCOMPOSE_PROJECT_NAME=inst\n' > "$INST/.env"
+  run_update --edge --yes
+  [ "$status" -eq 0 ]
+  built="$(git -C "$INST" rev-parse HEAD)"
+  [ "$(sed -n 's/^commit=//p' "$INST/.kyoube/built-commit")" = "$built" ]
+  cp "$INST/.kyoube/update-state" "$BATS_TEST_TMPDIR/state-before"
+  cp "$INST/.env" "$BATS_TEST_TMPDIR/env-before"
+}
+
+# stayed_put: the refused run took no second backup, built nothing more, pulled nothing, and kept the state and .env.
+stayed_put() {
+  [ "$(backups_taken)" = 1 ]
+  [ "$(grep -c '^compose build' "$STUB_LOG")" = 1 ]
+  ! grep '^pull' "$STUB_LOG"
+  cmp "$INST/.kyoube/update-state" "$BATS_TEST_TMPDIR/state-before"
+  cmp "$INST/.env" "$BATS_TEST_TMPDIR/env-before"
+}
+
+@test "a recorded source build newer than the release is not replaced by the release when the checkout was moved back to an older one" {
+  recorded_source_build
+  git -C "$INST" -c advice.detachedHead=false checkout -q v1.1.0
+  run_update --yes
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"the code this stack runs (source build, $(git -C "$INST" rev-parse --short "$built")) is not part of v1.2.0's history"* ]]
+  [[ "$output" == *"./update.sh --edge"* ]]
+  stayed_put
+  [ "$(git -C "$INST" rev-parse HEAD)" = "$(git -C "$INST" rev-parse v1.1.0)" ]
+  # the fix it names: the branch the stack was built from, then --edge (nothing to do: the image was built from it)
+  git -C "$INST" checkout -q main
+  run_update --edge --yes
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"already up to date"* ]]
+  stayed_put
+}
+
+@test "a recorded source build newer than the release is not replaced by the release after a hop to an older release and back" {
+  recorded_source_build
+  git -C "$INST" -c advice.detachedHead=false checkout -q v1.1.0
+  git -C "$INST" -c advice.detachedHead=false checkout -q v1.2.0
+  run_update --yes
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"is not part of v1.2.0's history"* ]]
+  stayed_put
+  [ "$(git -C "$INST" rev-parse HEAD)" = "$(git -C "$INST" rev-parse v1.2.0)" ]
+}
+
+@test "update.sh --edge does not rebuild an older upstream branch over an image that was built from a newer one" {
+  hotfix_upstream
+  printf 'KYOUBE_VERSION=dev\nKYOUBE_IMAGE=kyoubeai\nCOMPOSE_PROJECT_NAME=inst\n' > "$INST/.env"
+  STUB_IMAGE_CREATED=2000-01-01T00:00:00Z run_update --edge --yes
+  [ "$status" -eq 0 ]
+  cp "$INST/.kyoube/update-state" "$BATS_TEST_TMPDIR/state-before"
+  cp "$INST/.env" "$BATS_TEST_TMPDIR/env-before"
+  git -C "$INST" checkout -q hotfix
+  # upstream's hotfix branch gets a commit: the update would fast-forward it and rebuild older code
+  git -C "$SEED" checkout -q hotfix
+  git -C "$SEED" commit -q --allow-empty -m hotfix-2
+  git -C "$SEED" checkout -q main
+  head_before="$(git -C "$INST" rev-parse HEAD)"
+  STUB_IMAGE_CREATED=2000-01-01T00:00:00Z run_update --edge --yes
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"is not part of origin/hotfix's history"* ]]
+  [[ "$output" == *"git branch --contains"* ]]
+  stayed_put
+  [ "$(git -C "$INST" rev-parse HEAD)" = "$head_before" ]
+}
+
+@test "update.sh --edge does not rebuild a branch that lacks the published release the stack runs, and the fix it names works" {
+  hotfix_upstream
+  printf 'KYOUBE_VERSION=1.2.0\nKYOUBE_IMAGE=ghcr.io/jknigel/kyoubeai\nCOMPOSE_PROJECT_NAME=inst\n' > "$INST/.env"
+  git -C "$INST" checkout -q hotfix
+  run_update --edge --yes
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"the code this stack runs (v1.2.0,"*") is not part of this checkout's history"* ]]
+  [[ "$output" == *"git branch -a --contains v1.2.0"* ]]
+  nothing_happened
+  [ ! -e "$INST/.kyoube/update-state" ]
+  # the fix it names: a branch that contains the release, then --edge
+  git -C "$INST" checkout -q main
+  run_update --edge --yes
+  [ "$status" -eq 0 ]
+  [ "$(backups_taken)" = 1 ]
+  grep -Fx "compose build app" "$STUB_LOG"
+  [ "$(sed -n 's/^KYOUBE_VERSION=//p' "$INST/.env")" = dev ]
+}
+
+@test "a KYOUBE_VERSION that is neither a release nor dev is refused even when the checkout is not on the release" {
+  git -C "$INST" -c advice.detachedHead=false checkout -q v1.1.0
+  for value in 1.3.0-rc1 latest; do
+    printf 'KYOUBE_VERSION=%s\nKYOUBE_IMAGE=ghcr.io/jknigel/kyoubeai\nCOMPOSE_PROJECT_NAME=inst\n' "$value" > "$INST/.env"
+    run_update --yes
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"KYOUBE_VERSION=$value and KYOUBE_IMAGE=ghcr.io/jknigel/kyoubeai in .env are neither a release (x.y.z) nor the source build"* ]]
+    [[ "$output" != *"Update KyoubeAI"* ]]
+    nothing_happened
+    [ ! -e "$INST/.kyoube/update-state" ]
+    [ "$(git -C "$INST" rev-parse HEAD)" = "$(git -C "$INST" rev-parse v1.1.0)" ]
+  done
+  # and --edge refuses it too
+  git -C "$INST" checkout -q main
+  run_update --edge --yes
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"neither a release (x.y.z) nor the source build"* ]]
+}
+
+@test "a stack that already runs the release, with the checkout somewhere else, takes no backup and only moves the checkout" {
+  git -C "$INST" -c advice.detachedHead=false checkout -q v1.1.0
+  printf 'KYOUBE_VERSION=1.2.0\nKYOUBE_IMAGE=ghcr.io/jknigel/kyoubeai\nCOMPOSE_PROJECT_NAME=inst\n' > "$INST/.env"
+  run_update --yes
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"already on v1.2.0"* ]]
+  [[ "$output" != *"Update KyoubeAI"* ]]
+  nothing_happened
+  [ ! -e "$INST/.kyoube/update-state" ]
+  [ "$(git -C "$INST" rev-parse HEAD)" = "$(git -C "$INST" rev-parse v1.2.0)" ]
 }
