@@ -47,6 +47,14 @@ export interface CompanySkill {
   name: string;
 }
 
+/** One agent from `GET /api/companies/:companyId/agents`, reduced to what `kyoube` checks. */
+export interface AgentSummary {
+  id: string;
+  name: string;
+  adapterType: string;
+  status: string;
+}
+
 /** What the `skills.install` route answers: the host's resolution status for each managed skill. */
 export interface SkillInstallResult {
   data: { status: string };
@@ -62,6 +70,8 @@ export interface CoreClient {
   listCompanies(): Promise<CompanySummary[]>;
   /** `GET /api/companies/:companyId/skills` — the company's skill library. */
   listCompanySkills(companyId: string): Promise<CompanySkill[]>;
+  /** `GET /api/companies/:companyId/agents` — the company's agents (an instance-admin board key sees them all). */
+  listAgents(companyId: string): Promise<AgentSummary[]>;
   /**
    * `POST /api/plugins/kyoube.apps/api/skills/install` — asks the `kyoube.apps`
    * worker to import its two managed skills into one company's library. A
@@ -180,6 +190,19 @@ export function createCoreClient(opts: CoreClientOptions): CoreClient {
       return rows.map((row) => {
         const record = (row ?? {}) as Record<string, unknown>;
         return { slug: String(record.slug ?? ""), key: String(record.key ?? ""), name: String(record.name ?? "") };
+      });
+    },
+    async listAgents(companyId) {
+      const raw = await request<unknown>(`/api/companies/${encodeURIComponent(companyId)}/agents`);
+      const rows = Array.isArray(raw) ? raw : ((raw as { agents?: unknown[] } | null)?.agents ?? []);
+      return rows.map((row) => {
+        const record = (row ?? {}) as Record<string, unknown>;
+        return {
+          id: String(record.id ?? ""),
+          name: String(record.name ?? ""),
+          adapterType: String(record.adapterType ?? ""),
+          status: String(record.status ?? ""),
+        };
       });
     },
     async installPluginSkills(companyId) {

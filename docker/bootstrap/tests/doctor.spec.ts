@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { LEGACY_ENV_KEYS, exposureWarning, legacyEnvCheck, legacyHomeLinkCheck, skillsCheck } from "../src/commands/doctor.js";
+import {
+  LEGACY_ENV_KEYS, claudeCredentialDetail, exposureWarning, harnessChecks, harnessesInUseCheck, legacyEnvCheck, legacyHomeLinkCheck, skillsCheck, systemPackagesCheck,
+} from "../src/commands/doctor.js";
+import { HARNESSES, type HarnessStatus } from "../src/harnesses.js";
 
 const both = [{ slug: "kyoube-data", key: "plugin/kyoube-apps/kyoube-data", name: "Kyoube Data" }, { slug: "kyoube-apps", key: "plugin/kyoube-apps/kyoube-apps", name: "Kyoube Apps" }];
 
@@ -82,5 +85,89 @@ describe("legacyHomeLinkCheck", () => {
     expect(check.ok).toBe(true);
     expect(check.detail).toContain("/paperclip -> /kyoubeai");
     expect(check.detail).toContain("--check");
+  });
+});
+
+function status(name: string, binPath: string | null, version: string | null = "1.0"): HarnessStatus {
+  const spec = HARNESSES.find((entry) => entry.name === name)!;
+  return {
+    spec,
+    path: binPath,
+    origin: binPath === null ? null : binPath.startsWith("/kyoubeai/") ? "yours" : "core image",
+    version: binPath === null ? null : version,
+  };
+}
+
+describe("harnessChecks", () => {
+  it("prints one ok line per installed harness", () => {
+    const checks = harnessChecks([status("claude", "/usr/local/bin/claude"), status("pi", null), status("hermes", "/kyoubeai/.local/bin/hermes", null)]);
+    expect(checks).toEqual([
+      { name: "claude cli", ok: true, detail: "1.0 — core image (/usr/local/bin/claude)" },
+      { name: "hermes cli", ok: true, detail: "does not run — reinstall: kyoube harness install hermes — yours (/kyoubeai/.local/bin/hermes)" },
+    ]);
+  });
+
+  it("says how to install one when there is none", () => {
+    expect(harnessChecks([status("claude", null)])).toEqual([
+      { name: "harnesses", ok: true, detail: "none installed — see README → Harnesses (kyoube harness install <name>)" },
+    ]);
+  });
+});
+
+describe("harnessesInUseCheck", () => {
+  const statuses = [status("claude", "/usr/local/bin/claude"), status("pi", null), status("hermes", null)];
+
+  it("passes when every harness agents use is installed", () => {
+    expect(harnessesInUseCheck(statuses, new Map([["claude_local", 2], ["process", 1]]))).toEqual({
+      name: "harnesses in use", ok: true, detail: "claude_local (2), process (1)",
+    });
+  });
+
+  it("fails and names the install command for a missing harness", () => {
+    const check = harnessesInUseCheck(statuses, new Map([["pi_local", 6], ["hermes_local", 1]]));
+    expect(check.ok).toBe(false);
+    expect(check.detail).toBe("hermes_local (1), pi_local (6) — not installed: pi, hermes (kyoube harness install pi; kyoube harness install hermes)");
+  });
+
+  it("is quiet with no agents", () => {
+    expect(harnessesInUseCheck(statuses, new Map())).toEqual({ name: "harnesses in use", ok: true, detail: "no agents yet" });
+  });
+});
+
+describe("systemPackagesCheck", () => {
+  it("lists the kept packages", () => {
+    expect(systemPackagesCheck("ffmpeg\ntree\n", "ok 2", "/kyoubeai/.kyoube/apt-restore.log")).toEqual({
+      name: "system packages", ok: true, detail: "2 kept: ffmpeg, tree",
+    });
+  });
+
+  it("explains how to keep one when there is none", () => {
+    expect(systemPackagesCheck(null, null, "/log").detail).toBe("none kept (sudo apt install <package> keeps one across restarts and updates)");
+  });
+
+  it("fails when the reinstall at start failed, naming the log", () => {
+    const check = systemPackagesCheck("gone-in-trixie\n", "failed 100", "/kyoubeai/.kyoube/apt-restore.log");
+    expect(check.ok).toBe(false);
+    expect(check.detail).toContain("/kyoubeai/.kyoube/apt-restore.log");
+    expect(check.detail).toContain("gone-in-trixie");
+  });
+
+  it("shortens a long list", () => {
+    const list = Array.from({ length: 11 }, (_, i) => `pkg${i}`).join("\n");
+    expect(systemPackagesCheck(list, "ok 0", "/log").detail).toBe("11 kept: pkg0, pkg1, pkg2, pkg3, pkg4, pkg5, pkg6, pkg7, … (3 more)");
+  });
+});
+
+describe("claudeCredentialDetail", () => {
+  it("reports when the unmanaged login's access token runs out", () => {
+    const raw = JSON.stringify({ claudeAiOauth: { accessToken: "x", expiresAt: Date.UTC(2026, 9, 1, 12) } });
+    expect(claudeCredentialDetail(raw, "/kyoubeai/.claude/.credentials.json")).toBe(
+      "present (/kyoubeai/.claude/.credentials.json); access token until 2026-10-01T12:00:00.000Z, which Claude refreshes itself",
+    );
+  });
+
+  it("says what the file is for when it is missing, and survives a broken file", () => {
+    expect(claudeCredentialDetail(null, "/f")).toBe("not found (/f) — only agents without an AI connection use it");
+    expect(claudeCredentialDetail("{", "/f")).toBe("present but unreadable (/f)");
   });
 });
