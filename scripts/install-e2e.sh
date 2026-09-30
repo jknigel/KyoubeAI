@@ -5,9 +5,19 @@
 # an update that merges a new setting and installs a harness agents use, a
 # rollback, and the volume-collision refusal. Needs docker, git, curl and jq.
 set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 IMAGE="${KYOUBE_E2E_IMAGE:-kyoubeai:smoke}"
 PROJECT=kyoube-e2e
+# Nothing the caller exported may point this run at another stack: compose lets
+# COMPOSE_* and the variables docker-compose.yml interpolates beat .env, and
+# host.sh's resolve_project_name trusts an exported COMPOSE_PROJECT_NAME. Drop
+# them all (KYOUBE_E2E_IMAGE was read above), then pin the one project this
+# script owns.
+while IFS= read -r name; do unset "$name"; done < <(
+  env | sed -nE 's/^((COMPOSE|KYOUBE|PAPERCLIP|BETTER_AUTH|POSTGRES)_[A-Za-z0-9_]*)=.*/\1/p'
+  printf '%s\n' TRUST_PROXY ANTHROPIC_API_KEY OPENAI_API_KEY OPENROUTER_API_KEY
+)
+export COMPOSE_PROJECT_NAME="$PROJECT"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PORT=3197
 BASE_URL="http://localhost:$PORT"
 WORK="$(mktemp -d)"
@@ -20,8 +30,8 @@ cleanup() {
   local code=$?
   [ -z "$INSTALL_PID" ] || kill "$INSTALL_PID" 2>/dev/null || true
   if [ -f "$CLONE/.env" ]; then
-    if [ "$code" -ne 0 ]; then (cd "$CLONE" && docker compose logs --tail 100 app >&2 || true); fi
-    (cd "$CLONE" && docker compose down -v --remove-orphans >/dev/null 2>&1 || true)
+    if [ "$code" -ne 0 ]; then (cd "$CLONE" && docker compose -p "$PROJECT" logs --tail 100 app >&2 || true); fi
+    (cd "$CLONE" && docker compose -p "$PROJECT" down -v --remove-orphans >/dev/null 2>&1 || true)
   fi
   docker rmi "$REPO:9.9.0" "$REPO:9.9.1" >/dev/null 2>&1 || true
   rm -rf "$WORK"
@@ -31,6 +41,11 @@ fail() { echo "install-e2e: $*" >&2; exit 1; }
 
 # show FILE PATTERN: the lines of a script's output that prove a step, indented.
 show() { grep -E "$2" "$1" | sed 's/^[[:space:]]*/    /' || true; }
+
+# companies_have ID: true when the instance lists the company.
+companies_have() {
+  curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/companies" | jq -e --arg id "$1" 'any(.[]; .id == $id)' >/dev/null
+}
 
 post_json() {
   curl -fsS -c "$COOKIES" -b "$COOKIES" -H 'Content-Type: application/json' -H "Origin: $BASE_URL" -X POST "$1" --data "$2"
@@ -105,6 +120,10 @@ grep -qx 'KYOUBE_VERSION=9.9.1' .env || fail "KYOUBE_VERSION was not moved to 9.
 grep -q 'agents use: pi_local 1' "$WORK/update.log" || { cat "$WORK/update.log" >&2; fail "update.sh did not find the pi agent in the database"; }
 [ "$(docker compose exec -T -u node app sh -c 'command -v pi' | tr -d '\r')" = /kyoubeai/.local/bin/pi ] || fail "update.sh did not install pi for the pi agent"
 [ -f .kyoube/update-state ] || fail "no rollback state was saved"
+# Written after the backup, so only a real restore can take it away again.
+AFTER_ID="$(curl -fsS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -X POST "$BASE_URL/api/companies" --data '{"name":"E2E After Update"}' | jq -r .id)"
+[ -n "$AFTER_ID" ] && [ "$AFTER_ID" != null ] || fail "could not create the company for after the update"
+companies_have "$AFTER_ID" || fail "the company made after the update is not listed"
 show "$WORK/update.log" '^(Update KyoubeAI|    agents use|    added to \.env|==> npm install|pi: |updated to)'
 
 echo "==> ./update.sh --rollback --yes"
@@ -112,7 +131,10 @@ echo "==> ./update.sh --rollback --yes"
 [ "$(git describe --tags --exact-match HEAD)" = v9.9.0 ] || fail "not on v9.9.0 after the rollback"
 grep -qx 'KYOUBE_VERSION=9.9.0' .env || fail "KYOUBE_VERSION is not 9.9.0 after the rollback"
 ! grep -q KYOUBE_E2E_MARKER .env || fail "the rollback did not put the pre-update .env back"
-curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/companies/$COMPANY_ID" >/dev/null || fail "the data from before the update is not there after the rollback"
+grep -q '^restored from ' "$WORK/rollback.log" || fail "the rollback did not restore the backup"
+companies_have "$COMPANY_ID" || fail "the data from before the update is not there after the rollback"
+! companies_have "$AFTER_ID" || fail "the company made after the update is still there after the rollback, so the backup was not restored"
+! docker compose exec -T -u node app sh -c 'command -v pi' >/dev/null 2>&1 || fail "pi, installed after the backup, is still there after the rollback, so the home volume was not restored"
 [ ! -e .kyoube/update-state ] || fail "rollback state was not cleared"
 show "$WORK/rollback.log" '^(Roll back to|rolled back|restored from)'
 
