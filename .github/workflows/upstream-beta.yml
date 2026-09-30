@@ -12,12 +12,11 @@ permissions:
 jobs:
   smoke-beta:
     runs-on: ubuntu-latest
-    # Builds the same docker/Dockerfile as ci.yml's docker-smoke job (pi +
-    # Hermes from scratch, no layer cache) — mirroring its 60-minute budget so
-    # a slow build isn't cancelled by timeout before the failure step below
-    # can run (a timeout cancellation does not satisfy `if: failure()`, so a
-    # tighter budget could silently swallow the signal this workflow exists
-    # to raise).
+    # Builds the same docker/Dockerfile as ci.yml's docker-smoke job (no layer
+    # cache), with a 60-minute budget so a slow build isn't cancelled by
+    # timeout before the failure step below can run (a timeout cancellation
+    # does not satisfy `if: failure()`, so a tighter budget could silently
+    # swallow the signal this workflow exists to raise).
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
