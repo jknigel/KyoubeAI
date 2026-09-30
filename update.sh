@@ -376,7 +376,7 @@ release_apply() {
 
 update_edge() {
   local branch upstream behind from to newcode newlabel why=""
-  branch="$(git symbolic-ref --quiet --short HEAD)" || die "--edge follows a branch, but this checkout is on a release tag; git checkout main first"
+  branch="$(git symbolic-ref --quiet --short HEAD)" || die "--edge follows a branch, but this checkout is not on one (a release tag or a commit is checked out); git checkout main first"
   upstream="$(git rev-parse --abbrev-ref '@{u}' 2>/dev/null)" || die "branch $branch has no upstream to pull from; git branch --set-upstream-to origin/$branch"
   git fetch --quiet || die "could not fetch from origin; check the network and run ./update.sh --edge again"
   behind="$(git rev-list --count "HEAD..@{u}")" || die "could not compare $branch with $upstream; run git status"
@@ -398,6 +398,7 @@ update_edge() {
   esac
   # A published image gets one rebuild from source even when the branch has nothing new.
   from="$branch@$(git rev-parse --short "$POS_COMMIT")"
+  [ "$POS_KIND" != release ] || from="$POS_LABEL"
   if [ "$behind" != 0 ]; then
     git merge-base --is-ancestor HEAD '@{u}' \
       || die "branch $branch has diverged from $upstream (it has commits $upstream lacks, and the other way round); nothing was changed. Rebase it onto $upstream or merge $upstream into it (git status), then run ./update.sh --edge again"
@@ -464,7 +465,7 @@ resume_update() {
 }
 
 do_rollback() {
-  local mode ref branch backup from again previous
+  local mode ref branch backup from again previous head where=""
   [ -f "$STATE" ] || die "there is no update to roll back. To restore any backup: bash scripts/restore.sh backups/<timestamp>"
   mode="$(env_get "$STATE" mode)"; ref="$(env_get "$STATE" ref)"; branch="$(env_get "$STATE" branch)"
   backup="$(env_get "$STATE" backup)"; from="$(env_get "$STATE" from)"
@@ -489,8 +490,16 @@ do_rollback() {
   again="Fix what is reported above, then run ./update.sh --rollback again."
   docker compose stop app || die "could not stop the app. $again"
   if [ "$mode" = edge ] && [ -n "$branch" ]; then
+    # The branch only goes back to where it stood before the update (undoing the update's own fast-forward, which may be
+    # nothing); commits the update never touched stay on it. The code the stack ran is checked out detached.
+    head="$(env_get "$STATE" head)"; [ -n "$head" ] || head="$ref"
     git checkout --quiet "$branch" || die "could not switch back to branch $branch. $again"
-    git reset --quiet --keep "$ref" || die "could not move $branch back to ${ref}. $again"
+    git reset --quiet --keep "$head" || die "could not move $branch back to ${head}. $again"
+    if [ "$ref" != "$head" ]; then
+      where="$ref"
+      if is_release_version "${from#v}" && [ "$(git rev-parse -q --verify "refs/tags/$from^{commit}" 2>/dev/null || true)" = "$ref" ]; then where="$from"; fi
+      git -c advice.detachedHead=false checkout --quiet "$where" || die "could not switch this checkout to ${where}. $again"
+    fi
   else
     git -c advice.detachedHead=false checkout --quiet "$ref" || die "could not switch this checkout back to ${ref}. $again"
   fi
@@ -508,6 +517,9 @@ do_rollback() {
   dc_exec app kyoube doctor || true
   rm -f "$STATE" "$ENV_BEFORE"
   say "rolled back to $from"
+  if [ -n "$where" ]; then
+    say "    this checkout is at $where, not on a branch; $branch keeps its own commits. To follow it again: git checkout $branch"
+  fi
 }
 
 main "$@"

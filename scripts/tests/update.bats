@@ -221,7 +221,7 @@ write_unfinished() {
   [ "$(cat "$STUB_LOG.builds")" = "kyoubeai:dev" ]
   run_update --rollback --yes
   [ "$status" -eq 0 ]
-  [[ "$output" == *"rolled back to main@"* ]]
+  [[ "$output" == *"rolled back to v1.2.0"* ]]
   # still the one build of the update; the rollback built nothing
   [ "$(cat "$STUB_LOG.builds")" = "kyoubeai:dev" ]
   [ "$(sed -n 's/^KYOUBE_IMAGE=//p' "$INST/.env")" = ghcr.io/jknigel/kyoubeai ]
@@ -431,24 +431,34 @@ local_commit() {
   [[ "$output" == *"returns the data but not older code"* ]]
 }
 
-@test "an edge update of a stale image records the checkout's earlier position, and rolling back rebuilds that code" {
+@test "an edge update of a stale image records the checkout's earlier position; rolling back keeps the branch's commits, checks that position out detached and rebuilds it" {
   printf 'KYOUBE_VERSION=dev\nKYOUBE_IMAGE=kyoubeai\nCOMPOSE_PROJECT_NAME=inst\n' > "$INST/.env"
   previous="$(git -C "$INST" rev-parse HEAD)"
   local_commit 2030-01-01T12:00:00+00:00
+  tip="$(git -C "$INST" rev-parse HEAD)"
   STUB_IMAGE_CREATED=2030-01-01T13:30:00+02:00 run_update --edge --yes
   [ "$status" -eq 0 ]
   [[ "$output" == *"the image is older than this checkout; rebuilding"* ]]
   [[ "$output" != *"not older code"* ]]
   [[ "$output" == *"Update KyoubeAI main@$(git -C "$INST" rev-parse --short "$previous") -> main@$(git -C "$INST" rev-parse --short HEAD):"* ]]
   [ "$(grep '^ref=' "$INST/.kyoube/update-state")" = "ref=$previous" ]
+  [ "$(grep '^head=' "$INST/.kyoube/update-state")" = "head=$tip" ]
   [ "$(grep '^from=' "$INST/.kyoube/update-state")" = "from=main@$(git -C "$INST" rev-parse --short "$previous")" ]
   [ "$(grep '^done=' "$INST/.kyoube/update-state")" = "done=1" ]
   run_update --rollback --yes
   [ "$status" -eq 0 ]
-  [ "$(git -C "$INST" rev-parse HEAD)" = "$previous" ]
   [[ "$output" == *"rolled back to main@$(git -C "$INST" rev-parse --short "$previous")"* ]]
-  [ "$(git -C "$INST" symbolic-ref --short HEAD)" = main ]
+  [[ "$output" == *"To follow it again: git checkout main"* ]]
+  # the branch is where it was before the update, with its commit; the code the image was built from is checked out beside it
+  [ "$(git -C "$INST" rev-parse main)" = "$tip" ]
+  ! git -C "$INST" symbolic-ref -q HEAD
+  [ "$(git -C "$INST" rev-parse HEAD)" = "$previous" ]
   [ "$(cat "$STUB_LOG.builds")" = "$(printf 'kyoubeai:dev\nkyoubeai:dev')" ]
+  [ "$(sed -n 's/^commit=//p' "$INST/.kyoube/built-commit")" = "$previous" ]
+  # --edge follows a branch, and says how to get back to one
+  run_update --edge --yes
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"git checkout main first"* ]]
 }
 
 @test "update.sh --edge leaves a source image that is newer than the checkout alone" {
@@ -794,4 +804,53 @@ stayed_put() {
   nothing_happened
   [ ! -e "$INST/.kyoube/update-state" ]
   [ "$(git -C "$INST" rev-parse HEAD)" = "$(git -C "$INST" rev-parse v1.2.0)" ]
+}
+
+# A rollback never moves a branch earlier than where it stood before the update.
+
+@test "rolling back an edge update from a published image keeps the branch's own commits and checks the release out detached" {
+  git -C "$SEED" commit -q --allow-empty -m upstream-after-1.2.0
+  git -C "$INST" pull -q
+  git -C "$INST" commit -q --allow-empty -m my-local-unpushed
+  tip="$(git -C "$INST" rev-parse HEAD)"
+  printf 'KYOUBE_VERSION=1.2.0\nKYOUBE_IMAGE=ghcr.io/jknigel/kyoubeai\nCOMPOSE_PROJECT_NAME=inst\n' > "$INST/.env"
+  run_update --edge --yes
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Update KyoubeAI v1.2.0 -> "* ]]
+  [ "$(grep '^from=' "$INST/.kyoube/update-state")" = "from=v1.2.0" ]
+  [ "$(grep '^ref=' "$INST/.kyoube/update-state")" = "ref=$(git -C "$INST" rev-parse v1.2.0)" ]
+  [ "$(grep '^head=' "$INST/.kyoube/update-state")" = "head=$tip" ]
+  run_update --rollback --yes
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"rolled back to v1.2.0"* ]]
+  [[ "$output" == *"this checkout is at v1.2.0, not on a branch; main keeps its own commits. To follow it again: git checkout main"* ]]
+  [ "$(git -C "$INST" rev-parse main)" = "$tip" ]
+  git -C "$INST" merge-base --is-ancestor "$tip" main
+  ! git -C "$INST" symbolic-ref -q HEAD
+  [ "$(git -C "$INST" describe --tags --exact-match HEAD)" = v1.2.0 ]
+  [ "$(sed -n 's/^KYOUBE_IMAGE=//p' "$INST/.env")" = ghcr.io/jknigel/kyoubeai ]
+  [ "$(sed -n 's/^KYOUBE_VERSION=//p' "$INST/.env")" = 1.2.0 ]
+  # the one build is the update's; the rollback built nothing
+  [ "$(cat "$STUB_LOG.builds")" = "kyoubeai:dev" ]
+  [ ! -e "$INST/.kyoube/update-state" ]
+}
+
+@test "update.sh --edge fast-forwards from where the branch stood, not from the release the rollback returns to" {
+  git -C "$SEED" commit -q --allow-empty -m up-1
+  git -C "$INST" pull -q
+  git -C "$SEED" commit -q --allow-empty -m up-2
+  up1="$(git -C "$INST" rev-parse HEAD)"
+  printf 'KYOUBE_VERSION=1.2.0\nKYOUBE_IMAGE=ghcr.io/jknigel/kyoubeai\nCOMPOSE_PROJECT_NAME=inst\n' > "$INST/.env"
+  run_update --edge --yes
+  [ "$status" -eq 0 ]
+  # the build is of the upstream tip: the fast-forward happened although the rollback point (the release) is not HEAD
+  [ "$(git -C "$INST" rev-parse HEAD)" = "$(git -C "$SEED" rev-parse HEAD)" ]
+  [ "$(sed -n 's/^commit=//p' "$INST/.kyoube/built-commit")" = "$(git -C "$SEED" rev-parse HEAD)" ]
+  [ "$(grep '^ref=' "$INST/.kyoube/update-state")" = "ref=$(git -C "$INST" rev-parse v1.2.0)" ]
+  [ "$(grep '^head=' "$INST/.kyoube/update-state")" = "head=$up1" ]
+  # the rollback undoes the fast-forward only: the branch goes back to where it stood, not to the release
+  run_update --rollback --yes
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$INST" rev-parse main)" = "$up1" ]
+  [ "$(git -C "$INST" describe --tags --exact-match HEAD)" = v1.2.0 ]
 }

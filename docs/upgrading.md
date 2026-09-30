@@ -270,8 +270,9 @@ tracked, so `bump-core.sh` cannot touch it) and `docker compose up -d --build`.
 Reverting the code is easy; reverting a database is not.
 
 After `./update.sh`, `./update.sh --rollback` does it for you: it stops the app, puts the checkout and
-`.env` back as they were before that update, restores the backup the update took, starts the stack and
-runs `kyoube doctor`. It undoes the last update only, and everything written since that backup is
+`.env` back as they were before that update (a branch only goes back to where it stood, keeping its own
+commits; the code the stack ran is checked out beside it, and the command says how to return to the
+branch), restores the backup the update took, starts the stack and runs `kyoube doctor`. It undoes the last update only, and everything written since that backup is
 replaced. The steps below are for everything else.
 
 ```bash
