@@ -4,7 +4,7 @@ import path from "node:path";
 import { readConfig, resolveConfigPath, type KyoubeConfig } from "../config.js";
 import { readBoardKey, resolveBoardApiKey, resolveBoardKeyPath } from "../key-store.js";
 import { createCoreClient, type CompanySkill, type CompanySummary } from "../core-api.js";
-import { describeHarness, missingHarnesses, probeHarnesses, systemProbe, type HarnessStatus } from "../harnesses.js";
+import { describeHarness, harnessesForAdapterTypes, missingHarnesses, probeHarnesses, systemProbe, type HarnessSpec, type HarnessStatus } from "../harnesses.js";
 import { describeMissing, KYOUBE_SKILLS, missingKyoubeSkills } from "../skills.js";
 
 export interface Check { name: string; ok: boolean; detail: string }
@@ -116,14 +116,19 @@ export function harnessChecks(statuses: HarnessStatus[]): Check[] {
   return installed.map((status) => ({ name: `${status.spec.name} cli`, ok: true, detail: describeHarness(status) }));
 }
 
-/** Fails when an agent's harness is not installed: that agent's runs would fail. */
+/** Fails when an agent's harness is not installed or does not run: that agent's runs would fail. */
 export function harnessesInUseCheck(statuses: HarnessStatus[], inUse: Map<string, number>): Check {
   if (inUse.size === 0) return { name: "harnesses in use", ok: true, detail: "no agents yet" };
   const used = [...inUse.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([type, count]) => `${type} (${count})`).join(", ");
   const missing = missingHarnesses(statuses, inUse.keys());
-  if (missing.length === 0) return { name: "harnesses in use", ok: true, detail: used };
-  const fixes = missing.map((spec) => (spec.install ? `kyoube harness install ${spec.name}` : `install ${spec.label}`)).join("; ");
-  return { name: "harnesses in use", ok: false, detail: `${used} — not installed: ${missing.map((spec) => spec.name).join(", ")} (${fixes})` };
+  const needed = new Set(harnessesForAdapterTypes(inUse.keys()).map((spec) => spec.name));
+  const broken = statuses.filter((status) => needed.has(status.spec.name) && status.path && status.version === null).map((status) => status.spec);
+  if (missing.length === 0 && broken.length === 0) return { name: "harnesses in use", ok: true, detail: used };
+  const fix = (spec: HarnessSpec) => (spec.install ? `kyoube harness install ${spec.name}` : `install ${spec.label}`);
+  const problems: string[] = [];
+  if (missing.length > 0) problems.push(`not installed: ${missing.map((spec) => spec.name).join(", ")} (${missing.map(fix).join("; ")})`);
+  if (broken.length > 0) problems.push(`does not run: ${broken.map((spec) => spec.name).join(", ")} (${broken.map(fix).join("; ")})`);
+  return { name: "harnesses in use", ok: false, detail: `${used} — ${problems.join(" — ")}` };
 }
 
 /** The packages `sudo apt install` kept (docker/system/apt-record) and whether the last start put them back. */

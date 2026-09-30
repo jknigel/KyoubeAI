@@ -132,6 +132,27 @@ describe("harnessesInUseCheck", () => {
   it("is quiet with no agents", () => {
     expect(harnessesInUseCheck(statuses, new Map())).toEqual({ name: "harnesses in use", ok: true, detail: "no agents yet" });
   });
+
+  it("fails when an installed harness does not run", () => {
+    const broken = [status("claude", "/usr/local/bin/claude"), status("pi", "/kyoubeai/.local/bin/pi"), status("hermes", "/kyoubeai/.local/bin/hermes", null)];
+    expect(harnessesInUseCheck(broken, new Map([["hermes_local", 1], ["pi_local", 2]]))).toEqual({
+      name: "harnesses in use", ok: false, detail: "hermes_local (1), pi_local (2) — does not run: hermes (kyoube harness install hermes)",
+    });
+  });
+
+  it("does not fail for a broken harness no agent uses", () => {
+    const broken = [status("claude", "/usr/local/bin/claude"), status("hermes", "/kyoubeai/.local/bin/hermes", null)];
+    expect(harnessesInUseCheck(broken, new Map([["claude_local", 1]]))).toEqual({ name: "harnesses in use", ok: true, detail: "claude_local (1)" });
+  });
+
+  it("names both the missing and the broken harnesses, missing first", () => {
+    const mixed = [status("claude", "/usr/local/bin/claude"), status("pi", null), status("hermes", "/kyoubeai/.local/bin/hermes", null)];
+    expect(harnessesInUseCheck(mixed, new Map([["pi_local", 6], ["hermes_local", 1]]))).toEqual({
+      name: "harnesses in use",
+      ok: false,
+      detail: "hermes_local (1), pi_local (6) — not installed: pi (kyoube harness install pi) — does not run: hermes (kyoube harness install hermes)",
+    });
+  });
 });
 
 describe("systemPackagesCheck", () => {
