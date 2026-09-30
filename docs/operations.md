@@ -85,9 +85,10 @@ Inside `/kyoubeai` (the `kyoubeai-home` volume):
 | `kyoube/board-key.json` | The instance-admin board API key `kyoube setup` stored, mode `600`, owned by `node`. Plugin installs and upgrades use it. |
 | `kyoube/config.json` | Rendered from the container environment by the entrypoint on every start. Disposable. |
 | `.claude/.credentials.json` | Claude Code login. |
+| `.codex/` | Codex's configuration and login. |
 | `.pi/` | pi's configuration and login. |
 | `.hermes/` | Hermes Agent's configuration, sessions and memory (`HERMES_HOME=/kyoubeai/.hermes`), and the program itself once you install it. |
-| `.local/` | Harnesses you install (`.local/bin` is first on the `PATH` of the server, every agent run and every Terminal shell), and what their installers keep beside them. |
+| `.local/` | Harnesses and other programs you install (`.local/bin` is first on the `PATH` of the server, every agent run and every Terminal shell), and what their installers keep beside them. |
 | `.kyoube/apt-packages.txt` | The system packages kept across recreates; `apt-restore.log` and `apt-restore.status` beside it say how the last restore at start-up went. |
 | `.cache/` | Download caches: apt's packages and index, so kept packages can come back without a network. Not backed up, and neither is `.npm/`, npm's cache. |
 | `instances/default/projects/<companyId>/<projectId>/` | Each project's managed working folder (`_default`, or the repository name for a cloned repo): what its agents have written, and what the project's **Files** tab shows and edits. |
@@ -363,14 +364,16 @@ whether each is yours (in `/kyoubeai/.local/bin`) or the core image's copy.
 ```bash
 docker compose exec app rm -rf /kyoubeai/.claude/.credentials.json   # Claude Code
 docker compose exec app rm -rf /kyoubeai/.pi                          # pi
-docker compose exec app rm -rf /kyoubeai/.hermes                      # Hermes Agent
+docker compose exec app mv /kyoubeai/.hermes /kyoubeai/.hermes.bak    # Hermes Agent
 ```
 
-Hermes installs itself under `/kyoubeai/.hermes`, so removing that directory removes the program along
-with its login. Run `kyoube harness list` again, and reinstall anything that is missing with
-`kyoube harness install <name>`. Then, from the Terminal page, sign in again as
-[README → Harnesses](../README.md#harnesses) describes for each one. `HOME` is `/kyoubeai` there, so the new credentials land back on the volume and
-survive restarts. `.hermes` is recreated by the entrypoint on the next start, so removing it is safe.
+Hermes is different: `/kyoubeai/.hermes` holds its settings, sessions and memory as well as its login, and
+the installer puts the program under it too, so deleting it would lose all of that. The `mv` above keeps it
+as `.hermes.bak`: copy back what you want to keep (or `mv` the whole directory back to undo the reset), and
+delete `.hermes.bak` yourself when you no longer need it. Run `kyoube harness list` again, and reinstall
+anything that is missing with `kyoube harness install <name>`. Then, from the Terminal page, sign in again
+as [README → Harnesses](../README.md#harnesses) describes for each one. `HOME` is `/kyoubeai` there, so the
+new credentials land back on the volume and survive restarts.
 
 The alternative to interactive logins is provider API keys in `.env` (`ANTHROPIC_API_KEY`,
 `OPENAI_API_KEY`, `OPENROUTER_API_KEY`), which need `docker compose up -d app` to take effect. Note

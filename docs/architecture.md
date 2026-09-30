@@ -11,7 +11,8 @@ wins.
 KyoubeAI's design rests on three zones of trust, each with a different guarantee (see `SECURITY.md` for
 the full security model built on top of them):
 
-1. **The core.** Upstream, pinned by exact version, never patched. It provides authentication,
+1. **The core.** Upstream, pinned by exact version, and changed only at image build time by the rebrand,
+   the theme and a short list of fixes (see "Core patches" below). It provides authentication,
    sessions, company membership and roles, the activity log, the board API, and the plugin host.
 2. **Kyoube plugins — trusted code.** `kyoube.terminal`, `kyoube.apps` and `kyoube.files` are first-party
    code, reviewed and shipped with the image, running as core plugin worker processes. The apps plugin
@@ -28,7 +29,7 @@ the full security model built on top of them):
 docker compose
 ├── app   (this repo's image; FROM ghcr.io/paperclipai/paperclip:<KYOUBE_CORE_VERSION>)
 │   │
-│   ├─ core server + UI  (upstream; rebranded and themed at build time, otherwise unmodified)
+│   ├─ core server + UI  (upstream; rebranded, themed and patched at build time, see "Core patches")
 │   │    ├─ adapters: claude_local · pi_local · hermes_local
 │   │    ├─ plugin runtime
 │   │    │     ├─ worker  kyoube.terminal   — node-pty PTY sessions
@@ -231,9 +232,13 @@ each plugin's own dependency:
 ### Core patches
 
 The image is the pinned core, unmodified in behaviour — with one bounded exception.
-`docker/core-patches/patches.mjs` may carry a fix to an upstream bug that had to ship here first,
-applied to the pristine core layer by `docker/core-patches/apply.mjs` in the Dockerfile step right
-before the rebrand, while the same fix is on its way upstream (each entry names its issue or PR). A
+`docker/core-patches/patches.mjs` carries fixes to upstream bugs that had to ship here first. In 1.1 it
+has seven: five in the served UI (the first-run wizard's "Skip for now" and a pi transcript display fix)
+and two in the compiled server code: `anthropic-signin-setup-token` (the command Claude subscription
+sign-in presents, in `local-ai-login.js`) and `adapter-test-unsaved-harness-switch` (upstream 9335b7d,
+in the agent Test route, `routes/agents.js`). They are applied to the pristine core layer by
+`docker/core-patches/apply.mjs` in the Dockerfile step right before the rebrand, while the same fix is
+on its way upstream (each entry names its issue or PR). A
 pattern anchors on the compiled bundle's string literals and code shape (never a minifier's
 identifier names) and must match exactly the declared number of times, so a core bump that changes
 that code or already carries the fix fails the build with the patch's id — the cue to delete the

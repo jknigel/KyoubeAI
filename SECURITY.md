@@ -11,27 +11,41 @@ Security Advisory feature:
 Do not open a public issue for a security vulnerability. We aim to acknowledge a report and set a
 disclosure timeline within **7 days**.
 
-A vulnerability in **the core itself** (Paperclip — the upstream host this project runs rebranded but
-otherwise unmodified, `FROM` a published image) is out of scope here; report it upstream instead (see
+A vulnerability in **the core itself** (Paperclip — the upstream host this project runs `FROM` a
+published image, rebranded, themed and with the build-time fixes listed under [Trust zones](#trust-zones))
+is out of scope here, except for those fixes; report it upstream instead (see
 [Out of scope](#out-of-scope) below).
 
 ## Scope
 
 KyoubeAI is a Docker overlay on the upstream core:
 a Postgres 17 cluster, the four Kyoube plugins (`kyoube.terminal`, `kyoube.apps`, `kyoube.files`, `kyoube.studio`), and the `kyoube`
-bootstrap CLI that renders config, installs the plugins, installs harnesses, and runs diagnostics. Nothing here patches
-the core — every Kyoube feature is a plugin — so this document describes the security properties of
-the overlay, not of the core's own auth, sessions, board API, or MCP tool gateway.
+bootstrap CLI that renders config, installs the plugins, installs harnesses, and runs diagnostics. Every
+Kyoube feature is a plugin; the image changes the core only at build time, by the rebrand, the theme and
+a short list of fixes (see [Trust zones](#trust-zones)). So this document describes the security
+properties of the overlay, not of the core's own auth, sessions, board API, or MCP tool gateway.
 
 ## Trust zones
 
 KyoubeAI's design rests on three zones of trust, each with a different guarantee:
 
 1. **The core.** Upstream, pinned by exact version (`KYOUBE_CORE_VERSION`, bumped in lock-step
-   with `@paperclipai/plugin-sdk`), and never patched. It provides authentication, sessions, company
-   membership and roles, the activity log, the board API, and the plugin host. Its own security model
-   (auth, deployment modes, the MCP tool gateway) is documented upstream — see
-   [Out of scope](#out-of-scope).
+   with `@paperclipai/plugin-sdk`), and not changed at run time. It provides authentication, sessions,
+   company membership and roles, the activity log, the board API, and the plugin host. Its own security
+   model (auth, deployment modes, the MCP tool gateway) is documented upstream — see
+   [Out of scope](#out-of-scope). The image build does change it in three ways: the rebrand and the
+   theme (presentation only, `docs/branding.md`, `docs/theme.md`), and the fixes in
+   `docker/core-patches/patches.mjs`. There are seven: five in the served UI (the first-run wizard's
+   "Skip for now" and a pi transcript display fix) and, new in 1.1, two in the compiled server code.
+   `anthropic-signin-setup-token` changes the command the server presents for a Claude subscription
+   sign-in, in `server/dist/services/local-ai-login.js`: `claude auth login` becomes
+   `kyoube connect claude`, which runs `claude setup-token` in the same sign-in folder.
+   `adapter-test-unsaved-harness-switch` backports upstream commit 9335b7d to the agent Test route in
+   `server/dist/routes/agents.js`, so a harness switch can be tested before it is saved; the route still
+   checks that the caller may update the agent, and the saved agent's hidden environment values are
+   restored only when the harness is the same. Each patch has to match the core's code exactly once, or
+   the image build fails and names the patch, so a core bump cannot carry one over silently. A flaw in
+   one of these patches is in scope here.
 2. **Kyoube plugins — trusted code.** `kyoube.terminal`, `kyoube.apps` and `kyoube.files` are first-party
    code, reviewed and shipped with the image, running as core plugin workers. The apps plugin holds its
    **own** database credential — the `kyoube` Postgres login role (`LOGIN NOSUPERUSER NOCREATEDB CREATEROLE NOINHERIT`,
@@ -62,10 +76,31 @@ Terminal shell run as `node`, so agents have root in the container too. This is 
 trust that already existed: `node` owns the core's code in `/app` and can read the server's environment,
 including the database credentials and `BETTER_AUTH_SECRET`. The boundary is the container itself: it is
 not privileged, keeps Docker's default seccomp and AppArmor profiles and a `pids_limit`, and the compose
-file adds no capabilities. Harness binaries in `/kyoubeai/.local` can be rewritten by agents, the same
-trust as a harness's own settings files such as `~/.claude/settings.json`. Codex's sandbox bypass stays on,
-because its own sandbox cannot run in a container. `KYOUBE_TRUSTED_RUNTIME_HOST=auto` (the default) lets a
-public instance run server-host subscription sign-in and local MCP tools; set it empty to turn that off.
+file adds no capabilities. `/kyoubeai/.local/bin` is first on the `PATH` of the server, every agent and
+every Terminal shell, and agents can write there, so anything placed in it shadows any command of the same
+name, not only harnesses. That is the same trust as a harness's own settings files such as
+`~/.claude/settings.json`. Codex's sandbox bypass stays on, because its own sandbox cannot run in a
+container.
+
+**Trusted runtime host.** `KYOUBE_TRUSTED_RUNTIME_HOST` defaults to `auto`: the entrypoint
+(`docker/entrypoint.sh`) exports `PAPERCLIP_TRUSTED_MCP_RUNTIME_HOST` set to the container's hostname,
+which tells the core that this container is a host where local tools may run. The core only checks it on
+an authenticated, public instance (`KYOUBE_DEPLOYMENT_EXPOSURE=public`); on a private one, the default,
+nothing depends on it. On a public instance it allows two things. Company members who hold `tools:admin`
+can register local stdio MCP commands (`POST /api/companies/:id/tools/stdio-templates`, guarded by the
+core's `assertToolsAdmin`), which the server then runs inside the container as `node`. And the
+server-host sign-in for subscription connections (Claude, Codex, Grok) in Connections works, with its
+command run in the container's Terminal. By default only the owner and admin roles hold `tools:admin`
+(the core's `company-member-roles`). Because `node` has passwordless `sudo`, those commands run as a
+user that can become root in the container. That is the same trust as the Terminal, whose `allowedRoles`
+default to owner and admin, and as `agents:configure`, which the same two roles hold and which can
+already set the command an agent runs.
+
+To turn it off, set `KYOUBE_TRUSTED_RUNTIME_HOST=` (empty) in `.env` and run `docker compose up -d`. On
+a public instance the core then refuses to enable local stdio MCP connections and to run them, and
+server-host subscription sign-in is unavailable; an API key, or a harness's own login made in the
+Terminal, still works. A private instance behaves the same either way. Any other value is used as the
+host id itself, and a `PAPERCLIP_TRUSTED_MCP_RUNTIME_HOST` set directly in a compose override wins.
 
 Every session open and close, and every access denial, is recorded in the company's activity
 log — **keystrokes and terminal output are never logged**, only that a session existed and who opened
@@ -363,7 +398,8 @@ that source and re-check it after a large upstream bump.
 ## Out of scope
 
 - **The core itself.** Authentication, sessions, the board API, deployment modes, and the MCP tool
-  gateway are upstream's responsibility — report a vulnerability there through
+  gateway are upstream's responsibility (the build-time fixes in `docker/core-patches` are ours) —
+  report a vulnerability there through
   [the upstream project's Security Policy](https://github.com/paperclipai/paperclip/security/advisories/new),
   and see its [`SECURITY.md`](https://github.com/paperclipai/paperclip/blob/main/SECURITY.md).
 - **The host OS, Docker Engine, and the network the deployment runs on.** KyoubeAI assumes a
@@ -377,8 +413,8 @@ that source and re-check it after a large upstream bump.
 
 Secrets live in `.env` (`BETTER_AUTH_SECRET`, `POSTGRES_PASSWORD`, `KYOUBE_DB_PASSWORD`, provider API
 keys) and on the `kyoubeai-home` volume (the board API key at `kyoube/board-key.json`, and every agent
-harness's own login under `.claude`, `.pi`, `.hermes` and wherever a harness you install keeps its own,
-plus what installers leave in `.local`, `.kyoube` and `.cache`). **A backup contains all of it except
+harness's own login under `.claude`, `.codex`, `.pi`, `.hermes` and wherever a harness you install keeps
+its own, plus what installers leave in `.local`, `.kyoube` and `.cache`). **A backup contains all of it except
 the download caches** — `scripts/backup.sh` dumps both databases and archives the home volume without
 `.cache` and `.npm` — so store and transmit a backup directory with the same care as `.env` itself.
 

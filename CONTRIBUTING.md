@@ -195,12 +195,13 @@ follows the same shape:
    A plugin whose code changed has its version bumped in both its `package.json` and `src/manifest.ts`.
 2. `bash scripts/check-pins.sh`, `pnpm typecheck`, `pnpm test`, `pnpm test:sh` and `pnpm build` pass.
 3. `pnpm smoke` and `bash scripts/install-e2e.sh` pass.
-4. Update a real install of the previous release with `./update.sh` on Linux and on macOS (Docker
-   Desktop), and run `./install.sh` once in WSL2. For 1.1.0 the previous release is 1.0.x, which has no
-   `update.sh`: move it as [`docs/upgrading.md`](docs/upgrading.md), "Moving to 1.1", describes.
-5. Tag `vX.Y.Z` and push the tag. The release workflow publishes the multi-architecture image
+4. Tag `vX.Y.Z` and push the tag. The release workflow publishes the multi-architecture image
    `ghcr.io/jknigel/kyoubeai:X.Y.Z` and `latest`. `install.sh` and `update.sh` only consider tags
    without a `-`, from 1.1.0 on, so a pre-release tag such as `v1.2.0-rc1` is never offered to users.
+5. Once the image is published, update a real install of the previous release on Linux and on macOS
+   (Docker Desktop), then run `./update.sh --rollback` on it. For 1.1.0 that is a 1.0.x install:
+   `git fetch --tags`, `git checkout v1.1.0` and `./update.sh` ([`docs/upgrading.md`](docs/upgrading.md),
+   "Moving to 1.1"); for later releases, `./update.sh` alone. Run `./install.sh` once in WSL2.
 
 ## Licensing and contributor agreement
 
