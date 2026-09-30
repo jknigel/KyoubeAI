@@ -783,6 +783,39 @@ TRUSTED="$(server_env | sed -n 's/^PAPERCLIP_TRUSTED_MCP_RUNTIME_HOST=//p')"
 CONTAINER_HOST="$(server_env | sed -n 's/^HOSTNAME=//p')"
 [[ -n "$TRUSTED" && "$TRUSTED" == "$CONTAINER_HOST" ]] || { echo "trusted runtime host is '$TRUSTED', expected the container hostname '$CONTAINER_HOST'" >&2; exit 1; }
 echo "    pi, hermes and semver on the server's PATH; tree reinstalled; trusted runtime host = $TRUSTED"
+
+echo "==> Connections shows 'kyoube connect claude', which writes a one-year token into that sign-in's folder"
+ATTEMPT="$(curl -fsS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -X POST \
+  "$BASE_URL/api/companies/$COMPANY_ID/ai-connections/local/attempts" \
+  --data '{"provider":"anthropic","method":"subscription","name":"smoke claude","ownership":"personal"}')"
+ATTEMPT_CMD="$(jq -r .command <<<"$ATTEMPT")"; ATTEMPT_ID="$(jq -r .sessionId <<<"$ATTEMPT")"
+[[ "$ATTEMPT_CMD" == *"&& kyoube connect claude)" ]] || { echo "the Claude sign-in command is not patched: $ATTEMPT_CMD" >&2; exit 1; }
+SMOKE_SETUP_TOKEN="sk-ant-oat01-SMOKEsmokeSMOKEsmokeSMOKEsmoke_-0123456789"
+compose exec -T -u node app sh -c 'mkdir -p /tmp/claude-stub && cat > /tmp/claude-stub/claude && chmod +x /tmp/claude-stub/claude' <<STUB
+#!/bin/sh
+# Stands in for 'claude setup-token': prints the success screen the real one ends with.
+[ "\$1" = setup-token ] || exit 64
+printf 'Login successful\r\n\r\nYour OAuth token (valid for 1 year):\r\n\r\n%s\r\n\r\nStore this token securely. You won'"'"'t be able to see it again.\r\n' "$SMOKE_SETUP_TOKEN"
+STUB
+compose exec -T -u node app env PATH="/tmp/claude-stub:$SERVER_PATH" bash -c "$ATTEMPT_CMD" \
+  || { echo "running the Connections command failed" >&2; exit 1; }
+ATTEMPT_DIR="$(sed -n "s/.*CLAUDE_CONFIG_DIR='\([^']*\)'.*/\1/p" <<<"$ATTEMPT_CMD")"
+compose exec -T -u node app sh -c "test \"\$(stat -c %a '$ATTEMPT_DIR/.credentials.json')\" = 600 && jq -r .claudeAiOauth.accessToken '$ATTEMPT_DIR/.credentials.json'" \
+  | tr -d '\r' | grep -qx "$SMOKE_SETUP_TOKEN" || { echo "kyoube connect claude did not write the token (mode 600) into $ATTEMPT_DIR" >&2; exit 1; }
+curl -fsS -H "Authorization: Bearer $TOKEN" -X DELETE "$BASE_URL/api/companies/$COMPANY_ID/ai-connections/local/attempts/$ATTEMPT_ID" >/dev/null
+compose exec -T -u node app rm -rf /tmp/claude-stub
+echo "    the command Connections shows ran kyoube connect claude, which wrote a one-year token"
+
+echo "==> Test works on a harness switch that is not saved yet"
+CLAUDE_AGENT_ID="$(curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/companies/$COMPANY_ID/agents" | jq -r '.[] | select(.name == "smoke-claude_local") | .id')"
+[[ -n "$CLAUDE_AGENT_ID" ]] || { echo "the smoke-claude_local agent is gone" >&2; exit 1; }
+STATUS="$(curl -sS -o "$TMP/switch-test.json" -w '%{http_code}' -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -X POST \
+  "$BASE_URL/api/companies/$COMPANY_ID/adapters/codex_local/test-environment" \
+  --data "{\"agentId\":\"$CLAUDE_AGENT_ID\",\"adapterConfig\":{\"cwd\":\"/kyoubeai/workspaces/smoke\",\"dangerouslyBypassApprovalsAndSandbox\":true}}")"
+! grep -q 'Saved agent is not compatible' "$TMP/switch-test.json" || { echo "Test on an unsaved harness switch still answers 'Saved agent is not compatible'" >&2; exit 1; }
+[[ "$STATUS" =~ ^2 ]] || { echo "Test on an unsaved harness switch answered $STATUS: $(cat "$TMP/switch-test.json")" >&2; exit 1; }
+echo "    a claude_local agent can test codex_local before saving"
+
 wait_for_plugin kyoube.apps $APPS_SHIPPED
 wait_for_plugin kyoube.terminal "$BUMP2"
 wait_for_plugin_api
