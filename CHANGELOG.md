@@ -4,6 +4,33 @@ All notable changes to KyoubeAI are recorded here, in terms of what changed for 
 building on it. The format is loosely [Keep a Changelog](https://keepachangelog.com/); versioning is
 [SemVer](https://semver.org/).
 
+## 1.1.0 - Unreleased
+
+### Install and update
+
+- `./install.sh` takes a fresh `git clone` to a running, claimed instance with its plugins. It writes `.env` (generated secrets; the one question is the address), downloads the release's image, starts the stack, waits for you to claim it, and runs the plugin approval. It is safe to re-run, and it refuses to write a new `.env` over the database volume of another install on the machine. `--edge` builds from source.
+- `./update.sh` updates to the newest release after a backup. It downloads the image before it changes anything, merges new settings into `.env` (only the image, version and core-version settings are moved; the rest of your settings stay as they are), and offers to install harnesses your agents use. An update that stopped part way continues when you run it again, and it will not move to an older release. `./update.sh --rollback` returns to the release you came from: it puts back the `.env` and restores the backup saved just before that update, so anything written since is replaced. `--edge` follows a branch and rebuilds.
+- `docker-compose.override.yml` is git-ignored, for local compose wiring that `./update.sh` should not trip over.
+
+### Harnesses
+
+- The image no longer bakes in pi, Hermes Agent or a pinned Claude Code. It is 4.79 GB instead of 7.29 GB, about 2.5 GB smaller. Install the harnesses you want from the Terminal with `kyoube harness install <name>` or their own installers. They land in `/kyoubeai/.local`, first on every PATH, and survive restarts, updates and core upgrades along with their logins. The core image's own Claude Code, Codex, Gemini CLI, Kimi Code and OpenCode remain as fallbacks; a copy you install comes first.
+- The `node` user, which the server, agents and Terminal shells run as, has passwordless `sudo` (`SECURITY.md`, Terminal). System packages installed with apt are kept and put back at every start; one that cannot be reinstalled (offline, or gone from a newer base image) stays on the list and is retried at the next start. Backups leave out the download caches (`.cache`, `.npm`). The Terminal page's help lists these commands (`kyoube.terminal` 0.2.5).
+- `kyoube doctor` lists each harness it finds with its version and origin, fails when an agent's harness is missing or installed but not running, and reports the kept packages, failing when they could not be put back at the last start.
+
+### Fixes
+
+- **Claude subscription connections now last a year instead of about 8 hours.** Connections shows `kyoube connect claude`, which signs in with `claude setup-token`. Connections made before 1.1 must be connected again once.
+- **Test works on a harness switch before it is saved.** It used to fail with "Saved agent is not compatible with the adapter being tested"; the same fix is upstream in 9335b7d. If the agent's environment has hidden values, enter them again to test a different harness.
+- **A harness installed from the Terminal is found** by both Terminal shells and agents.
+- **Public instances allow subscription sign-in and local MCP tools** by default (`KYOUBE_TRUSTED_RUNTIME_HOST=auto`; set it empty to turn that off).
+- **The telemetry notes are corrected.** `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, set on the `app` service, reaches the server and agent runs but not Terminal shells; `SECURITY.md` says how to cover those.
+- The first two fixes reach the core through `docker/core-patches` at image build time (`anthropic-signin-setup-token`, `adapter-test-unsaved-harness-switch`); the second entry is deleted at the first stable core that carries 9335b7d.
+
+### Development
+
+- `pnpm test:sh` runs the shell tests (bats) for `install.sh`, `update.sh` and the container scripts, and `scripts/install-e2e.sh` runs both scripts end to end on the smoke image, rollback included. CI runs both. `CONTRIBUTING.md` has a "Running from source" section (`./install.sh --edge`, `./update.sh --edge`) and a release checklist.
+
 ## 1.0.0 - 2026-09-25
 
 The first release: KyoubeAI as a self-hosted, multi-user AI operating system for an organisation, built
