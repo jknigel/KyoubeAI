@@ -8,6 +8,8 @@ KYOUBE_IMAGE_DEFAULT="ghcr.io/jknigel/kyoubeai"
 # The first release that ships install.sh and update.sh; older tags are never
 # installed or updated to by them.
 KYOUBE_MIN_RELEASE="1.1.0"
+# Which commit the source image (kyoubeai:dev) was last built from, and its image id; see record_source_build.
+KYOUBE_BUILT=".kyoube/built-commit"
 YES="${YES:-0}"
 
 say()  { printf '%s\n' "$*"; }
@@ -167,6 +169,17 @@ docker_preflight() {
   case "$arch" in x86_64|amd64|aarch64|arm64) ;; *) die "KyoubeAI's images are built for amd64 and arm64, not '$arch'" ;; esac
   mem="$(docker info --format '{{.MemTotal}}' 2>/dev/null || echo 0)"
   [ "${mem:-0}" -ge 3900000000 ] 2>/dev/null || warn "Docker has less than 4 GB of memory; KyoubeAI may run slowly or be stopped under load"
+}
+
+# record_source_build IMAGE_REF: after a successful `docker compose build`, note in .kyoube/built-commit the commit
+# this checkout is on and the id of the image just built, so `update.sh --edge` can tell later whether the image is
+# behind the checkout. Best effort: a missing record only means update.sh compares times instead.
+record_source_build() {
+  local id
+  id="$(docker image inspect -f '{{.Id}}' "$1" 2>/dev/null </dev/null || true)"
+  { mkdir -p .kyoube && : > "$KYOUBE_BUILT"; } 2>/dev/null || return 0
+  env_set "$KYOUBE_BUILT" commit "$(git rev-parse HEAD 2>/dev/null || true)" || true
+  env_set "$KYOUBE_BUILT" image "$id" || true
 }
 
 # dc_exec ARGS...: `docker compose exec`, with a TTY only when this script has one.

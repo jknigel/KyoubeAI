@@ -135,6 +135,7 @@ main() {
   elif [ "$edge" = 1 ]; then
     say "==> building the image from source (10-25 minutes the first time)"
     docker compose build app
+    record_source_build "$ref"
   elif docker image inspect "$ref" >/dev/null 2>&1; then
     say "    $ref is already on this machine"
   else

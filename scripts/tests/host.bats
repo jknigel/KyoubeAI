@@ -141,3 +141,24 @@ EXAMPLE
 @test "confirm says yes under YES=1 without reading" {
   YES=1 confirm "Proceed?"
 }
+
+@test "record_source_build notes the commit and the image id of a source build, and survives a missing docker" {
+  git init -q repo && cd repo
+  git -c user.name=t -c user.email=t@t commit -q --allow-empty -m one
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  printf '#!/bin/sh\necho "sha256:built"\n' > "$BATS_TEST_TMPDIR/bin/docker"
+  chmod +x "$BATS_TEST_TMPDIR/bin/docker"
+  PATH="$BATS_TEST_TMPDIR/bin:$PATH" record_source_build kyoubeai:dev
+  [ "$(env_get "$KYOUBE_BUILT" commit)" = "$(git rev-parse HEAD)" ]
+  [ "$(env_get "$KYOUBE_BUILT" image)" = "sha256:built" ]
+  # a second build replaces the record
+  git -c user.name=t -c user.email=t@t commit -q --allow-empty -m two
+  PATH="$BATS_TEST_TMPDIR/bin:$PATH" record_source_build kyoubeai:dev
+  [ "$(env_get "$KYOUBE_BUILT" commit)" = "$(git rev-parse HEAD)" ]
+  [ "$(grep -c '^commit=' "$KYOUBE_BUILT")" = 1 ]
+  # no docker answer: the commit is still recorded, the image id is empty (update.sh then compares times)
+  printf '#!/bin/sh\nexit 1\n' > "$BATS_TEST_TMPDIR/bin/docker"
+  PATH="$BATS_TEST_TMPDIR/bin:$PATH" record_source_build kyoubeai:dev
+  [ "$(env_get "$KYOUBE_BUILT" commit)" = "$(git rev-parse HEAD)" ]
+  [ -z "$(env_get "$KYOUBE_BUILT" image)" ]
+}
