@@ -42,7 +42,7 @@ RUN pnpm -r build \
 # server, every agent run and every shell, so an install survives down/up,
 # image updates and core bumps. The core image's own CLIs (claude, codex,
 # gemini, kimi, opencode in /usr/local/bin) stay as fallbacks a user install
-# shadows. Spec: docs/superpowers/specs/2026-09-30-harness-freedom-simple-install-design.md
+# shadows. See README.md, "Harnesses", and SECURITY.md, "Terminal".
 # ---------------------------------------------------------------------------
 FROM ghcr.io/paperclipai/paperclip:${KYOUBE_CORE_VERSION}
 USER root
