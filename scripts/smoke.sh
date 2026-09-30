@@ -167,6 +167,19 @@ wait_for_plugin_api() { # poll until both plugin workers answer a route of their
   return 1
 }
 
+wait_core_ready() { # poll until /api/health reports status ok and bootstrapStatus ready
+  # bootstrapStatus turns ready before the core's startup recovery ends;
+  # /api/health reports status "starting" until then, and doctor's `core` line
+  # fails on it. Run this before any `kyoube doctor` that follows a restart.
+  local i
+  for i in $(seq 1 300); do
+    if curl -fsS "$BASE_URL/api/health" 2>/dev/null | jq -e '.status == "ok" and .bootstrapStatus == "ready"' >/dev/null 2>&1; then return 0; fi
+    sleep 1
+  done
+  echo "the app never reported status ok with bootstrapStatus ready: $(curl -sS "$BASE_URL/api/health" || true)" >&2
+  return 1
+}
+
 APPS_SHIPPED="$(jq -r .version "$ROOT/plugins/kyoube-apps/package.json")"
 [[ "$APPS_SHIPPED" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected kyoube.apps version '$APPS_SHIPPED' in package.json" >&2; exit 1; }
 FILES_SHIPPED="$(jq -r .version "$ROOT/plugins/kyoube-files/package.json")"
@@ -741,15 +754,7 @@ echo "==> restore"
 COMPOSE_PROJECT_NAME="$PROJECT" COMPOSE_ENV_FILES="$ENV_FILE" \
   bash "$ROOT/scripts/restore.sh" "$BACKUP_PATH"
 
-RESTORED=""
-# bootstrapStatus turns ready before the core's startup recovery ends; /api/health
-# reports status "starting" until then, and doctor's `core` line fails on it.
-for i in $(seq 1 300); do
-  if curl -fsS "$BASE_URL/api/health" 2>/dev/null | jq -e '.status == "ok" and .bootstrapStatus == "ready"' >/dev/null 2>&1; then RESTORED=1; break; fi
-  sleep 1
-done
-[[ -n "$RESTORED" ]] \
-  || { echo "the restored app never reported status ok with bootstrapStatus ready: $(curl -sS "$BASE_URL/api/health" || true)" >&2; exit 1; }
+wait_core_ready || { echo "the restored app is not ready" >&2; exit 1; }
 # The original board token is back: it lives in the restored core database,
 # and the board key file `kyoube setup` wrote is back on the restored volume.
 STATUS="$(curl -sS -o "$TMP/post-restore-plugins.json" -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/plugins")"
@@ -894,6 +899,7 @@ STATUS="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOK
 [[ "$STATUS" == "200" ]] || { echo "the board token stopped working after the migration: $STATUS" >&2; exit 1; }
 compose exec -T app sh -c 'test -f /kyoubeai/kyoube/board-key.json && test -f /kyoubeai/.migrated-from-paperclip-home && test -L /paperclip && test -f /paperclip/kyoube/board-key.json' \
   || { echo "home volume, marker or compatibility link missing after the migration" >&2; exit 1; }
+wait_core_ready || { echo "the migrated app is not ready" >&2; exit 1; }
 compose exec -T app kyoube doctor | tee "$TMP/doctor-migrated.log"
 grep -Eq '^ok +legacy home link .*compatibility link active' "$TMP/doctor-migrated.log" || { echo "doctor did not report the compatibility link" >&2; exit 1; }
 grep -Eq '^ok +legacy env +none' "$TMP/doctor-migrated.log" || { echo "doctor still sees legacy env keys" >&2; exit 1; }
@@ -939,11 +945,7 @@ COMPOSE_PROJECT_NAME="$PROJECT" COMPOSE_ENV_FILES="$ENV_FILE" \
   bash "$ROOT/scripts/restore.sh" "$LEGACY_BACKUP" | tee "$TMP/restore-legacy.log"
 grep -q '0.1.x backup — leaving the migration marker' "$TMP/restore-legacy.log" \
   || { echo "restore.sh did not take its legacy-backup path" >&2; exit 1; }
-for i in $(seq 1 300); do
-  if curl -fsS "$BASE_URL/api/health" 2>/dev/null | jq -e '.status == "ok" and .bootstrapStatus == "ready"' >/dev/null 2>&1; then break; fi
-  sleep 1
-  if [[ $i -eq 300 ]]; then echo "the app never came back after the legacy-named restore" >&2; exit 1; fi
-done
+wait_core_ready || { echo "the app never came back after the legacy-named restore" >&2; exit 1; }
 compose exec -T app sh -c 'test -f /kyoubeai/.migrated-from-paperclip-home && test -L /paperclip && test -f /paperclip/kyoube/board-key.json' \
   || { echo "the legacy-named restore left no marker or no /paperclip link" >&2; exit 1; }
 STATUS="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/plugins")"
