@@ -2,7 +2,9 @@
 
 Two things move independently: **KyoubeAI** (this repository — the bootstrap CLI, the plugins, the
 overlay image) and **the core** (Paperclip — the upstream host image the overlay is built `FROM`).
-Nothing here patches the core, so a core upgrade is a version bump and a rebuild.
+The core is changed only at image build time (a rebrand, the theme and a short list of fixes in
+`docker/core-patches`), so a core upgrade is a version bump and a rebuild, unless one of those steps stops
+matching the new core ([What can break](#what-can-break)).
 
 **Take a backup first, every time.** `bash scripts/backup.sh` costs a minute and is the only way
 back from a migration you do not like — see [Rolling back](#rolling-back) and
@@ -73,47 +75,51 @@ that is not a failure, but `doctor` will not call it `ready` either.
 ## Moving to 1.1
 
 1.1 adds `./install.sh` and `./update.sh`, takes the agent harnesses out of the image, and gives the
-Terminal `sudo`. Take a backup first: `bash scripts/backup.sh`.
+Terminal `sudo`. `./update.sh` takes the backup for you.
 
-- **`./update.sh` is the new way to update.** Move the checkout to 1.1 once with `./install.sh`, and use
-  `./update.sh` from then on. A 1.0 checkout has neither script. `./update.sh` on a checkout you
-  moved to v1.1.0 by hand still updates the stack: it works out which code the stack runs (the release in
-  `KYOUBE_VERSION` in `.env`; for a source build, the commit `.kyoube/built-commit` records, or else where
-  the checkout was before), takes a backup and moves the stack up, and `./update.sh --rollback` works
-  afterwards. It refuses, before changing anything, when that code is not part of the history of the code
-  it would move to (a newer release, or a source build newer than the release), or when `KYOUBE_VERSION`
-  is neither a release nor `dev`; its message says which checkout to make first. `./update.sh --edge`
-  follows the same rule and rebuilds a source image that is behind the checkout. `./install.sh`
-  keeps the `.env`, the data and the plugins of an existing install: it adds the settings 1.1 introduced
-  to `.env`, pins `COMPOSE_PROJECT_NAME` to the name the install already uses, points `KYOUBE_IMAGE` and
-  `KYOUBE_VERSION` at the release, downloads the image, restarts, sees the instance is claimed and the
-  plugins are installed, and runs `kyoube doctor`:
+- **Update with `./update.sh`, from the new checkout.** A 1.0 checkout has no `update.sh`, so check out the
+  release first. The script finds which release the stack still runs from `KYOUBE_VERSION` in `.env`:
 
   ```bash
   git fetch --tags
   git checkout v1.1.0
-  ./install.sh
+  ./update.sh
   ```
 
-  On an install built from source, `git pull` and then `./install.sh --edge` do the same and rebuild.
-  There is no `.kyoube/update-state` yet, so `./update.sh --rollback` has nothing to undo: to go back,
-  follow [Rolling back](#rolling-back) with the backup you just took.
+  It pins `COMPOSE_PROJECT_NAME` in `.env` if it is missing, says `the stack runs v1.0.0; this checkout
+  is at v1.1.0`, downloads the 1.1.0 image before it changes anything, lists the harnesses your agents
+  use, takes a backup, records a rollback point (`.kyoube/update-state`), adds the keys that are new in
+  `.env.example` and lists them, restarts on 1.1.0, offers to install the harnesses your agents use that
+  the new image lacks, and runs `kyoube doctor`. `./update.sh --rollback` works afterwards.
+
+  `git checkout v1.1.0` leaves HEAD detached, which is fine for releases: `./update.sh` fetches the tags
+  itself and checks out the next release when there is one. `./update.sh --edge` needs a branch, so run
+  `git checkout main` (or your branch) first if you switch to it.
+
+  An install built from source (`docker compose up -d --build`) brings the new code with `git pull` and
+  then runs `./update.sh --edge`. It sees that the source image is older than the checkout, takes the same
+  backup and rebuilds. A 1.0 build left no record of the commit it was built from (1.1 keeps one in
+  `.kyoube/built-commit`), so the rollback point is where the branch stood before the pull; if no earlier
+  position is known, the script says that `--rollback` will return the data but not the older code.
+
+  The script refuses, before it changes anything, when the code the stack runs is not part of the history
+  of the code it would move to (a source build newer than the release, for one), or when `KYOUBE_VERSION`
+  in `.env` is neither a release nor `dev`; its message says what to check out or set first.
+  `./install.sh` also works on an existing install and keeps the `.env`, the data and the plugins, but it
+  takes no backup and records no rollback point.
 - **pi and Hermes Agent are no longer in the image**, and Claude Code is no longer pinned (the core
-  image keeps its own copy as a fallback). Install the ones your agents use from the Terminal:
-  `kyoube harness install pi`, `kyoube harness install hermes`, and `kyoube harness install claude`
-  for a Claude Code of your own. `kyoube doctor` (which `install.sh` runs at the end) fails
-  `harnesses in use` for each harness an agent needs that is missing, and names the command. Hermes'
-  settings, sessions and memory in `~/.hermes` are reused. From then on, `./update.sh` shows which
-  harnesses your agents use before it changes anything, and offers to install the missing ones right
-  after the restart.
+  image keeps its own copy as a fallback). `./update.sh` shows which harnesses your agents use, and right
+  after the restart offers to install any the new image lacks (`kyoube harness install pi`, `hermes`,
+  `claude`); you can also run those from the Terminal. `kyoube doctor` fails `harnesses in use` for each
+  harness an agent needs that is missing, and names the command. Hermes' settings, sessions and memory in
+  `~/.hermes` are reused.
 - **Claude subscription connections made before 1.1 hold an 8-hour token.** Connect each one again
   (README → Harnesses → [Claude Code](../README.md#claude-code)).
 - **Keep local compose wiring in an untracked `docker-compose.override.yml`.** It is now in
   `.gitignore`. `./update.sh`, and `./install.sh` without `--edge`, refuse to run while a tracked file
   has local changes, so move edits you made to `docker-compose.yml` there first.
-- **Installs built from source update with `./update.sh --edge`.** It fast-forwards the branch,
-  merges new settings into `.env`, keeps `KYOUBE_CORE_VERSION` in `.env` in step with `.env.example`
-  (no more copying the core pin by hand), and rebuilds.
+- **`./update.sh` keeps `KYOUBE_CORE_VERSION` in `.env` in step with `.env.example`**, with or without
+  `--edge`, so you no longer copy the core pin by hand. `--edge` also fast-forwards the branch.
 
 ## Moving an install from core 2026.831.1
 
@@ -270,10 +276,11 @@ tracked, so `bump-core.sh` cannot touch it) and `docker compose up -d --build`.
 Reverting the code is easy; reverting a database is not.
 
 After `./update.sh`, `./update.sh --rollback` does it for you: it stops the app, puts the checkout and
-`.env` back as they were before that update (a branch only goes back to where it stood, keeping its own
-commits; the code the stack ran is checked out beside it, and the command says how to return to the
-branch), restores the backup the update took, starts the stack and runs `kyoube doctor`. It undoes the last update only, and everything written since that backup is
-replaced. The steps below are for everything else.
+`.env` back as they were before that update, restores the backup the update took, starts the stack and
+runs `kyoube doctor`. After an `--edge` update a branch only goes back to where it stood, keeping its own
+commits. If the stack ran older code than the branch's tip, that code is checked out detached, and the
+command says how to return to the branch. It undoes the last update only, and everything written since
+that backup is replaced. The steps below are for everything else.
 
 ```bash
 git revert <the bump commit>       # or: git checkout <previous tag>
