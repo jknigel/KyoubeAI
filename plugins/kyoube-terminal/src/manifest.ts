@@ -1,7 +1,7 @@
 import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
 
 export const PLUGIN_ID = "kyoube.terminal";
-export const PLUGIN_VERSION = "0.2.4";
+export const PLUGIN_VERSION = "0.2.5";
 export const PAGE_ROUTE = "terminal";
 
 // We intentionally do not set `minimumHostVersion`. Core 2026.831.1 (still in 2026.916.1) compares
@@ -13,7 +13,7 @@ const manifest: PaperclipPluginManifestV1 = {
   apiVersion: 1,
   version: PLUGIN_VERSION,
   displayName: "Kyoube Terminal",
-  description: "Browser terminal inside the KyoubeAI container for instance administration and agent harness login. Limited to company owners/admins.",
+  description: "Browser terminal inside the KyoubeAI container, with sudo, for instance administration and installing agent harnesses. Limited to company owners/admins.",
   author: "KyoubeAI",
   categories: ["workspace", "ui"],
   capabilities: [

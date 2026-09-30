@@ -1,6 +1,6 @@
 {
   "name": "@kyoube/plugin-terminal",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Admin web terminal inside the KyoubeAI container (Paperclip plugin)",
   "license": "BUSL-1.1",
   "type": "module",

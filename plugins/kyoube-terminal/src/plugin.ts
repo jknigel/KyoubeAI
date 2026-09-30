@@ -117,7 +117,7 @@ export function createTerminalPlugin(deps: TerminalPluginDeps): PaperclipPlugin 
       const roles = new RoleResolver(ctx.access.members, { now: deps.now });
       const spawner = deps.createSpawner({
         cwd: kyoube.home,
-        env: buildShellEnv({ home: kyoube.home, hermesHome: kyoube.hermesHome, shell: "/bin/bash", path: process.env.PATH, source: process.env }),
+        env: buildShellEnv({ home: kyoube.home, hermesHome: kyoube.hermesHome, shell: "/bin/bash", path: process.env.PATH }),
       });
       spawn = spawner;
       const sessions = new SessionManager({ spawn: spawner, now: deps.now, randomId: deps.randomId });
