@@ -41,6 +41,26 @@ const ERROR_AND_FOOTER_2026_916_1 =
   'tn&&(0,t.jsx)("div",{className:"mt-3",children:(0,t.jsx)("p",{className:"text-xs text-destructive",children:tn})}),' +
   '(Y||_===1)&&(0,t.jsx)(Pwe,{onBack:_===4&&Je!=="idle"?Vs:Mze({currentStep:_,entryStep:S})?()=>I(Ha(_)):void 0,primaryLabel:_===1?"Continue":_===5?"Get started":_===4?Hn.label:"Next",primaryIcon:_===4?Hn.icon:void 0,loadingLabel:_===1?"Creating...":_===4?"Connecting":"Launching...",loading:_===3||_===4?!1:B,primaryDisabled:_===1?!M.trim()||B:_===3?!H.trim():_===4?Hn.disabled||B:B||en,onPrimary:()=>{_===1?kr():_===3?I(4):_===4?pn():Gn()}})';
 
+// Excerpts of core 2026.916.1's compiled server (server/dist), copied verbatim.
+const SIGNIN_COMMAND_2026_916_1 =
+  '        command: provider === "openai"\n' +
+  '            ? `(export CODEX_HOME=${shellQuote(directory)} && mkdir -p "$CODEX_HOME" && codex -c \'cli_auth_credentials_store="file"\' login --device-auth)`\n' +
+  '            : provider === "anthropic"\n' +
+  '                ? `(export CLAUDE_CONFIG_DIR=${shellQuote(directory)} && mkdir -p "$CLAUDE_CONFIG_DIR" && claude auth login)`\n' +
+  '                : `(export GROK_HOME=${shellQuote(directory)} && mkdir -p "$GROK_HOME" && grok login --device-auth)`,\n';
+
+const TEST_GUARD_2026_916_1 =
+  '            if (savedAgent.adapterType !== type && providerAdapter !== type) {\n' +
+  '                throw unprocessable("Saved agent is not compatible with the adapter being tested");\n' +
+  '            }\n' +
+  '            await assertCanUpdateAgent(req, savedAgent);\n' +
+  '            adapterConfigForTest = restoreRedactedAgentEnv(inputAdapterConfig, savedAgent.adapterConfig);\n';
+
+const CLAUDE_VERIFY_2026_916_1 =
+  '            if (!token)\n' +
+  '                throw new Error("Missing login");\n' +
+  '            await fetchClaudeQuota(token);\n';
+
 const patch = (id) => PATCHES.find((entry) => entry.id === id);
 const piPatch = patch("pi-transcript-non-assistant-messages");
 const primaryPatch = patch("onboarding-skip-harness-primary");
@@ -303,6 +323,92 @@ describe("onboarding-skip-harness-button", () => {
   });
 });
 
+/** Writes every file the declared patches target, each holding its 2026.916.1 excerpt once. */
+async function writeFullCore(root) {
+  await mkdir(path.join(root, "ui", "dist", "assets"), { recursive: true });
+  await mkdir(path.join(root, "server", "dist", "services"), { recursive: true });
+  await mkdir(path.join(root, "server", "dist", "routes"), { recursive: true });
+  await writeFile(path.join(root, "ui/dist/assets/index-5zyW-AFc.js"), FULL_BUNDLE_2026_916_1);
+  await writeFile(path.join(root, "server/dist/services/local-ai-login.js"), SIGNIN_COMMAND_2026_916_1);
+  await writeFile(path.join(root, "server/dist/routes/agents.js"), TEST_GUARD_2026_916_1);
+  await writeFile(path.join(root, "server/dist/services/local-ai-credentials.js"), CLAUDE_VERIFY_2026_916_1);
+}
+
+const signinPatch = patch("anthropic-signin-setup-token");
+const guardPatch = patch("adapter-test-unsaved-harness-switch");
+
+describe("anthropic-signin-setup-token", () => {
+  it("is declared with the safety fields every patch needs", () => declaredSafely(signinPatch));
+
+  it("changes only the Claude sign-in command, once", () => {
+    const { count, text } = applyToText(SIGNIN_COMMAND_2026_916_1, signinPatch);
+    expect(count).toBe(1);
+    expect(text).toContain('mkdir -p "$CLAUDE_CONFIG_DIR" && kyoube connect claude)`');
+    expect(text).not.toContain("claude auth login");
+    expect(text).toContain("codex -c 'cli_auth_credentials_store=\"file\"' login --device-auth)");
+    expect(text).toContain("grok login --device-auth)");
+    expect(applyToText(text, signinPatch).count).toBe(0);
+  });
+});
+
+/** Runs the (patched or unpatched) guard as the route would, with the route's helpers stubbed. */
+async function runGuard(code, { savedType, type, providerAdapter = null, env = {} }) {
+  const calls = [];
+  const fn = new Function(
+    "savedAgent", "type", "providerAdapter", "inputAdapterConfig", "parseObject", "asRecord", "REDACTED_EVENT_VALUE",
+    "unprocessable", "assertCanUpdateAgent", "restoreRedactedAgentEnv", "req",
+    `return (async () => { let adapterConfigForTest = inputAdapterConfig; ${code} return adapterConfigForTest; })();`,
+  );
+  const record = (value) => (value && typeof value === "object" && !Array.isArray(value) ? value : null);
+  return fn(
+    { adapterType: savedType, adapterConfig: { env: { KEY: { type: "plain", value: "saved-secret" } } } },
+    type, providerAdapter, { env },
+    (value) => record(value) ?? {}, record, "***REDACTED***",
+    (message) => new Error(message),
+    async () => { calls.push("assertCanUpdateAgent"); },
+    (input, saved) => ({ ...input, env: { ...input.env, ...saved.env } }),
+    {},
+  ).then((config) => ({ config, calls }));
+}
+
+describe("adapter-test-unsaved-harness-switch", () => {
+  it("is declared with the safety fields every patch needs, citing upstream's fix", () => {
+    declaredSafely(guardPatch);
+    expect(guardPatch.upstream).toContain("9335b7db10425277bcb84ba8137d08c498324dba");
+  });
+
+  it("matches the 2026.916.1 guard exactly once, and not again once applied", () => {
+    const { count, text } = applyToText(TEST_GUARD_2026_916_1, guardPatch);
+    expect(count).toBe(1);
+    expect(applyToText(text, guardPatch).count).toBe(0);
+  });
+
+  it("the unpatched guard refuses a harness switch — the bug, reproduced", async () => {
+    await expect(runGuard(TEST_GUARD_2026_916_1, { savedType: "claude_local", type: "codex_local" })).rejects.toThrow("Saved agent is not compatible");
+  });
+
+  it("tests a pending switch with the submitted config alone, still checking the caller may update the agent", async () => {
+    const patched = applyToText(TEST_GUARD_2026_916_1, guardPatch).text;
+    const { config, calls } = await runGuard(patched, { savedType: "claude_local", type: "codex_local", env: {} });
+    expect(config).toEqual({ env: {} });
+    expect(calls).toEqual(["assertCanUpdateAgent"]);
+  });
+
+  it("never carries the saved agent's hidden values into another harness", async () => {
+    const patched = applyToText(TEST_GUARD_2026_916_1, guardPatch).text;
+    await expect(runGuard(patched, { savedType: "claude_local", type: "codex_local", env: { KEY: { type: "plain", value: "***REDACTED***" } } }))
+      .rejects.toThrow("Re-enter environment values when testing a different adapter");
+  });
+
+  it("still restores the saved values for the same harness", async () => {
+    const patched = applyToText(TEST_GUARD_2026_916_1, guardPatch).text;
+    const { config } = await runGuard(patched, { savedType: "claude_local", type: "claude_local", env: {} });
+    expect(config.env.KEY).toEqual({ type: "plain", value: "saved-secret" });
+    const viaRunner = await runGuard(patched, { savedType: "paperclip_runner", type: "claude_local", providerAdapter: "claude_local", env: {} });
+    expect(viaRunner.config.env.KEY).toEqual({ type: "plain", value: "saved-secret" });
+  });
+});
+
 describe("applyPatches", () => {
   let root;
   beforeEach(async () => {
@@ -324,16 +430,20 @@ describe("applyPatches", () => {
 
   it("rewrites the bundle in place and reports it", async () => {
     const file = path.join(root, "ui/dist/assets/index-5zyW-AFc.js");
-    await writeFile(file, FULL_BUNDLE_2026_916_1);
+    await writeFullCore(root);
     const report = await applyPatches(root, PATCHES);
-    expect(report).toEqual(PATCHES.map((entry) => ({ id: entry.id, matched: 1, expect: 1, files: ["ui/dist/assets/index-5zyW-AFc.js"] })));
+    expect(report.map((entry) => entry.matched)).toEqual(PATCHES.map(() => 1));
+    expect(report.find((entry) => entry.id === buttonPatch.id).files).toEqual(["ui/dist/assets/index-5zyW-AFc.js"]);
     const patched = await readFile(file, "utf8");
     expect(patched).toContain('.role!=="assistant")return[]');
     expect(patched).toContain("arguments[0]!==!0");
     expect(patched).toContain(SKIP_HARNESS_LABEL);
+    expect(await readFile(path.join(root, "server/dist/services/local-ai-login.js"), "utf8")).toContain("kyoube connect claude");
+    expect(await readFile(path.join(root, "server/dist/routes/agents.js"), "utf8")).toContain("kyoubeCanRestoreEnv");
   });
 
   it("finds the pi parser in a code-split chunk", async () => {
+    await writeFullCore(root);
     await writeFile(path.join(root, "ui/dist/assets/index-5zyW-AFc.js"), FULL_BUNDLE_2026_916_1.replace(PI_HANDLER_2026_916_1, ""));
     await writeFile(path.join(root, "ui/dist/assets/AiConnectionCredentialStep-DHV6zd1f.js"), PI_HANDLER_2026_916_1);
     const report = await applyPatches(root, PATCHES);
@@ -342,6 +452,7 @@ describe("applyPatches", () => {
 
   it("fails — without writing — when a patch matches zero times or more than declared", async () => {
     const file = path.join(root, "ui/dist/assets/index-5zyW-AFc.js");
+    await writeFullCore(root);
     await writeFile(file, "nothing here");
     await expect(applyPatches(root, PATCHES)).rejects.toThrow(/matched 0 time\(s\).*expected 1/);
     await writeFile(file, FULL_BUNDLE_2026_916_1 + FULL_BUNDLE_2026_916_1);
@@ -354,7 +465,7 @@ describe("applyPatches", () => {
 
   it("dry-run reports without touching the file", async () => {
     const file = path.join(root, "ui/dist/assets/index-5zyW-AFc.js");
-    await writeFile(file, FULL_BUNDLE_2026_916_1);
+    await writeFullCore(root);
     const report = await applyPatches(root, PATCHES, { dryRun: true });
     expect(report.map((entry) => entry.matched)).toEqual(PATCHES.map(() => 1));
     expect(await readFile(file, "utf8")).toBe(FULL_BUNDLE_2026_916_1);
@@ -418,7 +529,7 @@ describe("the core the patches are written for", () => {
   });
 
   it("still builds on another core whose code the patches match, with a note", async () => {
-    await writeFile(path.join(root, "ui/dist/assets/index-5zyW-AFc.js"), FULL_BUNDLE_2026_916_1);
+    await writeFullCore(root);
     const { code, stdout, stderr } = await runApply(["--report", "--core-version", "beta"]);
     expect(code).toBe(0);
     expect(stdout).toContain("applied 1/1");
