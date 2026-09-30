@@ -27,6 +27,8 @@
   (Linux), on amd64 or arm64, with at least 4 GB of memory for Docker. On Windows, run the commands
   below in WSL2.
 - `git`.
+- A model for your agents: an API key from Anthropic, OpenAI or OpenRouter, or a subscription you
+  connect after installing ([Harnesses](#harnesses)).
 
 ### Install
 
@@ -51,7 +53,11 @@ The script:
 It is safe to run again at any point, and continues where it stopped. Keep a copy of `.env` somewhere
 safe: restoring a backup onto a new machine needs its secrets.
 
-Then install the agent harnesses you want ([Harnesses](#harnesses)).
+After you claim the instance, the first-run wizard sets up your company and its first agent. On its
+**Connect a model** step an API key works straight away. With only a Claude or OpenAI subscription,
+choose **Skip for now and connect the harness later from the Terminal page**, which appears under the
+step's error: the agent is created anyway. Then install the agent harnesses you want
+([Harnesses](#harnesses)).
 
 Options: `--url <address>` and `--port <n>` answer the address question, `--name <project>` names the
 Compose project (for a second instance on one machine), `--yes` accepts every default and asks nothing
