@@ -60,16 +60,21 @@ env_get() {
 
 # env_set FILE KEY VALUE: set the first uncommented KEY= line and drop later ones, or append.
 # Comment lines are left alone. Line endings become LF; the file becomes mode 600 (it holds secrets).
+# On failure (for example FILE is missing) it returns 1 and leaves no temp file behind.
 env_set() {
   local file="$1" tmp
   tmp="$(mktemp "${file}.XXXXXX")" || return 1
-  KEY="$2" VALUE="$3" awk '
+  if KEY="$2" VALUE="$3" awk '
     BEGIN { k = ENVIRON["KEY"]; v = ENVIRON["VALUE"]; done = 0 }
     { sub(/\r$/, "") }
     index($0, k "=") == 1 { if (!done) { print k "=" v; done = 1 } next }
     { print }
     END { if (!done) print k "=" v }
-  ' "$file" > "$tmp" && mv -f "$tmp" "$file"
+  ' "$file" > "$tmp" && mv -f "$tmp" "$file"; then
+    return 0
+  fi
+  rm -f "$tmp"
+  return 1
 }
 
 # env_keys FILE: every key the file defines, commented ("# KEY=") or not, sorted, one per line.
