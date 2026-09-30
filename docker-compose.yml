@@ -63,6 +63,11 @@ services:
       # TRUST_PROXY=uniquelocal in .env; empty (the default) trusts no proxy,
       # which is right when people reach the app directly. See docs/upgrading.md.
       TRUST_PROXY: ${TRUST_PROXY:-}
+      # Whether the core treats this container as a trusted runtime host
+      # (docker/entrypoint.sh): `auto` = yes, under its own hostname. A public
+      # instance needs it for subscription sign-in from Connections and for
+      # local MCP tools. Set it empty in .env to turn it off.
+      KYOUBE_TRUSTED_RUNTIME_HOST: ${KYOUBE_TRUSTED_RUNTIME_HOST-auto}
       # The core shows Paperclip's hosted announcement cards (upstream's product
       # news, fetched from its website) unless this is "false".
       PAPERCLIP_ANNOUNCEMENTS_ENABLED: "false"
@@ -81,8 +86,8 @@ services:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      # curl is installed in the image (see docker/Dockerfile). start_period
-      # covers first-boot migrations, which are much slower than a warm start.
+      # curl comes with the core image. start_period covers first-boot
+      # migrations, which are much slower than a warm start.
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3100/api/health >/dev/null || exit 1"]
       interval: 10s
       timeout: 5s

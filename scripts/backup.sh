@@ -4,7 +4,7 @@
 #   kyoubeai.dump      pg_dump -Fc of the core database
 #   kyoube.dump        pg_dump -Fc of the Kyoube organisation database
 #   roles.sql          the cluster-level `kyoube` and `kyoube_c_*` roles
-#   kyoubeai-home.tgz  the /kyoubeai home volume (board key, harness creds)
+#   kyoubeai-home.tgz  the /kyoubeai home volume (board key, harnesses and their logins; download caches are left out)
 #   SHA256SUMS         checksums of the four files, by relative name
 #
 # Every docker command here is a plain `docker compose`, so COMPOSE_PROJECT_NAME
@@ -99,7 +99,7 @@ grep -qE '^CREATE ROLE "?kyoube"?;' "$OUT/roles.sql" || {
 # lone POSIX path, which MSYS rewrites to a Windows path before docker sees it.
 echo "backup: archiving the kyoubeai-home volume"
 docker run --rm --volumes-from "$APP_CID" "$TAR_IMAGE" \
-  sh -c 'exec tar czf - -C /kyoubeai .' > "$OUT/kyoubeai-home.tgz"
+  sh -c 'exec tar czf - -C /kyoubeai --exclude=./.cache --exclude=./.npm .' > "$OUT/kyoubeai-home.tgz"
 
 for file in kyoubeai.dump kyoube.dump roles.sql kyoubeai-home.tgz; do
   if [[ ! -s "$OUT/$file" ]]; then
