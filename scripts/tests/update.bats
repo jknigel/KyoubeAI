@@ -1,13 +1,14 @@
 #!/usr/bin/env bats
 # update.sh against a scratch git repo (tags and branches made here) and a docker
-# stub that logs every call. backup.sh is a stub too; scripts/lib/host.sh is the real one.
+# stub that logs every call. backup.sh and restore.sh are stubs too; scripts/lib/host.sh is the real one.
 
 setup() {
   export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
   export MARKS="$BATS_TEST_TMPDIR/marks" STUB_LOG="$BATS_TEST_TMPDIR/docker-calls"
   STUB_BIN="$BATS_TEST_TMPDIR/bin"
   mkdir -p "$MARKS" "$STUB_BIN"
-  # Answers the preflight questions, logs everything, and (when asked) fails the first `compose up` or `compose build`.
+  # Answers the preflight questions, logs everything (and the image .env names at each build), and (when asked) fails
+  # the first `compose up` or `compose build`, reports images as missing, or fails `pull`.
   cat > "$STUB_BIN/docker" <<'EOF'
 #!/bin/sh
 echo "$*" >> "$STUB_LOG"
@@ -16,13 +17,17 @@ case "$*" in
   "info --format {{.MemTotal}}") echo 8000000000 ;;
   "version --format {{.Server.Version}}") echo 27.0.0 ;;
   "compose up "*) if [ -n "${STUB_FAIL_UP:-}" ] && [ ! -e "$STUB_LOG.up" ]; then touch "$STUB_LOG.up"; exit 1; fi ;;
-  "compose build "*) if [ -n "${STUB_FAIL_BUILD:-}" ] && [ ! -e "$STUB_LOG.build" ]; then touch "$STUB_LOG.build"; exit 1; fi ;;
+  "compose build "*)
+    echo "$(sed -n 's/^KYOUBE_IMAGE=//p' .env):$(sed -n 's/^KYOUBE_VERSION=//p' .env)" >> "$STUB_LOG.builds"
+    if [ -n "${STUB_FAIL_BUILD:-}" ] && [ ! -e "$STUB_LOG.build" ]; then touch "$STUB_LOG.build"; exit 1; fi ;;
+  "image inspect "*) [ -z "${STUB_NO_IMAGE:-}" ] || exit 1 ;;
+  "pull "*) [ -z "${STUB_FAIL_PULL:-}" ] || exit 1 ;;
 esac
 exit 0
 EOF
   chmod +x "$STUB_BIN/docker"
 
-  # origin: v1.1.0, an untagged commit, v1.2.0 (main sits on it).
+  # origin: v1.1.0, an untagged commit, v1.2.0 (main sits on it). backup.sh and restore.sh are stubs that log.
   SEED="$BATS_TEST_TMPDIR/seed"; INST="$BATS_TEST_TMPDIR/inst"
   mkdir -p "$SEED/scripts/lib"
   cp "$BATS_TEST_DIRNAME/../../update.sh" "$SEED/"
@@ -33,6 +38,7 @@ echo run >> "$MARKS/backups"
 mkdir -p "$MARKS/backup-dir"
 echo "backup written to $MARKS/backup-dir"
 EOF
+  printf '#!/bin/sh\necho "$1" >> "$MARKS/restores"\n' > "$SEED/scripts/restore.sh"
   printf 'KYOUBE_CORE_VERSION=2026.916.1\nKYOUBE_VERSION=dev\n' > "$SEED/.env.example"
   git -C "$SEED" init -q
   git -C "$SEED" symbolic-ref HEAD refs/heads/main
@@ -202,4 +208,58 @@ write_unfinished() {
   [[ "$output" == *"switching this install from the published image to a source build"* ]]
   grep -Fx "compose build app" "$STUB_LOG"
   [ "$(sed -n 's/^KYOUBE_IMAGE=//p' "$INST/.env")" = kyoubeai ]
+}
+
+@test "rolling back an edge update that switched a published-image install builds nothing and restores the published image" {
+  git -C "$SEED" commit -q --allow-empty -m newer
+  printf 'KYOUBE_VERSION=1.2.0\nKYOUBE_IMAGE=ghcr.io/jknigel/kyoubeai\nCOMPOSE_PROJECT_NAME=inst\n' > "$INST/.env"
+  run_update --edge --yes
+  [ "$status" -eq 0 ]
+  [ "$(cat "$STUB_LOG.builds")" = "kyoubeai:dev" ]
+  run_update --rollback --yes
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"rolled back to main@"* ]]
+  # still the one build of the update; the rollback built nothing
+  [ "$(cat "$STUB_LOG.builds")" = "kyoubeai:dev" ]
+  [ "$(sed -n 's/^KYOUBE_IMAGE=//p' "$INST/.env")" = ghcr.io/jknigel/kyoubeai ]
+  [ "$(sed -n 's/^KYOUBE_VERSION=//p' "$INST/.env")" = 1.2.0 ]
+  [ ! -e "$INST/.kyoube/update-state" ]
+}
+
+@test "rolling back an edge update on a source build rebuilds the previous code" {
+  git -C "$SEED" commit -q --allow-empty -m newer
+  printf 'KYOUBE_VERSION=dev\nKYOUBE_IMAGE=kyoubeai\nCOMPOSE_PROJECT_NAME=inst\n' > "$INST/.env"
+  run_update --edge --yes
+  [ "$status" -eq 0 ]
+  run_update --rollback --yes
+  [ "$status" -eq 0 ]
+  [ "$(cat "$STUB_LOG.builds")" = "$(printf 'kyoubeai:dev\nkyoubeai:dev')" ]
+}
+
+@test "a rollback downloads the published image it returns to before stopping anything" {
+  git -C "$SEED" commit -q --allow-empty -m newer
+  printf 'KYOUBE_VERSION=1.2.0\nKYOUBE_IMAGE=ghcr.io/jknigel/kyoubeai\nCOMPOSE_PROJECT_NAME=inst\n' > "$INST/.env"
+  run_update --edge --yes
+  [ "$status" -eq 0 ]
+  STUB_NO_IMAGE=1 run_update --rollback --yes
+  [ "$status" -eq 0 ]
+  pull_line="$(grep -n '^pull ghcr.io/jknigel/kyoubeai:1.2.0$' "$STUB_LOG" | cut -d: -f1)"
+  stop_line="$(grep -n '^compose stop app$' "$STUB_LOG" | tail -1 | cut -d: -f1)"
+  [ -n "$pull_line" ] && [ "$pull_line" -lt "$stop_line" ]
+}
+
+@test "a rollback whose image cannot be downloaded stops before changing anything and keeps the rollback point" {
+  git -C "$SEED" commit -q --allow-empty -m newer
+  printf 'KYOUBE_VERSION=1.2.0\nKYOUBE_IMAGE=ghcr.io/jknigel/kyoubeai\nCOMPOSE_PROJECT_NAME=inst\n' > "$INST/.env"
+  run_update --edge --yes
+  [ "$status" -eq 0 ]
+  head_before="$(git -C "$INST" rev-parse HEAD)"
+  : > "$STUB_LOG"
+  STUB_NO_IMAGE=1 STUB_FAIL_PULL=1 run_update --rollback --yes
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"could not download ghcr.io/jknigel/kyoubeai:1.2.0"* ]]
+  [[ "$output" == *"nothing was changed"* ]]
+  ! grep -E '^compose (up|build|stop)' "$STUB_LOG"
+  [ "$(git -C "$INST" rev-parse HEAD)" = "$head_before" ]
+  [ -e "$INST/.kyoube/update-state" ]
 }
