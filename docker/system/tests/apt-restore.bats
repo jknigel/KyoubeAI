@@ -44,6 +44,10 @@ case "$1" in
           *) printf '%s\n' "$arg" >> "$FAKE_INSTALLED_FILE" ;;
         esac
       done
+      # Simulate the DPkg::Post-Invoke hook running after successful install
+      if [ -n "$FAKE_RUN_HOOK" ] && [ -x "$FAKE_RUN_HOOK" ]; then
+        "$FAKE_RUN_HOOK"
+      fi
     fi
     exit "$rc"
     ;;
@@ -52,6 +56,15 @@ EOF
   cat > "$FAKE/apt-mark" <<'EOF'
 #!/bin/sh
 echo "apt-mark $*" >> "$CALLS"
+# If a package is marked manual, add it to the installed file for dpkg-query
+case "$1" in
+  manual)
+    shift
+    for pkg in "$@"; do
+      printf '%s\n' "$pkg" >> "$FAKE_INSTALLED_FILE"
+    done
+    ;;
+esac
 EOF
   chmod +x "$FAKE"/*
   export PATH="$FAKE:$PATH"
@@ -134,4 +147,48 @@ EOF
   [ "$status" -eq 0 ]
   [ "$(cat "$KYOUBE_STATE_DIR/apt-restore.status")" = "ok 0" ]
   [ ! -e "$KYOUBE_STATE_DIR/apt-pending.txt" ]
+}
+
+@test "regression: pending prevents package loss when hook runs after each install" {
+  # List has jq, ffmpeg, tree; jq fails; hook enabled
+  # Start 1: apt-restore should write pending BEFORE retrying, so apt-record keeps jq
+  printf 'tree\njq\nffmpeg\n' > "$KYOUBE_STATE_DIR/apt-packages.txt"
+  FAKE_BAD="jq" FAKE_RUN_HOOK="$BATS_TEST_DIRNAME/../apt-record" run "$SCRIPT"
+  [ "$status" -eq 0 ]
+  # After start 1: jq should still be in the list (apt-record saw pending and kept it)
+  [ "$(grep -q jq "$KYOUBE_STATE_DIR/apt-packages.txt" && echo yes || echo no)" = "yes" ]
+  [ "$(cat "$KYOUBE_STATE_DIR/apt-restore.status")" = "failed 100" ]
+  [ "$(cat "$KYOUBE_STATE_DIR/apt-pending.txt")" = "jq" ]
+
+  # Start 2: same state, jq still bad; should still have jq
+  : > "$CALLS"
+  FAKE_BAD="jq" run "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [ "$(grep -q jq "$KYOUBE_STATE_DIR/apt-packages.txt" && echo yes || echo no)" = "yes" ]
+  [ "$(cat "$KYOUBE_STATE_DIR/apt-restore.status")" = "failed 100" ]
+  [ "$(cat "$KYOUBE_STATE_DIR/apt-pending.txt")" = "jq" ]
+}
+
+@test "bulk success with n > 0 missing packages removes pre-existing apt-pending.txt and reports ok n" {
+  printf 'tree\njq\nffmpeg\n' > "$KYOUBE_STATE_DIR/apt-packages.txt"
+  echo "old-pending" > "$KYOUBE_STATE_DIR/apt-pending.txt"
+  # Bulk install succeeds (n=2 packages missing)
+  FAKE_INSTALLED="ffmpeg" run "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$KYOUBE_STATE_DIR/apt-restore.status")" = "ok 2" ]
+  [ ! -e "$KYOUBE_STATE_DIR/apt-pending.txt" ]
+}
+
+@test "bulk install timeout 124 skips per-package retries and keeps all pending" {
+  printf 'tree\njq\nffmpeg\n' > "$KYOUBE_STATE_DIR/apt-packages.txt"
+  FAKE_INSTALL_EXIT=124 run "$SCRIPT"
+  [ "$status" -eq 0 ]
+  # Bulk install should be called
+  grep -q 'apt-get install -y --no-install-recommends tree jq ffmpeg' "$CALLS"
+  # No per-package retries should be attempted
+  grep -q 'bulk install timed out' "$KYOUBE_STATE_DIR/apt-restore.log"
+  [ "$(grep -c 'apt-get install.*tree' "$CALLS")" -eq 1 ]  # Only bulk, no individual
+  # All packages should be pending
+  [ "$(cat "$KYOUBE_STATE_DIR/apt-pending.txt")" = "$(printf 'tree\njq\nffmpeg')" ]
+  [ "$(cat "$KYOUBE_STATE_DIR/apt-restore.status")" = "failed 124" ]
 }
