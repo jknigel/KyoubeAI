@@ -89,8 +89,10 @@ run_backup() {
   [ -n "$BACKUP" ] || die "the backup did not say where it wrote; nothing was changed. Run bash scripts/backup.sh and check its output, then run ./update.sh again"
 }
 
-# save_state MODE FROM_LABEL TO_LABEL: the rollback point; done=0 until the update has restarted on the new version.
+# save_state MODE FROM_LABEL TO_LABEL [REF]: the rollback point (REF, default the current commit); done=0 until the update has restarted on the new version.
 save_state() {
+  local ref="${4:-}"
+  [ -n "$ref" ] || ref="$(git rev-parse HEAD)"
   mkdir -p .kyoube
   cp .env "$ENV_BEFORE"
   : > "$STATE"
@@ -98,7 +100,7 @@ save_state() {
   env_set "$STATE" from "$2"
   env_set "$STATE" to "$3"
   env_set "$STATE" "done" 0
-  env_set "$STATE" ref "$(git rev-parse HEAD)"
+  env_set "$STATE" ref "$ref"
   env_set "$STATE" branch "$(git symbolic-ref --quiet --short HEAD || true)"
   env_set "$STATE" image "$(env_get .env KYOUBE_IMAGE)"
   env_set "$STATE" version "$(env_get .env KYOUBE_VERSION)"
@@ -171,8 +173,64 @@ image_ref() {
 # runs_source_build [FILE]: true when FILE (default .env) selects the image `docker compose build` makes, kyoubeai:dev.
 runs_source_build() { [ "$(image_ref "${1:-.env}")" = kyoubeai:dev ]; }
 
+# previous_commit [TAG]: the commit to record as the rollback point for a stack that runs behind this checkout: TAG's
+# commit when that tag exists here, else where HEAD was before it last moved. Prints nothing (status 1) when neither is
+# a commit other than HEAD.
+previous_commit() {
+  local ref=""
+  if [ -n "${1:-}" ]; then ref="$(git rev-parse -q --verify "refs/tags/$1^{commit}" 2>/dev/null || true)"; fi
+  if [ -z "$ref" ]; then
+    ref="$(git rev-parse -q --verify 'HEAD@{1}^{commit}' 2>/dev/null || true)"
+    [ "$ref" != "$(git rev-parse HEAD)" ] || ref=""
+  fi
+  [ -n "$ref" ] || return 1
+  printf '%s\n' "$ref"
+}
+
+# iso_epoch TIMESTAMP: seconds since the epoch of an RFC 3339 time (2026-09-30T12:34:56.789Z, 2026-09-30T14:34:56+02:00);
+# prints nothing for anything else. awk does the arithmetic because GNU date -d and BSD date -j -f disagree.
+iso_epoch() {
+  printf '%s\n' "$1" | awk '
+    function num(s) { return s + 0 }
+    NR == 1 {
+      if (!match($0, /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9][T ][0-9][0-9]:[0-9][0-9]:[0-9][0-9]/)) exit
+      y = num(substr($0, 1, 4)); m = num(substr($0, 6, 2)); d = num(substr($0, 9, 2))
+      hh = num(substr($0, 12, 2)); mi = num(substr($0, 15, 2)); ss = num(substr($0, 18, 2))
+      rest = substr($0, 20)
+      sub(/^\.[0-9]+/, "", rest)
+      off = 0
+      if (rest ~ /^[+-][0-9][0-9]:?[0-9][0-9]$/) {
+        off = num(substr(rest, 2, 2)) * 3600 + num(substr(rest, length(rest) - 1, 2)) * 60
+        if (substr(rest, 1, 1) == "-") off = -off
+      } else if (rest != "Z" && rest != "z") exit
+      if (m < 1 || m > 12 || d < 1 || d > 31 || hh > 23 || mi > 59 || ss > 60) exit
+      if (m <= 2) y -= 1
+      era = int((y >= 0 ? y : y - 399) / 400)
+      yoe = y - era * 400
+      doy = int((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5) + d - 1
+      days = era * 146097 + yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy - 719468
+      printf "%.0f\n", days * 86400 + hh * 3600 + mi * 60 + ss - off
+    }'
+}
+
+# source_image_behind: status 0, and the reason on stdout, when the source image (kyoubeai:dev) is missing or was built
+# before this checkout's commit; status 1 when it is as new, or when the two times cannot be compared.
+source_image_behind() {
+  local ref built committed
+  ref="$(image_ref)"
+  built="$(docker image inspect -f '{{.Created}}' "$ref" 2>/dev/null </dev/null)" \
+    || { say "the image $ref is not on this machine; rebuilding"; return 0; }
+  built="$(iso_epoch "$built")"
+  committed="$(iso_epoch "$(git log -1 --format=%cI HEAD 2>/dev/null || true)")"
+  if [ -n "$built" ] && [ -n "$committed" ] && [ "$built" -lt "$committed" ]; then
+    say "the image is older than this checkout; rebuilding"
+    return 0
+  fi
+  return 1
+}
+
 update_release() {
-  local want="$1" current target from image_repo new_ref
+  local want="$1" current target from="" image_repo new_ref point="" stack
   # A commit can carry several tags (v1.2.0 and v1.2.0-rc1); only a release tag counts.
   current="$(git tag --points-at HEAD 2>/dev/null | latest_release || true)"
   git fetch --tags --quiet origin || die "could not fetch releases from origin; check the network and run ./update.sh again"
@@ -185,8 +243,27 @@ update_release() {
   fi
   # HEAD may carry more than one release tag; the one asked for is enough.
   if git tag --points-at HEAD 2>/dev/null | grep -Fx "$target" >/dev/null; then current="$target"; fi
-  if [ "$current" = "$target" ]; then say "already on $target"; return; fi
-  if [ -n "$current" ]; then
+  if [ "$current" = "$target" ]; then
+    # The checkout is on the target's code already (the first update of an install that got update.sh by checking out
+    # the new release), but the stack may still run something else; what .env selects is what it runs.
+    stack="$(env_get .env KYOUBE_VERSION)"
+    if [ "$stack" = "${target#v}" ]; then say "already on $target"; return; fi
+    if is_release_version "$stack"; then
+      version_ge "${target#v}" "$stack" \
+        || die "$target is older than v$stack, the release this stack runs; databases only migrate forward. To go back after an update: ./update.sh --rollback"
+      from="v$stack"
+      point="$(previous_commit "$from")" \
+        || die "this stack runs $from and this checkout is already on $target, but git has no tag $from and no earlier position of this checkout to record as the rollback point; nothing was changed. Check out the code the stack runs now (git checkout $from, or the commit it was installed from), then run ./update.sh again"
+      say "    this checkout is on $target, but the stack still runs $from"
+    elif [ -z "$stack" ] || [ "$stack" = dev ]; then
+      from="source build"
+      point="$(previous_commit)" \
+        || die "this stack runs a source build and this checkout is already on $target, but git has no earlier position of this checkout to record as the rollback point; nothing was changed. Check out the commit the stack was built from (git checkout <commit>), then run ./update.sh again"
+      say "    this checkout is on $target, but the stack still runs a source build"
+    else
+      say "already on $target"; return
+    fi
+  elif [ -n "$current" ]; then
     version_ge "${target#v}" "${current#v}" \
       || die "$target is older than $current; databases only migrate forward. To go back after an update: ./update.sh --rollback"
   else
@@ -194,7 +271,7 @@ update_release() {
     git merge-base --is-ancestor HEAD "refs/tags/$target" \
       || die "this checkout ($(git rev-parse --short HEAD)) is not part of $target's history, so $target may be older than the code here; databases only migrate forward. To keep following this branch: ./update.sh --edge. To go back after an update: ./update.sh --rollback"
   fi
-  from="${current:-$(git rev-parse --short HEAD)}"
+  [ -n "$from" ] || from="${current:-$(git rev-parse --short HEAD)}"
   image_repo="$(release_image_repo)"
   [ "$image_repo" = "$(env_get .env KYOUBE_IMAGE)" ] \
     || say "    this install built its own image; from now on it uses the published one (./update.sh --edge keeps building from source)"
@@ -209,7 +286,7 @@ update_release() {
   USED="$(harness_types_in_use)"
   [ -z "$USED" ] || say "    agents use: $(printf '%s' "$USED" | tr '\n' ',' | sed 's/,$//; s/,/, /g')"
   run_backup
-  save_state release "$from" "$target"
+  save_state release "$from" "$target" "$point"
   release_apply "$target" "$from"
 }
 
@@ -229,20 +306,29 @@ release_apply() {
 }
 
 update_edge() {
-  local branch upstream behind from to rebuild=0
+  local branch upstream behind from to rebuild=0 why="" point=""
   branch="$(git symbolic-ref --quiet --short HEAD)" || die "--edge follows a branch, but this checkout is on a release tag; git checkout main first"
   upstream="$(git rev-parse --abbrev-ref '@{u}' 2>/dev/null)" || die "branch $branch has no upstream to pull from; git branch --set-upstream-to origin/$branch"
   git fetch --quiet || die "could not fetch from origin; check the network and run ./update.sh --edge again"
   behind="$(git rev-list --count "HEAD..@{u}")" || die "could not compare $branch with $upstream; run git status"
   # An install on a published image gets one rebuild from source even when the branch has nothing new.
   runs_source_build || rebuild=1
-  if [ "$behind" = 0 ] && [ "$rebuild" = 0 ]; then say "already up to date with $upstream"; return; fi
+  if [ "$behind" = 0 ] && [ "$rebuild" = 0 ]; then
+    # The checkout can be newer than the image it runs (git pull without a rebuild, the first update from 1.0).
+    why="$(source_image_behind)" || { say "already up to date with $upstream"; return; }
+  fi
   from="$branch@$(git rev-parse --short HEAD)"
   if [ "$behind" != 0 ]; then
     git merge-base --is-ancestor HEAD '@{u}' \
       || die "branch $branch has diverged from $upstream (it has commits $upstream lacks, and the other way round); nothing was changed. Rebase it onto $upstream or merge $upstream into it (git status), then run ./update.sh --edge again"
     to="$branch@$(git rev-parse --short '@{u}')"
     say "Update KyoubeAI $from -> $upstream ($behind new commits), then rebuild from source"
+  elif [ -n "$why" ]; then
+    to="$from"
+    # The checkout already holds the new code; where this branch was before is the best guess for what the old image was built from.
+    if point="$(previous_commit)"; then from="$branch@$(git rev-parse --short "$point")"; fi
+    say "Update KyoubeAI $from -> $to: no new commits, but $why"
+    [ -n "$point" ] || say "    no earlier commit of this branch is known here, so ./update.sh --rollback returns the data but not older code"
   else
     to="$from"
     say "Update KyoubeAI $from -> $from: no new commits, but this install runs a published image; it will be rebuilt from source"
@@ -250,7 +336,7 @@ update_edge() {
   confirm "A backup is taken first. Continue?" || { say "Nothing was changed."; exit 1; }
   USED="$(harness_types_in_use)"
   run_backup
-  save_state edge "$from" "$to"
+  save_state edge "$from" "$to" "$point"
   edge_apply "$from"
 }
 

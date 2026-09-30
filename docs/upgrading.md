@@ -76,8 +76,10 @@ that is not a failure, but `doctor` will not call it `ready` either.
 Terminal `sudo`. Take a backup first: `bash scripts/backup.sh`.
 
 - **`./update.sh` is the new way to update.** Move the checkout to 1.1 once with `./install.sh`, and use
-  `./update.sh` from then on. A 1.0 checkout has neither script, and `./update.sh` on a checkout that
-  is already on v1.1.0 answers `already on v1.1.0` without touching the running stack. `./install.sh`
+  `./update.sh` from then on. A 1.0 checkout has neither script. `./update.sh` on a checkout you
+  moved to v1.1.0 by hand still updates the stack: it reads what the stack runs from `KYOUBE_VERSION`
+  in `.env` (an older release, or `dev` for a source build), takes a backup and moves the stack up, and
+  `./update.sh --rollback` works afterwards. `./install.sh`
   keeps the `.env`, the data and the plugins of an existing install: it adds the settings 1.1 introduced
   to `.env`, pins `COMPOSE_PROJECT_NAME` to the name the install already uses, points `KYOUBE_IMAGE` and
   `KYOUBE_VERSION` at the release, downloads the image, restarts, sees the instance is claimed and the
