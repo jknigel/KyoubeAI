@@ -87,7 +87,7 @@ const PAGE = `
     <div style="height:28px">Terminal · No session</div>
     <div class="kyoube-terminal-host" id="host"></div>
     <details><summary>Sessions in this company</summary></details>
-    <details><summary>Authenticate the agent harnesses</summary></details>
+    <details><summary>Install agent harnesses and tools</summary></details>
   </div>`;
 
 const SHAPES = [

@@ -22,10 +22,10 @@ const WAIT_TIMEOUT_MS = 10_000;
 const OPEN_FORBIDDEN_HINT = "Your company role cannot open a terminal.";
 
 const HELP: Array<[string, string]> = [
-  ["claude login", "Claude Code OAuth login; credentials are stored under /kyoubeai/.claude"],
-  ["pi", "pi coding agent; run `pi` and use /login or set provider keys in ~/.pi"],
-  ["hermes setup", "Hermes Agent wizard (provider, model); data under /kyoubeai/.hermes"],
-  ["kyoube doctor", "KyoubeAI health checks (config, databases, plugins, harness CLIs)"],
+  ["kyoube harness install claude", "Install Claude Code (or codex, hermes, pi, gemini, opencode, kimi). Installs land in ~/.local and survive restarts and updates"],
+  ["kyoube harness list", "Which harness CLIs are installed, their versions, and whether each is yours or the core image's copy"],
+  ["sudo apt install <package>", "System packages are kept too: they come back after every restart and update"],
+  ["kyoube doctor", "KyoubeAI health checks (config, databases, plugins, harnesses, kept packages)"],
 ];
 
 function outputStatusLabel(state: OutputLoopState): string {
@@ -296,7 +296,7 @@ export function TerminalPage({ context }: PluginPageProps) {
             </ul>
           </details>
           <details className="text-xs text-foreground/70">
-            <summary>Authenticate the agent harnesses</summary>
+            <summary>Install agent harnesses and tools</summary>
             <ul className="mt-1 space-y-1">
               {HELP.map(([command, text]) => (
                 <li key={command}><code>{command}</code> — {text}</li>
