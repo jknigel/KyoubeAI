@@ -34,6 +34,14 @@ setup() {
   env_set .env KYOUBE_VERSION 1.1.0
   env_set .env NEW 'a=b c'
   [ "$(cat .env)" = "$(printf '# KYOUBE_VERSION=1.0.0\nKYOUBE_VERSION=1.1.0\nOTHER=1\nNEW=a=b c')" ]
+  [ "$(stat -c %a .env 2>/dev/null || stat -f %Lp .env)" = "600" ]
+}
+
+@test "env_set on a missing file fails and leaves no temp file behind" {
+  run env_set nope.env A 1
+  [ "$status" -ne 0 ]
+  [ ! -e nope.env ]
+  [ -z "$(ls -A)" ]
 }
 
 @test "env_keys lists keys, commented or not" {
