@@ -185,9 +185,6 @@ main() {
   say "Next: open Workspace -> Terminal and install a harness (README, 'Harnesses'), e.g.  kyoube harness install claude"
 }
 
-# is_release_version X: three dot-separated numbers, nothing else.
-is_release_version() { [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; }
-
 # valid_port N: an integer from 1 to 65535.
 valid_port() {
   case "$1" in ''|*[!0-9]*) return 1 ;; esac
