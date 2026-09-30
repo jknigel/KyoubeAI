@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # End-to-end smoke test: builds the image, starts the stack on port 3199,
 # creates the first admin, installs the Kyoube plugins through `kyoube`, and
-# creates one agent per harness. Requires docker compose v2, curl, jq.
+# creates one agent per harness (stand-in pi and Hermes CLIs in ~/.local/bin), and proves installs survive a restore. Requires docker compose v2, curl, jq.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -629,6 +629,46 @@ jq -e 'tostring | contains("smoke plan") | not' "$TMP/files-activity.json" >/dev
   || { echo "the activity log leaked file content ('smoke plan')" >&2; exit 1; }
 echo "    files round-trip ok at $FILES_ROOT"
 
+echo "==> installs land on the home volume: stand-in harnesses, npm -g, sudo apt"
+# The image ships no pi or Hermes. Stand-ins in ~/.local/bin let the agents
+# created above resolve their harness (doctor checks that below), and the
+# restore further down proves they, npm globals and kept apt packages come back.
+compose exec -T -u node app sh -c '
+  set -e
+  mkdir -p "$HOME/.local/bin"
+  for name in pi hermes; do
+    printf "#!/bin/sh\necho \"%s 0.0.0-smoke\"\n" "$name" > "$HOME/.local/bin/$name"
+    chmod +x "$HOME/.local/bin/$name"
+  done
+  npm install -g --no-audit --no-fund semver@7.6.3 >/dev/null
+  sudo apt-get update -qq >/dev/null
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends tree >/dev/null
+'
+[[ "$(compose exec -T app cat /kyoubeai/.kyoube/apt-packages.txt | tr -d '\r')" == *tree* ]] \
+  || { echo "apt-record did not keep tree in /kyoubeai/.kyoube/apt-packages.txt" >&2; exit 1; }
+compose exec -T app sh -c 'ls /kyoubeai/.cache/apt/archives/tree_*.deb >/dev/null' \
+  || { echo "the tree .deb was not kept in the apt cache on the volume" >&2; exit 1; }
+[[ "$(compose exec -T -u node app sh -c 'command -v semver' | tr -d '\r')" == /kyoubeai/.local/bin/semver ]] \
+  || { echo "npm install -g did not land in /kyoubeai/.local/bin" >&2; exit 1; }
+
+echo "==> a terminal session finds what was installed in ~/.local/bin"
+PATH_MARK="kyoube-path-$RANDOM"
+PATH_EXPECTED="$PATH_MARK:/kyoubeai/.local/bin/semver"
+PATH_SESSION="$(bridge terminal.open "{\"companyId\":\"$COMPANY_ID\",\"params\":{\"cols\":100,\"rows\":30}}" | jq -r '.data.sessionId')"
+[[ -n "$PATH_SESSION" && "$PATH_SESSION" != "null" ]] || { echo "terminal.open failed" >&2; exit 1; }
+# Typed unevaluated, so only a live shell can print the resolved path.
+bridge terminal.input "{\"companyId\":\"$COMPANY_ID\",\"params\":{\"sessionId\":\"$PATH_SESSION\",\"data\":\"echo $PATH_MARK:\$(command -v semver)\\n\"}}" >/dev/null
+PATH_AFTER=0; : >"$TMP/path-output.txt"; PATH_STARTED=$(date +%s); PATH_SEEN=""
+while (( $(date +%s) - PATH_STARTED < 20 )); do
+  bridge terminal.wait "{\"companyId\":\"$COMPANY_ID\",\"params\":{\"sessionId\":\"$PATH_SESSION\",\"afterSeq\":$PATH_AFTER,\"timeoutMs\":2000}}" >"$TMP/path-wait.json"
+  jq -r '[.data.events[] | select(.type == "output") | .data] | join("")' "$TMP/path-wait.json" | tr -d '\n\r' >>"$TMP/path-output.txt"
+  PATH_AFTER="$(jq --argjson after "$PATH_AFTER" '[.data.events[].seq] | max // $after' "$TMP/path-wait.json")"
+  if grep -q -- "$PATH_EXPECTED" "$TMP/path-output.txt"; then PATH_SEEN=1; break; fi
+done
+bridge terminal.close "{\"companyId\":\"$COMPANY_ID\",\"params\":{\"sessionId\":\"$PATH_SESSION\"}}" >/dev/null
+[[ -n "$PATH_SEEN" ]] || { echo "a terminal shell did not resolve semver to /kyoubeai/.local/bin; output:" >&2; cat "$TMP/path-output.txt" >&2; exit 1; }
+echo "    ~/.local/bin is first in a Terminal login shell"
+
 echo "==> disaster recovery: back up, destroy the stack, restore it, and prove the restore"
 # Ruling P4-R5: the round trip is never rehearsed against the default compose
 # project — that is the operator's own stack and data. scripts/backup.sh and
@@ -646,6 +686,11 @@ COMPANY_HEX="$(echo "$COMPANY_ID" | tr -d '-' | tr 'A-Z' 'a-z')"
 COMPOSE_PROJECT_NAME="$PROJECT" COMPOSE_ENV_FILES="$ENV_FILE" BACKUP_DIR="$TMP/backups" \
   bash "$ROOT/scripts/backup.sh" | tee "$TMP/backup.log"
 BACKUP_PATH="$(sed -n 's/^backup written to //p' "$TMP/backup.log" | tail -1)"
+tar tzf "$BACKUP_PATH/kyoubeai-home.tgz" >"$TMP/home-listing.txt"
+grep -qx './.local/bin/semver' "$TMP/home-listing.txt" || { echo "the backup does not carry ~/.local/bin/semver" >&2; exit 1; }
+grep -qx './.kyoube/apt-packages.txt' "$TMP/home-listing.txt" || { echo "the backup does not carry the kept apt list" >&2; exit 1; }
+! grep -q '^\./\.cache/' "$TMP/home-listing.txt" || { echo "the backup includes ~/.cache, which it must leave out" >&2; exit 1; }
+! grep -q '^\./\.npm/' "$TMP/home-listing.txt" || { echo "the backup includes ~/.npm, which it must leave out" >&2; exit 1; }
 [[ -n "$BACKUP_PATH" && -d "$BACKUP_PATH" ]] \
   || { echo "backup.sh did not print a backup directory:" >&2; cat "$TMP/backup.log" >&2; exit 1; }
 for FILE in kyoubeai.dump kyoube.dump roles.sql kyoubeai-home.tgz SHA256SUMS; do
@@ -697,12 +742,14 @@ COMPOSE_PROJECT_NAME="$PROJECT" COMPOSE_ENV_FILES="$ENV_FILE" \
   bash "$ROOT/scripts/restore.sh" "$BACKUP_PATH"
 
 RESTORED=""
+# bootstrapStatus turns ready before the core's startup recovery ends; /api/health
+# reports status "starting" until then, and doctor's `core` line fails on it.
 for i in $(seq 1 300); do
-  if curl -fsS "$BASE_URL/api/health" 2>/dev/null | jq -e '.bootstrapStatus == "ready"' >/dev/null 2>&1; then RESTORED=1; break; fi
+  if curl -fsS "$BASE_URL/api/health" 2>/dev/null | jq -e '.status == "ok" and .bootstrapStatus == "ready"' >/dev/null 2>&1; then RESTORED=1; break; fi
   sleep 1
 done
 [[ -n "$RESTORED" ]] \
-  || { echo "the restored app never reported bootstrapStatus ready: $(curl -sS "$BASE_URL/api/health" || true)" >&2; exit 1; }
+  || { echo "the restored app never reported status ok with bootstrapStatus ready: $(curl -sS "$BASE_URL/api/health" || true)" >&2; exit 1; }
 # The original board token is back: it lives in the restored core database,
 # and the board key file `kyoube setup` wrote is back on the restored volume.
 STATUS="$(curl -sS -o "$TMP/post-restore-plugins.json" -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/plugins")"
@@ -710,6 +757,27 @@ STATUS="$(curl -sS -o "$TMP/post-restore-plugins.json" -w '%{http_code}' -H "Aut
   || { echo "the pre-disaster board token did not work after the restore: $STATUS $(cat "$TMP/post-restore-plugins.json")" >&2; exit 1; }
 KEY_STAT="$(compose exec -T app sh -c 'stat -c "%a %U" /kyoubeai/kyoube/board-key.json' | tr -d '\r')"
 [[ "$KEY_STAT" == "600 node" ]] || { echo "restored board-key.json is '$KEY_STAT', expected '600 node'" >&2; exit 1; }
+echo "==> installs came back with the restore: ~/.local/bin on the server's PATH, kept apt packages reinstalled"
+server_env() { # the running server process's environment, one VAR=value per line
+  # As node: root in the container lacks CAP_SYS_PTRACE, so it cannot read another user's /proc/<pid>/environ.
+  compose exec -T -u node app sh -c 'for p in /proc/[0-9]*; do if tr "\0" " " < "$p/cmdline" 2>/dev/null | grep -q "^node .*server/dist/[i]ndex.js"; then tr "\0" "\n" < "$p/environ"; break; fi; done' | tr -d '\r'
+}
+SERVER_PATH="$(server_env | sed -n 's/^PATH=//p')"
+[[ "$SERVER_PATH" == /kyoubeai/.local/bin:* ]] || { echo "the server's PATH does not start with /kyoubeai/.local/bin: '$SERVER_PATH'" >&2; exit 1; }
+for name in pi hermes semver; do
+  FOUND="$(compose exec -T -u node app env PATH="$SERVER_PATH" sh -c "command -v $name" | tr -d '\r')"
+  [[ "$FOUND" == "/kyoubeai/.local/bin/$name" ]] || { echo "$name resolves to '$FOUND' on the server's PATH after the restore" >&2; exit 1; }
+done
+for i in $(seq 1 60); do
+  [[ "$(compose exec -T app sh -c 'cat /kyoubeai/.kyoube/apt-restore.status 2>/dev/null' | tr -d '\r')" == "ok 1" ]] && break
+  sleep 2
+done
+compose exec -T app sh -c 'command -v tree >/dev/null && grep -qx "ok 1" /kyoubeai/.kyoube/apt-restore.status' \
+  || { echo "apt-restore did not reinstall tree:" >&2; compose exec -T app cat /kyoubeai/.kyoube/apt-restore.log >&2 || true; exit 1; }
+TRUSTED="$(server_env | sed -n 's/^PAPERCLIP_TRUSTED_MCP_RUNTIME_HOST=//p')"
+CONTAINER_HOST="$(server_env | sed -n 's/^HOSTNAME=//p')"
+[[ -n "$TRUSTED" && "$TRUSTED" == "$CONTAINER_HOST" ]] || { echo "trusted runtime host is '$TRUSTED', expected the container hostname '$CONTAINER_HOST'" >&2; exit 1; }
+echo "    pi, hermes and semver on the server's PATH; tree reinstalled; trusted runtime host = $TRUSTED"
 wait_for_plugin kyoube.apps $APPS_SHIPPED
 wait_for_plugin kyoube.terminal "$BUMP2"
 wait_for_plugin_api
@@ -773,6 +841,10 @@ grep -q "kyoube.terminal@${BUMP2}=ready" "$TMP/doctor.log" \
   || { echo "kyoube doctor did not report kyoube.terminal@${BUMP2}=ready:" >&2; cat "$TMP/doctor.log" >&2; exit 1; }
 grep -q "kyoube.files@${FILES_SHIPPED}=ready" "$TMP/doctor.log" \
   || { echo "kyoube doctor did not report kyoube.files@${FILES_SHIPPED}=ready:" >&2; cat "$TMP/doctor.log" >&2; exit 1; }
+grep -Eq '^ok +harnesses in use .*pi_local \(1\)' "$TMP/doctor.log" || { echo "doctor did not pass 'harnesses in use':" >&2; cat "$TMP/doctor.log" >&2; exit 1; }
+grep -Eq '^ok +pi cli +pi 0\.0\.0-smoke — yours \(/kyoubeai/\.local/bin/pi\)' "$TMP/doctor.log" || { echo "doctor did not list the stand-in pi as yours" >&2; cat "$TMP/doctor.log" >&2; exit 1; }
+grep -Eq '^ok +claude cli .*core image \(/usr/local/bin/claude\)' "$TMP/doctor.log" || { echo "doctor did not list the core image's claude" >&2; cat "$TMP/doctor.log" >&2; exit 1; }
+grep -Eq '^ok +system packages +1 kept: tree' "$TMP/doctor.log" || { echo "doctor did not report the kept tree package" >&2; cat "$TMP/doctor.log" >&2; exit 1; }
 # Every restored company: the smoke's own, and the one onboarding-live-check created.
 COMPANY_COUNT="$(curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/companies" | jq 'length')"
 grep -Eq "^ok +skills .* ${COMPANY_COUNT}/${COMPANY_COUNT} companies" "$TMP/doctor.log" \
@@ -868,7 +940,7 @@ COMPOSE_PROJECT_NAME="$PROJECT" COMPOSE_ENV_FILES="$ENV_FILE" \
 grep -q '0.1.x backup — leaving the migration marker' "$TMP/restore-legacy.log" \
   || { echo "restore.sh did not take its legacy-backup path" >&2; exit 1; }
 for i in $(seq 1 300); do
-  if curl -fsS "$BASE_URL/api/health" 2>/dev/null | jq -e '.bootstrapStatus == "ready"' >/dev/null 2>&1; then break; fi
+  if curl -fsS "$BASE_URL/api/health" 2>/dev/null | jq -e '.status == "ok" and .bootstrapStatus == "ready"' >/dev/null 2>&1; then break; fi
   sleep 1
   if [[ $i -eq 300 ]]; then echo "the app never came back after the legacy-named restore" >&2; exit 1; fi
 done
