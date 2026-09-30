@@ -10,6 +10,11 @@ MARKER="$home_dir/.migrated-from-paperclip-home"
 mkdir -p "$home_dir/kyoube" "$home_dir/.hermes"
 if [ "$(id -u)" -eq 0 ]; then
   chown node:node "$home_dir" "$home_dir/kyoube" "$home_dir/.hermes" 2>/dev/null || true
+  # System packages people installed with apt live in the container's own
+  # filesystem, which a recreate throws away. apt-record kept their names on
+  # the volume; this puts them back before the server or any agent runs, and
+  # never fails the start (docker/system/apt-restore).
+  /usr/local/lib/kyoube/apt-restore || true
   # An install migrated from 0.1.x (home at /paperclip) can still hold absolute
   # /paperclip/... paths in the core database, adapter configs and harness
   # state. scripts/migrate-from-0.1.sh leaves a marker; while it exists the old
@@ -23,6 +28,20 @@ if [ "$(id -u)" -eq 0 ]; then
   run_as_node() { gosu node "$@"; }
 else
   run_as_node() { "$@"; }
+fi
+
+# Whether the core treats this container as a trusted runtime host
+# (KYOUBE_TRUSTED_RUNTIME_HOST, docker-compose.yml). A public instance needs it
+# for subscription sign-in from Connections and for local MCP tools. `auto`
+# trusts it under its own hostname, which the core already uses as the runtime
+# supervisor's host id, so nothing but the trust changes. Empty turns it off,
+# and a value set directly by an override wins.
+if [ -z "${PAPERCLIP_TRUSTED_MCP_RUNTIME_HOST+set}" ]; then
+  case "${KYOUBE_TRUSTED_RUNTIME_HOST-auto}" in
+    auto) export PAPERCLIP_TRUSTED_MCP_RUNTIME_HOST="${HOSTNAME:-local-host}" ;;
+    "") ;;
+    *) export PAPERCLIP_TRUSTED_MCP_RUNTIME_HOST="$KYOUBE_TRUSTED_RUNTIME_HOST" ;;
+  esac
 fi
 
 run_as_node node "$BOOTSTRAP" write-config

@@ -34,34 +34,17 @@ RUN pnpm -r build \
  && test -f /out/plugins/studio/dist/manifest.js
 
 # ---------------------------------------------------------------------------
-# Stage 2: the runtime image = the upstream core image + pi + Hermes + KyoubeAI.
+# Stage 2: the runtime image = the upstream core image + KyoubeAI.
+#
+# No agent harness is baked in. People install the ones they want from the
+# Terminal page (`kyoube harness install <name>`, or any installer) into
+# /kyoubeai/.local on the home volume. That directory is first on PATH for the
+# server, every agent run and every shell, so an install survives down/up,
+# image updates and core bumps. The core image's own CLIs (claude, codex,
+# gemini, kimi, opencode in /usr/local/bin) stay as fallbacks a user install
+# shadows. Spec: docs/superpowers/specs/2026-09-30-harness-freedom-simple-install-design.md
 # ---------------------------------------------------------------------------
 FROM ghcr.io/paperclipai/paperclip:${KYOUBE_CORE_VERSION}
-ARG PI_VERSION=0.87.1
-# Claude Code. The base image installs `@anthropic-ai/claude-code@latest` at
-# *its* build time, so the copy it carries is whatever was current when upstream
-# cut the pinned release (2.1.278 in 2026.916.1). Pinning it here replaces that
-# copy in place -- the same root-owned global install under /usr/local -- so the
-# version is a deliberate, reproducible choice, asserted below.
-ARG CLAUDE_CODE_VERSION=2.1.281
-# Hermes publishes release tags (vYYYY.M.D) but no package; the installer clones
-# NousResearch/hermes-agent. HERMES_COMMIT is the commit behind the newest
-# release tag and pins BOTH the installer script (fetched from that commit's raw
-# URL, verified against HERMES_INSTALLER_SHA256) and the checkout the installer
-# makes (--commit). --force-commit is required alongside it: the installer
-# otherwise refuses a --commit that is an ancestor of the tip it just cloned,
-# which is exactly what this pin becomes as soon as upstream `main` advances
-# past it, and the build would then fail on the `rev-parse HEAD` assertion
-# below rather than honour the pin. HERMES_VERSION is asserted against `hermes
-# --version` after the install so upstream drift fails the build loudly instead
-# of silently shipping a different agent. To bump: take the commit behind the
-# newest release tag (`git ls-remote --tags https://github.com/NousResearch/hermes-agent`),
-# re-download scripts/install.sh from its raw URL, sha256 it, and read the new
-# version off `hermes --version`.
-# HERMES_COMMIT is release v2026.9.21.
-ARG HERMES_COMMIT=d337b736aa1e8ebecfab043842d13e4a2d2f48a3
-ARG HERMES_INSTALLER_SHA256=00f9080c6452bf87f03ef2fffb4b2c23b9f43f946aaae956e4c547d17e310b22
-ARG HERMES_VERSION=0.21.4
 USER root
 
 # KyoubeAI's home. The base image sets HOME=PAPERCLIP_HOME=/paperclip and gives
@@ -77,78 +60,39 @@ ENV HOME=/kyoubeai \
     PAPERCLIP_CONFIG=/kyoubeai/instances/default/config.json
 RUN mkdir -p /kyoubeai && chown node:node /kyoubeai && usermod -d /kyoubeai node && rmdir /paperclip
 
-# HOME is /kyoubeai (set above), which is also the runtime volume mount
-# point — anything an installer drops in $HOME during the build is baked into
-# the image AND seeded into every fresh volume. Every install below therefore
-# runs with HOME and the package caches under /tmp, and the artefacts that must
-# survive (Playwright browsers, the Computer Use driver) are redirected into
-# /opt with the same env vars Hermes reads at runtime (ENV, further down).
-ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
-    CUA_DRIVER_RS_HOME=/opt/cua-driver
-
-# pi coding agent (the `pi_local` adapter runs the `pi` binary) and the pinned
-# Claude Code (the `claude_local` adapter, and `claude login` from the Terminal).
-# Each `--version` is matched as a whole line, so a registry alias or a
-# postinstall that quietly left something else on PATH fails the build here.
-RUN HOME=/tmp/build-home npm_config_cache=/tmp/npm-cache \
-    npm install --global --omit=dev \
-      "@earendil-works/pi-coding-agent@${PI_VERSION}" \
-      "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
- && HOME=/tmp/build-home pi --version | grep -qxF "${PI_VERSION}" \
- && HOME=/tmp/build-home claude --version | grep -qxF "${CLAUDE_CODE_VERSION} (Claude Code)" \
- && rm -rf /tmp/build-home /tmp/npm-cache /root/.npm /root/.cache \
- && test -z "$(ls -A /kyoubeai)"
-
-# Hermes Agent (the `hermes_local` adapter runs `hermes chat`). Installed as
-# root in FHS layout: code in /usr/local/lib/hermes-agent, launcher at
-# /usr/local/bin/hermes. Runtime data lives under HERMES_HOME on the volume.
-# Passing --dir is load-bearing by its absence: an explicit --dir sets
-# INSTALL_DIR_EXPLICIT and disables the installer's root FHS layout, which
-# would put the code somewhere else and never link /usr/local/bin/hermes.
+# The Terminal can install anything: `node`, the user the server, its agents
+# and every Terminal shell run as, gets passwordless sudo. That is a small step
+# from the existing trust (`node` already owns /app and can read the server's
+# environment), and the container stays the boundary (SECURITY.md, Terminal).
+# The extra packages are what harness installers commonly assume.
 #
-# The installer clones --depth 1 --branch main, so pinning to a commit that is
-# no longer main's tip makes it `git fetch origin <sha>` the whole history
-# (+580 MB of .git). The fetch/gc block below re-shallows at the pinned commit
-# and repacks, back to the ~70 MB an unpinned shallow install produces; `hermes
-# update` and `hermes --version`'s git metadata work the same on a shallow
-# checkout, and HEAD is re-asserted afterwards.
-#
-# /opt/cua-driver is chowned to `node`: Hermes' Computer Use repair path takes a
-# lock directory under CUA_DRIVER_RS_HOME and re-downloads the driver there at
-# runtime as the `node` user, so a root-owned tree would fail. The Playwright
-# browsers stay root-owned and world-readable — nothing writes them after build.
+# System packages someone adds later are kept: apt-record (a DPkg hook) writes
+# their names to the home volume and apt-restore (docker/entrypoint.sh) puts
+# them back after a recreate. The baseline it compares against is every
+# package chosen up to here, so this must stay the last apt step in the file.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends python3 python3-venv git curl ca-certificates build-essential \
+ && apt-get install -y --no-install-recommends sudo unzip xz-utils python3-venv \
  && rm -rf /var/lib/apt/lists/* \
- && curl -fsSL "https://raw.githubusercontent.com/NousResearch/hermes-agent/${HERMES_COMMIT}/scripts/install.sh" \
-      -o /tmp/hermes-install.sh \
- && echo "${HERMES_INSTALLER_SHA256}  /tmp/hermes-install.sh" | sha256sum -c - \
- && HOME=/tmp/build-home npm_config_cache=/tmp/npm-cache HERMES_HOME=/tmp/build-home/.hermes \
-    bash /tmp/hermes-install.sh --non-interactive --commit "${HERMES_COMMIT}" --force-commit \
- && rm -f /tmp/hermes-install.sh \
- && HOME=/tmp/build-home git -C /usr/local/lib/hermes-agent fetch --depth 1 origin "${HERMES_COMMIT}" \
- && HOME=/tmp/build-home git -C /usr/local/lib/hermes-agent update-ref -d refs/remotes/origin/main \
- && HOME=/tmp/build-home git -C /usr/local/lib/hermes-agent reflog expire --expire=now --all \
- && HOME=/tmp/build-home git -C /usr/local/lib/hermes-agent gc --prune=now --quiet \
- && HOME=/tmp/build-home git -C /usr/local/lib/hermes-agent rev-parse HEAD | grep -q "^${HERMES_COMMIT}$" \
- && mkdir -p /opt/ms-playwright /opt/cua-driver \
- && chmod -R a+rX /usr/local/lib/hermes-agent /opt/ms-playwright /opt/cua-driver \
- && chown -R node:node /opt/cua-driver \
- && test -x /usr/local/bin/hermes \
- && mkdir -p /tmp/hermes-check && chown node:node /tmp/hermes-check \
- && gosu node sh -c 'HOME=/tmp/hermes-check HERMES_HOME=/tmp/hermes-check/.hermes hermes --version' \
-      > /tmp/hermes-version.txt \
- && cat /tmp/hermes-version.txt \
- && grep -qF "Hermes Agent v${HERMES_VERSION} (" /tmp/hermes-version.txt \
- && gosu node sh -c 'HOME=/tmp/hermes-check pi --version' \
- && gosu node sh -c 'HOME=/tmp/hermes-check claude --version' \
- && apt-get purge -y --auto-remove build-essential \
- && gosu node sh -c 'HOME=/tmp/hermes-check HERMES_HOME=/tmp/hermes-check/.hermes hermes --version' \
- && gosu node sh -c 'HOME=/tmp/hermes-check pi --version' \
- && gosu node sh -c 'HOME=/tmp/hermes-check claude --version' \
- && rm -rf /tmp/hermes-check /tmp/hermes-version.txt /tmp/build-home /tmp/npm-cache \
-      /root/.npm /root/.cache /var/lib/apt/lists/* \
+ && mkdir -p /opt/kyoube \
+ && apt-mark showmanual | LC_ALL=C sort -u > /opt/kyoube/apt-baseline.txt
+COPY docker/system/sudoers /etc/sudoers.d/kyoube
+COPY docker/system/90kyoube /etc/apt/apt.conf.d/90kyoube
+COPY docker/system/kyoube-profile.sh /etc/profile.d/kyoube.sh
+COPY docker/system/npmrc /usr/local/etc/npmrc
+COPY docker/system/apt-record docker/system/apt-restore /usr/local/lib/kyoube/
+RUN chmod 0440 /etc/sudoers.d/kyoube \
+ && visudo -cf /etc/sudoers.d/kyoube \
+ && chmod 0644 /etc/apt/apt.conf.d/90kyoube /etc/profile.d/kyoube.sh /usr/local/etc/npmrc /opt/kyoube/apt-baseline.txt \
+ && chmod 0755 /usr/local/lib/kyoube/apt-record /usr/local/lib/kyoube/apt-restore \
+ && gosu node sudo -n true \
+ && mkdir -p /tmp/npm-check && chown node:node /tmp/npm-check \
+ && test "$(gosu node env HOME=/tmp/npm-check npm_config_cache=/tmp/npm-check sh -c 'cd /tmp && npm config get prefix')" = /kyoubeai/.local \
+ && rm -rf /tmp/npm-check \
+ && test -x /usr/local/bin/claude \
+ && ! command -v pi && ! command -v hermes \
  && test -z "$(ls -A /kyoubeai)"
+ENV PATH=/kyoubeai/.local/bin:${PATH} \
+    NPM_CONFIG_PREFIX=/kyoubeai/.local
 
 # ---------------------------------------------------------------------------
 # Core patches: fixes to upstream bugs applied to the pristine core layer while
@@ -239,21 +183,17 @@ RUN chmod +x /usr/local/bin/kyoube /usr/local/bin/kyoube-entrypoint.sh \
  && rm -rf /tmp/build-home \
  && test -z "$(ls -A /kyoubeai)"
 
-# Ruling P4-R39: telemetry off by default in the container environment — the
-# server, the bootstrap CLI, and anything the entrypoint starts. A Terminal
-# shell does not inherit this: the terminal plugin hands node-pty a closed
-# environment it builds itself, so it sets the same two switches there (ruling
-# P4-R42, plugins/kyoube-terminal/src/spawn-env.ts).
+# Ruling P4-R39: telemetry off by default in the container environment: the
+# server, the bootstrap CLI, agent runs and anything the entrypoint starts. A
+# Terminal shell does not inherit this: the terminal plugin hands node-pty a
+# closed environment it builds itself, so it sets the same two switches there
+# (ruling P4-R42, plugins/kyoube-terminal/src/spawn-env.ts).
 # Both are conventions rather than one product's switch: the upstream core's
-# own telemetry client is opt-out and enabled by default, and disables itself on
-# DO_NOT_TRACK=1 (packages/shared/src/telemetry/config.ts), and Claude Code
-# reads DISABLE_TELEMETRY and DO_NOT_TRACK the same way. What each bundled
-# component actually sends — and which of them could not be verified offline —
-# is written down in SECURITY.md's Telemetry section; nothing here claims the
-# image is telemetry-free. An operator who wants Claude Code's non-essential
-# traffic off as well adds CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 to the
-# `app` service (it also stops update checks, so it is not set here); the
-# terminal plugin passes that one through into Terminal shells too.
+# own telemetry client disables itself on DO_NOT_TRACK=1
+# (packages/shared/src/telemetry/config.ts), and Claude Code reads
+# DISABLE_TELEMETRY and DO_NOT_TRACK the same way. Harnesses people install are
+# their own products; SECURITY.md's Telemetry section says what the core
+# image's copies send. Nothing here claims the image is telemetry-free.
 ENV DO_NOT_TRACK=1 \
     DISABLE_TELEMETRY=1
 
