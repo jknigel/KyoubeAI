@@ -1,0 +1,48 @@
+#!/bin/sh
+# Runs as root from docker/entrypoint.sh before the server starts: reinstalls
+# the packages apt-record kept. It never fails the start. A package that cannot
+# be installed (offline with no cached copy, or gone from a newer Debian after a
+# core bump) is logged, and `kyoube doctor` reports it.
+set -u
+state="${KYOUBE_STATE_DIR:-/kyoubeai/.kyoube}"
+cache="${KYOUBE_APT_CACHE:-/kyoubeai/.cache/apt}"
+limit="${KYOUBE_APT_RESTORE_TIMEOUT:-300}"
+list="$state/apt-packages.txt"
+log="$state/apt-restore.log"
+status="$state/apt-restore.status"
+now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+finish() { chown -R node:node "$state" 2>/dev/null || true; exit 0; }
+
+mkdir -p "$state" "$cache/archives/partial" "$cache/lists/partial"
+if [ ! -s "$list" ]; then rm -f "$status"; finish; fi
+
+missing=""
+while IFS= read -r pkg || [ -n "$pkg" ]; do
+  case "$pkg" in ''|'#'*) continue ;; esac
+  if ! printf '%s\n' "$pkg" | grep -Eq '^[a-z0-9][a-z0-9+.:-]*$'; then
+    echo "$(now) skipping '$pkg': not a package name" >> "$log"
+    continue
+  fi
+  if dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed'; then continue; fi
+  missing="$missing $pkg"
+done < "$list"
+
+if [ -z "$missing" ]; then echo "ok 0" > "$status"; finish; fi
+echo "$(now) reinstalling:$missing" >> "$log"
+# The index lives on the volume too (90kyoube), so an offline start can still
+# install from the cached .debs.
+timeout "$limit" apt-get update -q >> "$log" 2>&1 \
+  || echo "$(now) apt-get update failed; using the cached package index" >> "$log"
+# shellcheck disable=SC2086 # one word per package, each validated above
+DEBIAN_FRONTEND=noninteractive timeout "$limit" apt-get install -y --no-install-recommends $missing >> "$log" 2>&1
+rc=$?
+if [ "$rc" -eq 0 ]; then
+  # shellcheck disable=SC2086
+  apt-mark manual $missing >> "$log" 2>&1 || true
+  # shellcheck disable=SC2086
+  set -- $missing
+  echo "ok $#" > "$status"
+else
+  echo "failed $rc" > "$status"
+fi
+finish

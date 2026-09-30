@@ -1,0 +1,3 @@
+# KyoubeAI: global installs land on the home volume, first on PATH, so they
+# survive a recreate, an image update and a core bump. Also applies to sudo npm.
+prefix=/kyoubeai/.local

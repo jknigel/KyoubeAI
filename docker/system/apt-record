@@ -1,0 +1,21 @@
+#!/bin/sh
+# DPkg::Post-Invoke hook (docker/system/90kyoube). After every apt/dpkg run it
+# writes the packages people chose on top of the image to the home volume, so
+# apt-restore can put them back when the container is recreated (down/up, an
+# image update, a core bump). The image's own packages are the baseline taken
+# at build time and are never listed; a removal drops out the same way.
+set -eu
+baseline="${KYOUBE_APT_BASELINE:-/opt/kyoube/apt-baseline.txt}"
+state="${KYOUBE_STATE_DIR:-/kyoubeai/.kyoube}"
+[ -r "$baseline" ] || exit 0
+mkdir -p "$state"
+manual="$(mktemp)"
+tmp="$(mktemp "$state/.apt-packages.XXXXXX")"
+trap 'rm -f "$manual" "$tmp"' EXIT
+# A failed query must not be mistaken for "nothing installed", which would
+# erase the list.
+apt-mark showmanual > "$manual" || exit 0
+LC_ALL=C sort -u "$manual" | LC_ALL=C comm -13 "$baseline" - > "$tmp"
+chmod 0644 "$tmp"
+mv -f "$tmp" "$state/apt-packages.txt"
+chown node:node "$state" "$state/apt-packages.txt" 2>/dev/null || true

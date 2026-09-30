@@ -1,0 +1,10 @@
+// KyoubeAI: remember what people install on top of the image (apt-record) and
+// keep the downloaded packages and the package index on the home volume, so
+// apt-restore can put them back after a recreate, even offline.
+DPkg::Post-Invoke { "/usr/local/lib/kyoube/apt-record || true"; };
+Dir::Cache::Archives "/kyoubeai/.cache/apt/archives/";
+Dir::State::Lists "/kyoubeai/.cache/apt/lists/";
+Binary::apt::APT::Keep-Downloaded-Packages "true";
+// The upstream entrypoint makes everything under /kyoubeai node-owned, which
+// apt's unprivileged _apt download user cannot write.
+APT::Sandbox::User "root";
