@@ -8,3 +8,7 @@ coverage/
 *.log
 .DS_Store
 /backups/
+.kyoube/
+.env.tmp
+# Local compose wiring (tunnels, host services, extra volumes): yours, never tracked.
+docker-compose.override.yml
