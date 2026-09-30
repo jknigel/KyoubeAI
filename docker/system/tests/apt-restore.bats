@@ -5,6 +5,8 @@ setup() {
   FAKE="$BATS_TEST_TMPDIR/bin"; mkdir -p "$FAKE"
   export KYOUBE_STATE_DIR="$BATS_TEST_TMPDIR/state"; mkdir -p "$KYOUBE_STATE_DIR"
   export KYOUBE_APT_CACHE="$BATS_TEST_TMPDIR/cache"
+  export KYOUBE_APT_BASELINE="$BATS_TEST_TMPDIR/baseline.txt"
+  printf 'ca-certificates\ncurl\n' > "$KYOUBE_APT_BASELINE"
   export CALLS="$BATS_TEST_TMPDIR/calls"; : > "$CALLS"
   export FAKE_INSTALLED_FILE="$BATS_TEST_TMPDIR/installed"
   : > "$FAKE_INSTALLED_FILE"
@@ -56,8 +58,16 @@ EOF
   cat > "$FAKE/apt-mark" <<'EOF'
 #!/bin/sh
 echo "apt-mark $*" >> "$CALLS"
-# If a package is marked manual, add it to the installed file for dpkg-query
 case "$1" in
+  showmanual)
+    # Output all packages: baseline plus installed packages, sorted, unique
+    if [ -f "$KYOUBE_APT_BASELINE" ]; then
+      cat "$KYOUBE_APT_BASELINE"
+    fi
+    if [ -f "$FAKE_INSTALLED_FILE" ]; then
+      cat "$FAKE_INSTALLED_FILE"
+    fi
+    ;;
   manual)
     shift
     for pkg in "$@"; do
@@ -150,21 +160,31 @@ EOF
 }
 
 @test "regression: pending prevents package loss when hook runs after each install" {
-  # List has jq, ffmpeg, tree; jq fails; hook enabled
-  # Start 1: apt-restore should write pending BEFORE retrying, so apt-record keeps jq
+  # Baseline: ca-certificates, curl
+  # List: tree, jq, ffmpeg (all needed); jq fails on bulk install
+  # With hook enabled: apt-record runs after tree and ffmpeg succeed
+  # Without early pending write: apt-record would rebuild list as just "tree ffmpeg" (minus baseline)
+  # With early pending write: apt-record sees pending and keeps jq in the list
   printf 'tree\njq\nffmpeg\n' > "$KYOUBE_STATE_DIR/apt-packages.txt"
+
+  # Start 1: bulk fails on jq, retries tree and ffmpeg (hook runs after each)
+  # Without early pending write, jq would be lost after tree succeeds
   FAKE_BAD="jq" FAKE_RUN_HOOK="$BATS_TEST_DIRNAME/../apt-record" run "$SCRIPT"
   [ "$status" -eq 0 ]
-  # After start 1: jq should still be in the list (apt-record saw pending and kept it)
-  [ "$(grep -q jq "$KYOUBE_STATE_DIR/apt-packages.txt" && echo yes || echo no)" = "yes" ]
+  # Assert: jq must be in the list (proof that pending was kept)
+  grep -q "jq" "$KYOUBE_STATE_DIR/apt-packages.txt"
+  # Assert: tree and ffmpeg should be in the list (they succeeded)
+  grep -q "tree" "$KYOUBE_STATE_DIR/apt-packages.txt"
+  grep -q "ffmpeg" "$KYOUBE_STATE_DIR/apt-packages.txt"
   [ "$(cat "$KYOUBE_STATE_DIR/apt-restore.status")" = "failed 100" ]
   [ "$(cat "$KYOUBE_STATE_DIR/apt-pending.txt")" = "jq" ]
 
-  # Start 2: same state, jq still bad; should still have jq
+  # Start 2: same state, jq still bad; should still have jq in list and pending
   : > "$CALLS"
-  FAKE_BAD="jq" run "$SCRIPT"
+  FAKE_BAD="jq" FAKE_RUN_HOOK="$BATS_TEST_DIRNAME/../apt-record" run "$SCRIPT"
   [ "$status" -eq 0 ]
-  [ "$(grep -q jq "$KYOUBE_STATE_DIR/apt-packages.txt" && echo yes || echo no)" = "yes" ]
+  # Assert: jq must still be in the list after start 2
+  grep -q "jq" "$KYOUBE_STATE_DIR/apt-packages.txt"
   [ "$(cat "$KYOUBE_STATE_DIR/apt-restore.status")" = "failed 100" ]
   [ "$(cat "$KYOUBE_STATE_DIR/apt-pending.txt")" = "jq" ]
 }
