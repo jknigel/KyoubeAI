@@ -1,3 +1,4 @@
+import { runConnect } from "./commands/connect.js";
 import { runDoctor } from "./commands/doctor.js";
 import { runEnsurePlugins } from "./commands/ensure-plugins.js";
 import { runHarness } from "./commands/harness.js";
@@ -22,7 +23,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
         continue;
       }
       const next = argv[i + 1];
-      if (next !== undefined && !next.startsWith("--") && ["api-key", "api-base"].includes(body)) {
+      if (next !== undefined && !next.startsWith("--") && ["api-key", "api-base", "dir"].includes(body)) {
         result.flags[body] = next;
         i += 1;
       } else {
@@ -48,6 +49,7 @@ Commands:
   harness install <name>  Install a harness with its official installer (claude, codex, hermes, pi, gemini, opencode, kimi)
   harness which <name>  Print where a harness CLI is (exit 1 when it is not installed)
   harness missing <adapterType...>  Print the harnesses those adapter types need that are not installed
+  connect claude        Finish a Claude subscription sign-in from Connections with a one-year token
   write-config          (internal) Render /kyoubeai/kyoube/config.json from the environment
 `;
 
@@ -66,6 +68,8 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
       return runDoctor(env);
     case "harness":
       return runHarness(parsed.positionals, env);
+    case "connect":
+      return runConnect(parsed.positionals, parsed.flags, env);
     case "write-config":
       return runWriteConfig(env);
     default:
