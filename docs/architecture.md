@@ -36,11 +36,11 @@ docker compose
 │   │    │     └─ worker  kyoube.files      — WorkspaceFiles over each project's folder
 │   │    └─ plugin API routes  ◀── agent runs (Claude Code, pi, Hermes) over REST
 │   │
-│   ├─ CLIs on PATH: claude, pi, hermes
+│   ├─ CLIs on PATH: yours in /kyoubeai/.local/bin, then the core image's claude, codex, gemini, kimi, opencode
 │   ├─ kyoube-entrypoint.sh → background: `kyoube ensure-plugins --watch`
 │   ├─ DATABASE_URL         ───────────▶ db: `kyoubeai` database
 │   ├─ KYOUBE_DATABASE_URL  ───────────▶ db: `kyoube` database
-│   └─ volume kyoubeai-home:/kyoubeai (board key, ~/.claude ~/.pi ~/.hermes, project folders)
+│   └─ volume kyoubeai-home:/kyoubeai (board key, ~/.claude ~/.codex ~/.pi ~/.hermes, ~/.local, ~/.kyoube, project folders)
 │
 └── db    (postgres:17-alpine)
       ├─ database `kyoubeai`  — owned by the `kyoubeai` superuser (upstream's own data)

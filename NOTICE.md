@@ -38,10 +38,7 @@ permission notice, reproduced as that licence requires:
 > DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 > OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-### Agent harnesses installed into the image
+### Agent harnesses
 
-The image build (`docker/Dockerfile`) additionally installs third-party agent CLIs that are not part
-of this repository and are distributed under their own licences: Claude Code
-(`@anthropic-ai/claude-code`, Anthropic's licence, see the package's README), pi
-(`@earendil-works/pi-coding-agent`) and Hermes Agent (https://github.com/NousResearch/hermes-agent).
-Their terms apply to those programs, not to KyoubeAI.
+Since 1.1 the image adds no agent harness of its own. The core image carries Claude Code, Codex, Gemini
+CLI, Kimi Code and OpenCode under their own licences, and users install others themselves.

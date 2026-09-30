@@ -32,6 +32,25 @@ docker compose pull        # must succeed on its own
 docker compose up -d
 ```
 
+## Reaching KyoubeAI from other machines
+
+KyoubeAI listens on every network interface, so other machines can already reach it on port 3100.
+Tell it the address people will use:
+
+1. Set `KYOUBE_PUBLIC_URL` in `.env` to the exact address people type, such as
+   `http://192.168.1.10:3100` or `https://kyoube.example.com`. Sign-in and the `kyoube setup` link are
+   built from it, so a wrong value sends people to the wrong host.
+2. Behind a reverse proxy or tunnel on the same Docker network (Caddy, Traefik, nginx or cloudflared),
+   also set `TRUST_PROXY=uniquelocal`.
+3. For an instance on the internet, put TLS in front and set `KYOUBE_DEPLOYMENT_EXPOSURE=public`.
+   `kyoube doctor` fails a public instance whose address does not start with `https://`.
+4. Apply the changes with `docker compose up -d`.
+
+To use a port other than 3100, set `KYOUBE_PORT` and put the same port in `KYOUBE_PUBLIC_URL`. On a
+`localhost` or `127.0.0.1` address, also set `BETTER_AUTH_TRUSTED_ORIGINS` to that origin (for
+example `http://localhost:3199`). The core maps a loopback address back to its internal port and
+would otherwise reject sign-ins from the new one.
+
 ## Volumes and what lives where
 
 Two named volumes hold every piece of state that is not in the image. Losing either one loses real
@@ -67,7 +86,10 @@ Inside `/kyoubeai` (the `kyoubeai-home` volume):
 | `kyoube/config.json` | Rendered from the container environment by the entrypoint on every start. Disposable. |
 | `.claude/.credentials.json` | Claude Code login. |
 | `.pi/` | pi's configuration and login. |
-| `.hermes/config.yaml` | Hermes Agent configuration (`HERMES_HOME=/kyoubeai/.hermes`). |
+| `.hermes/` | Hermes Agent's configuration, sessions and memory (`HERMES_HOME=/kyoubeai/.hermes`), and the program itself once you install it. |
+| `.local/` | Harnesses you install (`.local/bin` is first on the `PATH` of the server, every agent run and every Terminal shell), and what their installers keep beside them. |
+| `.kyoube/apt-packages.txt` | The system packages kept across recreates; `apt-restore.log` and `apt-restore.status` beside it say how the last restore at start-up went. |
+| `.cache/` | Download caches: apt's packages and index, so kept packages can come back without a network. Not backed up, and neither is `.npm/`, npm's cache. |
 | `instances/default/projects/<companyId>/<projectId>/` | Each project's managed working folder (`_default`, or the repository name for a cloned repo): what its agents have written, and what the project's **Files** tab shows and edits. |
 | `instances/default/workspaces/<agentId>/` | An agent's own default working directory, used for runs with no project folder. |
 
@@ -84,7 +106,7 @@ Writes `backups/<UTC timestamp>/` (override the parent with `BACKUP_DIR=/mnt/bac
 | `kyoubeai.dump` | `pg_dump -Fc` of the `kyoubeai` database |
 | `kyoube.dump` | `pg_dump -Fc` of the `kyoube` database |
 | `roles.sql` | The `kyoube` login role and every `kyoube_c_<hex>` company role |
-| `kyoubeai-home.tgz` | The whole `/kyoubeai` volume, ownership and modes preserved |
+| `kyoubeai-home.tgz` | The `/kyoubeai` volume, ownership and modes preserved, without the download caches (`.cache`, `.npm`) |
 | `SHA256SUMS` | Checksums of the four files above, by relative name |
 
 `roles.sql` is `pg_dumpall --roles-only --no-role-passwords` filtered down to the statements that
@@ -171,7 +193,9 @@ It runs in this order, and the order matters:
    grants `CONNECT` to `PUBLIC` by default and these two ACLs are set by the init script, so they
    are in neither dump.
 6. The `/kyoubeai` volume is emptied and the tarball unpacked into it, then
-   `docker compose start app`.
+   `docker compose start app`. The download caches are not in a backup, so on a new machine the kept
+   system packages are downloaded again at the first start; without a network they stay listed and the
+   next start tries again (`kyoube doctor` reports it).
 
 Each database is restored into a `<name>_restore_tmp` database first and only swapped in once
 `pg_restore` has succeeded (`--exit-on-error`), so a failed restore leaves that database untouched.
@@ -278,9 +302,22 @@ config, the deployment's `exposure` (it fails when `KYOUBE_DEPLOYMENT_EXPOSURE=p
 `KYOUBE_PUBLIC_URL` is not an `https://` address — put TLS in front before exposing an instance;
 a `private` deployment always passes), the core's `/api/health`, TCP reachability of the `kyoube`
 database, whether a board key is present and where it came from, every `kyoube.*` plugin as
-`key@version=status`, a `--version` call against each of the three harness CLIs (`claude`, `pi`,
-`hermes`), and whether each harness's credentials are on the volume. The credential lines are informational — they report "not found"
-until someone authenticates — so a non-zero exit always comes from one of the checks above them.
+`key@version=status`, the Kyoube skills in every company, and the harness and system-package checks
+below. The credential lines at the end (Claude Code, pi, Hermes) are informational — they report
+"not found" until someone authenticates — so a non-zero exit always comes from one of the checks above
+them.
+
+The image carries no harness of its own, so the harness checks look at what is on the `PATH`:
+
+- **Harnesses.** One line per harness found, with its `--version` and where it comes from: `yours` (in
+  `/kyoubeai/.local/bin`), `core image` (`/usr/local/bin`) or `other`. One that is found but does not
+  run says so and gives its reinstall command. These lines are informational.
+- **`harnesses in use`.** It reads the agents from the core and fails when an agent that is not
+  terminated uses a harness that is not installed or does not run. The line names the fix, for example
+  `kyoube harness install pi`.
+- **`system packages`.** The packages `sudo apt install` kept, put back at every start. It fails when
+  that did not work at the last start; `/kyoubeai/.kyoube/apt-restore.log` says why. A package that
+  could not be reinstalled stays on the list and is tried again at the next start.
 
 `GET /api/health` is the core's own probe and needs no authentication. It is what the compose
 healthcheck polls, and `.bootstrapStatus == "ready"` is what tells you the instance has been
@@ -320,15 +357,20 @@ If you set `KYOUBE_BOARD_API_KEY` in `.env` instead of storing a key, rotate it 
 Each harness keeps its login under `/kyoubeai`. Removing its state logs it out; the next login
 happens from the Terminal page (**Terminal** in the company sidebar, for owners and admins).
 
+Run `docker compose exec app kyoube harness list` first, to see which harnesses are installed and
+whether each is yours (in `/kyoubeai/.local/bin`) or the core image's copy.
+
 ```bash
 docker compose exec app rm -rf /kyoubeai/.claude/.credentials.json   # Claude Code
 docker compose exec app rm -rf /kyoubeai/.pi                          # pi
 docker compose exec app rm -rf /kyoubeai/.hermes                      # Hermes Agent
 ```
 
-Then, from the Terminal page, run `claude login`, `pi`, or `hermes setup` and follow the prompts.
-`HOME` is `/kyoubeai` there, so the new credentials land back on the volume and survive restarts.
-`.hermes` is recreated by the entrypoint on the next start, so removing it is safe.
+Hermes installs itself under `/kyoubeai/.hermes`, so removing that directory removes the program along
+with its login. Run `kyoube harness list` again, and reinstall anything that is missing with
+`kyoube harness install <name>`. Then, from the Terminal page, sign in again as
+[README → Harnesses](../README.md#harnesses) describes for each one. `HOME` is `/kyoubeai` there, so the new credentials land back on the volume and
+survive restarts. `.hermes` is recreated by the entrypoint on the next start, so removing it is safe.
 
 The alternative to interactive logins is provider API keys in `.env` (`ANTHROPIC_API_KEY`,
 `OPENAI_API_KEY`, `OPENROUTER_API_KEY`), which need `docker compose up -d app` to take effect. Note
@@ -344,9 +386,11 @@ it only if you see `fork: Resource temporarily unavailable` in the app log with 
 instance.
 
 There is no memory or CPU limit by default, because a limit that is too low makes agent runs fail in
-ways that are hard to diagnose. Add them in `docker-compose.yml` when the instance shares a host:
+ways that are hard to diagnose. Add them in `docker-compose.override.yml` (untracked, so `./update.sh`
+is not blocked by local edits) when the instance shares a host:
 
 ```yaml
+services:
   app:
     mem_limit: 6g
     cpus: 4.0
@@ -354,10 +398,9 @@ ways that are hard to diagnose. Add them in `docker-compose.yml` when the instan
 
 Compose v2 honours both forms on `docker compose up`: the short `mem_limit`/`cpus` keys above, and
 the longer `deploy.resources.limits.memory` / `.cpus`, which is also the form a Swarm deployment
-reads. Use whichever you find clearer. Give the app at least 4 GB — Playwright and the Computer Use driver are
-memory-hungry — and remember the container is killed outright, with exit code 137, when it exceeds
-`mem_limit`. Postgres is usually happy without a limit; if you set one, keep it well above
-`shared_buffers`.
+reads. Use whichever you find clearer. Give the app at least 4 GB, and remember the container is
+killed outright, with exit code 137, when it exceeds `mem_limit`. Postgres is usually happy without a
+limit; if you set one, keep it well above `shared_buffers`.
 
 Disk is the limit people actually hit: the `pgdata` volume grows with the activity log and company
 data, and `kyoubeai-home` grows with project folders and agent workspaces. Both live under Docker's data root, so watch
