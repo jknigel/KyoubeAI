@@ -24,6 +24,19 @@ pnpm typecheck
 pnpm build
 ```
 
+The shell scripts have their own tests, written for bats (installed by `pnpm install`): `install.sh`,
+`update.sh` and `scripts/lib/host.sh` under `scripts/tests`, and the container scripts in
+`docker/system` under `docker/system/tests`:
+
+```bash
+pnpm test:sh
+```
+
+The host scripts (`install.sh`, `update.sh`, `scripts/lib/host.sh`, `scripts/install-e2e.sh`) have to
+run on the bash 3.2 that macOS ships, and the container scripts (`docker/system/*`,
+`docker/entrypoint.sh`) are POSIX `sh`. CI runs ShellCheck over the host scripts and the
+`docker/system` scripts.
+
 The apps plugin also has an integration suite that runs its schema/records/company-isolation/migration
 tests against a real Postgres. Start a throwaway one and export the URL it prints:
 
@@ -42,8 +55,31 @@ what CI's `docker-smoke` job runs, and takes roughly 12–25 minutes locally dep
 pnpm smoke   # == bash scripts/smoke.sh
 ```
 
+`scripts/install-e2e.sh` then tests `install.sh` and `update.sh` end to end on the image the smoke
+built (`kyoubeai:smoke`, so run `pnpm smoke` first): in a throwaway clone with two local releases it
+installs, claims the instance and approves the plugins through the API, updates (merging a new setting
+and installing a harness an agent uses), rolls back, and checks that a second install onto the same
+project's volumes is refused. CI runs it after the smoke.
+
 Before opening a PR that touches the core pin, also run `bash scripts/check-pins.sh` — it is the
 first step of CI and fails fast if `KYOUBE_CORE_VERSION` and the plugin SDK pins disagree.
+
+## Running from source
+
+The installer and the updater work on your checkout too. `./install.sh --edge` stays on the branch you
+are on and builds the image from source (10–25 minutes the first time) instead of downloading a
+release; `./update.sh --edge` later fast-forwards that branch, merges new settings into `.env`, keeps
+`KYOUBE_CORE_VERSION` in step with `.env.example` and rebuilds:
+
+```bash
+./install.sh --edge
+./update.sh --edge
+```
+
+`./install.sh --help` lists the install options; `--name <project>` and `--port <n>` run a second
+instance beside another. `./update.sh` takes a backup first and refuses to run while tracked files
+have local changes, so stash or commit them first. `--edge` needs a branch with an upstream, and
+`./update.sh --rollback` goes back to the code and data from before the last update.
 
 ## Branch and commit conventions
 
@@ -60,8 +96,9 @@ The workspace is the private root and these build-time or deployable members:
 
 | Path | Package | What it is |
 |---|---|---|
-| *(root)* | `kyoubeai` | Workspace root: `docker-compose.yml`, `docker/`, `docs/`, `scripts/`, `.github/`. |
-| `docker/bootstrap/` | `@kyoube/bootstrap` | The `kyoube` CLI (`setup`, `ensure-plugins`, `doctor`). |
+| *(root)* | `kyoubeai` | Workspace root: `install.sh`, `update.sh`, `docker-compose.yml`, `docker/`, `docs/`, `scripts/`, `.github/`. |
+| `docker/bootstrap/` | `@kyoube/bootstrap` | The `kyoube` CLI (`setup`, `ensure-plugins`, `doctor`, `harness`, `connect`). |
+| `docker/system/` | *(not a package)* | What the image adds for the Terminal: passwordless `sudo`, the apt hook that keeps installed system packages (`apt-record`, `apt-restore`), `/etc/profile.d` and npm's prefix. |
 | `docker/rebrand/` | `@kyoube/rebrand` | The build-time brand transform: names, logo and artwork (see `docs/branding.md`). |
 | `docker/core-patches/` | `@kyoube/core-patches` | Build-time fixes to upstream bugs, held only until the upstream fix ships (see "Never patch the core"). |
 | `docker/theme/` | `@kyoube/theme` | The build-time Studio theme: brand tokens, a gated skin and display-text renames (see `docs/theme.md`). |
@@ -151,6 +188,19 @@ follows the same shape:
 - For anything touching the terminal gate, a data/company boundary, or the apps sandbox, run
   [`.github/ISSUE_TEMPLATE/security-review.md`](.github/ISSUE_TEMPLATE/security-review.md)'s checklist
   against your change before requesting review.
+
+## Release checklist
+
+1. `CHANGELOG.md` has the release's entry with its date, and the root `package.json` `version` matches.
+   A plugin whose code changed has its version bumped in both its `package.json` and `src/manifest.ts`.
+2. `bash scripts/check-pins.sh`, `pnpm typecheck`, `pnpm test`, `pnpm test:sh` and `pnpm build` pass.
+3. `pnpm smoke` and `bash scripts/install-e2e.sh` pass.
+4. Update a real install of the previous release with `./update.sh` on Linux and on macOS (Docker
+   Desktop), and run `./install.sh` once in WSL2. For 1.1.0 the previous release is 1.0.x, which has no
+   `update.sh`: move it as [`docs/upgrading.md`](docs/upgrading.md), "Moving to 1.1", describes.
+5. Tag `vX.Y.Z` and push the tag. The release workflow publishes the multi-architecture image
+   `ghcr.io/jknigel/kyoubeai:X.Y.Z` and `latest`. `install.sh` and `update.sh` only consider tags
+   without a `-`, from 1.1.0 on, so a pre-release tag such as `v1.2.0-rc1` is never offered to users.
 
 ## Licensing and contributor agreement
 

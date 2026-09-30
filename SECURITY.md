@@ -3,7 +3,8 @@
 ## Reporting a vulnerability
 
 Report a security vulnerability in **KyoubeAI** (this repository — the bootstrap CLI, the `kyoube.terminal`
-and `kyoube.apps` plugins, and the Docker overlay) through GitHub's private Security Advisory feature:
+and `kyoube.apps` plugins, `install.sh` and `update.sh`, and the Docker overlay) through GitHub's private
+Security Advisory feature:
 
 **<https://github.com/jknigel/KyoubeAI/security/advisories/new>**
 
@@ -18,7 +19,7 @@ otherwise unmodified, `FROM` a published image) is out of scope here; report it 
 
 KyoubeAI is a Docker overlay on the upstream core:
 a Postgres 17 cluster, the four Kyoube plugins (`kyoube.terminal`, `kyoube.apps`, `kyoube.files`, `kyoube.studio`), and the `kyoube`
-bootstrap CLI that renders config, installs the plugins, and runs diagnostics. Nothing here patches
+bootstrap CLI that renders config, installs the plugins, installs harnesses, and runs diagnostics. Nothing here patches
 the core — every Kyoube feature is a plugin — so this document describes the security properties of
 the overlay, not of the core's own auth, sessions, board API, or MCP tool gateway.
 
@@ -55,6 +56,16 @@ instance access**: the Postgres superuser password, every agent harness's stored
 board API key, and the ability to run anything the container's user can run. It is not a sandboxed or
 scoped surface, and it is not intended to be one; treat it exactly like shell access to the whole
 deployment, and keep `allowedRoles` tight.
+
+Since 1.1 the `node` user has passwordless `sudo` inside the container. The server, its agents and every
+Terminal shell run as `node`, so agents have root in the container too. This is a small step from the
+trust that already existed: `node` owns the core's code in `/app` and can read the server's environment,
+including the database credentials and `BETTER_AUTH_SECRET`. The boundary is the container itself: it is
+not privileged, keeps Docker's default seccomp and AppArmor profiles and a `pids_limit`, and the compose
+file adds no capabilities. Harness binaries in `/kyoubeai/.local` can be rewritten by agents, the same
+trust as a harness's own settings files such as `~/.claude/settings.json`. Codex's sandbox bypass stays on,
+because its own sandbox cannot run in a container. `KYOUBE_TRUSTED_RUNTIME_HOST=auto` (the default) lets a
+public instance run server-host subscription sign-in and local MCP tools; set it empty to turn that off.
 
 Every session open and close, and every access denial, is recorded in the company's activity
 log — **keystrokes and terminal output are never logged**, only that a session existed and who opened
@@ -310,32 +321,39 @@ stage sets `DO_NOT_TRACK=1` and `DISABLE_TELEMETRY=1` in the **container** envir
 the core server, the `kyoube` CLI, and anything the entrypoint starts. A **Terminal** session
 does not inherit that environment: `plugins/kyoube-terminal/src/spawn-env.ts` hands node-pty a
 closed, explicitly built environment (that is what keeps database credentials and provider keys out
-of a shell), so it sets the same two switches on every shell it spawns — which is where `claude`,
-`pi` and `hermes` are actually authenticated and run. Both names are conventions rather than one
-product's switch. **This is not a claim that the image is telemetry-free**: it bundles third-party
-software this project does not build, and what follows says exactly which parts were verified and
-which were not.
+of a shell), so it sets the same two switches on every shell it spawns — which is where you install
+and sign in to the harnesses. Both names are conventions rather than one product's switch. **This is
+not a claim that the image is telemetry-free**: it bundles third-party software this project does not
+build, and what follows says exactly which parts were verified and which were not.
 
 | Component | Where it comes from | What is known |
 |---|---|---|
 | **Core** (server, CLI) | the base image | First-party telemetry, **opt-out and on by default**. Verified in upstream's source: `resolveTelemetryConfig` (`packages/shared/src/telemetry/config.ts`) returns `enabled: false` when `PAPERCLIP_TELEMETRY_DISABLED=1`, when `DO_NOT_TRACK=1`, on a CI runner, or when the config file says `telemetry.enabled: false`; with it disabled the client is never constructed. Otherwise it POSTs batches of named events to `https://telemetry.paperclip.ing/ingest` (with an AWS API Gateway fallback), carrying a random per-install `installId`, the version, and event dimensions; upstream's own contract forbids PII, prompts, file paths and secrets. **`DO_NOT_TRACK=1` is what this image sets, so it is off.** |
-| **Claude Code** | `docker/Dockerfile` (`@anthropic-ai/claude-code`, pinned; it replaces the base image's `@latest` copy) | Reads `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, then `DISABLE_TELEMETRY`, then `DO_NOT_TRACK`, and treats either of the last two as "no telemetry" — verified by inspecting an installed CLI binary (2.1.266), **not** the build inside this image. It also supports an opt-in OpenTelemetry exporter (`CLAUDE_CODE_ENABLE_TELEMETRY`), which this image does not set. What it sends *by default*, signed in, was not verified here. |
-| **pi** (`@earendil-works/pi-coding-agent`) | installed by `docker/Dockerfile` | **Not verified.** The package is not vendored in this repository, so nothing here can say what it sends. `DO_NOT_TRACK` is set for it regardless; whether it honours it is unknown. |
-| **Hermes Agent** | cloned at build from a pinned commit | **Not verified**, for the same reason: the source is fetched during the build and is not in this repository. |
-| **Playwright / Chromium** | installed for Hermes' Computer Use path | **Not verified.** A driven browser fetches whatever page the agent sends it to — that is the feature, not telemetry — and whether Chromium's own background services are disabled depends on the flags Hermes launches it with. |
+| **Claude Code** | the core image's copy (`/usr/local/bin/claude`) and any copy a user installs | Reads `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, then `DISABLE_TELEMETRY`, then `DO_NOT_TRACK`, and treats either of the last two as "no telemetry" — verified by inspecting an installed CLI binary (2.1.266), **not** the copy in the core image or a newer one a user installs. It also supports an opt-in OpenTelemetry exporter (`CLAUDE_CODE_ENABLE_TELEMETRY`), which this image does not set. What it sends *by default*, signed in, was not verified here. |
 | **node-pty** | terminal plugin dependency | Spawns local processes; it has no network path of its own. |
 
-Two more things an operator should know. The base image also installs other vendor CLIs that Kyoube
-neither uses nor configures (Codex, OpenCode, Gemini CLI, Kimi Code); their behaviour is upstream's,
-and is not verified here either. And telemetry is not the same thing as an agent's own traffic: a
-harness you authenticate talks to its model provider by design, and no environment variable changes
-that.
+Two more things an operator should know. The core image also carries Codex, OpenCode, Gemini CLI and
+Kimi Code, and `kyoube harness install` or your own installer can add newer copies of those and
+others (pi, Hermes Agent) under `/kyoubeai/.local`. They are third-party software this project
+neither builds nor inspects; the two switches above are set for them like everything else, but
+whether they honour them is not verified here. And telemetry is not the same thing as an agent's own
+traffic: a harness you authenticate talks to its model provider by design, and no environment
+variable changes that.
 
 The one option deliberately left off is `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, which also
-disables update checks. To opt in, add it to the `app` service's `environment:` in
-`docker-compose.yml`: the terminal plugin passes that one variable through from the container
-environment into every Terminal shell as well (it is the only passthrough in the shell environment's
-allowlist), so setting it once covers both the server and the shells.
+disables update checks. To opt in, set it on the `app` service in `docker-compose.override.yml`
+(untracked, so `./update.sh` is not blocked by local edits), then run `docker compose up -d`:
+
+```yaml
+services:
+  app:
+    environment:
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+```
+
+Set on the `app` service, it reaches the server and every agent run. It does not reach Terminal shells,
+because the core starts plugin workers with a stripped environment; export it in `~/.profile` to cover
+interactive `claude` sessions too.
 
 The core facts above were read from an upstream checkout of `master` dated 2026-09-04; the
 image pins a published release (`KYOUBE_CORE_VERSION`). They are the same code family, not a
@@ -359,9 +377,10 @@ that source and re-check it after a large upstream bump.
 
 Secrets live in `.env` (`BETTER_AUTH_SECRET`, `POSTGRES_PASSWORD`, `KYOUBE_DB_PASSWORD`, provider API
 keys) and on the `kyoubeai-home` volume (the board API key at `kyoube/board-key.json`, and every agent
-harness's own login under `.claude`, `.pi`, `.hermes`). **A backup contains all of it** —
-`scripts/backup.sh` dumps both databases and archives the whole home volume — so store and transmit a
-backup directory with the same care as `.env` itself.
+harness's own login under `.claude`, `.pi`, `.hermes` and wherever a harness you install keeps its own,
+plus what installers leave in `.local`, `.kyoube` and `.cache`). **A backup contains all of it except
+the download caches** — `scripts/backup.sh` dumps both databases and archives the home volume without
+`.cache` and `.npm` — so store and transmit a backup directory with the same care as `.env` itself.
 
 See [`docs/operations.md`](docs/operations.md#rotating-the-board-api-key) for rotating the board API
 key, [`docs/operations.md#resetting-harness-credentials`](docs/operations.md#resetting-harness-credentials)

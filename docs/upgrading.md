@@ -10,7 +10,9 @@ back from a migration you do not like — see [Rolling back](#rolling-back) and
 
 ## Upgrading KyoubeAI
 
-The README's [Update](../README.md#update) section walks through these steps one at a time.
+Since 1.1, `./update.sh` does all of this: the backup, the new release, your `.env`, the restart and
+the check (README, [Update](../README.md#update)). The steps below are the same work by hand, for when
+you want to see each one, and what `./update.sh --edge` automates for an install built from source.
 
 From source:
 
@@ -68,6 +70,43 @@ A plugin stuck in another status has its own log under **Settings → Plugins �
 If a plugin is deliberately disabled by an operator, `ensure-plugins` leaves it alone and says so —
 that is not a failure, but `doctor` will not call it `ready` either.
 
+## Moving to 1.1
+
+1.1 adds `./install.sh` and `./update.sh`, takes the agent harnesses out of the image, and gives the
+Terminal `sudo`. Take a backup first: `bash scripts/backup.sh`.
+
+- **`./update.sh` is the new way to update.** Move the checkout to 1.1 once with `./install.sh`, and use
+  `./update.sh` from then on. A 1.0 checkout has neither script, and `./update.sh` on a checkout that
+  is already on v1.1.0 answers `already on v1.1.0` without touching the running stack. `./install.sh`
+  keeps the `.env`, the data and the plugins of an existing install: it adds the settings 1.1 introduced
+  to `.env`, pins `COMPOSE_PROJECT_NAME` to the name the install already uses, points `KYOUBE_IMAGE` and
+  `KYOUBE_VERSION` at the release, downloads the image, restarts, sees the instance is claimed and the
+  plugins are installed, and runs `kyoube doctor`:
+
+  ```bash
+  git fetch --tags
+  git checkout v1.1.0
+  ./install.sh
+  ```
+
+  On an install built from source, `git pull` and then `./install.sh --edge` do the same and rebuild.
+  There is no `.kyoube/update-state` yet, so `./update.sh --rollback` has nothing to undo: to go back,
+  follow [Rolling back](#rolling-back) with the backup you just took.
+- **pi and Hermes Agent are no longer in the image**, and neither is a pinned Claude Code. Install the
+  ones your agents use from the Terminal: `kyoube harness install pi`, `kyoube harness install hermes`,
+  `kyoube harness install claude`. `kyoube doctor` (which `install.sh` runs at the end) fails
+  `harnesses in use` for each one that is missing and names the command. Hermes' settings, sessions and
+  memory in `~/.hermes` are reused. From then on, `./update.sh` shows which harnesses your agents use
+  before it changes anything, and offers to install the missing ones right after the restart.
+- **Claude subscription connections made before 1.1 hold an 8-hour token.** Connect each one again
+  (README → Harnesses → [Claude Code](../README.md#claude-code)).
+- **Keep local compose wiring in an untracked `docker-compose.override.yml`.** It is now in
+  `.gitignore`. `./update.sh`, and `./install.sh` without `--edge`, refuse to run while a tracked file
+  has local changes, so move edits you made to `docker-compose.yml` there first.
+- **Installs built from source update with `./update.sh --edge`.** It fast-forwards the branch,
+  merges new settings into `.env`, keeps `KYOUBE_CORE_VERSION` in `.env` in step with `.env.example`
+  (no more copying the core pin by hand), and rebuilds.
+
 ## Moving an install from core 2026.831.1
 
 Builds of KyoubeAI made before 1.0.0 ran on core 2026.831.1; 1.0.0 runs on core 2026.916.1, a large
@@ -91,16 +130,16 @@ upstream release. Read this before you rebuild an install made from one of those
   Workspace page links the new places.
 - **Onboarding changed.** The first-run wizard's **Connect a model** step offers a Claude or OpenAI
   subscription or an API key. A subscription cannot be signed in from the wizard on a KyoubeAI server;
-  use **Skip for now and connect the harness later from the Terminal page**, then run `claude login`
-  on the Terminal page.
+  use **Skip for now and connect the harness later from the Terminal page**, then install and connect
+  the harness as README → [Harnesses](../README.md#harnesses) describes.
 - **Announcements stay off.** The core now shows Paperclip's hosted announcement cards by default;
   KyoubeAI's `docker-compose.yml` turns them off (`PAPERCLIP_ANNOUNCEMENTS_ENABLED: "false"`).
 - **Agent credentials are no longer echoed.** Agent API responses redact plaintext `env` values.
   Nothing in KyoubeAI reads them; a script of your own might.
 - **The native runner gate is open.** `enableNativeRunner` now defaults to on for self-hosted
   instances. Nothing switches automatically, and existing agents keep their adapters.
-- **Harnesses.** The image carries Claude Code 2.1.281, pi 0.87.1 and Hermes 0.21.4 (release
-  v2026.9.21). Their logins on the `kyoubeai-home` volume carry over.
+- **Harnesses.** Since 1.1 the image ships none of its own; you install the ones you want from the
+  Terminal ([Moving to 1.1](#moving-to-11)). Their logins on the `kyoubeai-home` volume carry over.
 
 ## Upgrading from 0.1.x
 
@@ -221,6 +260,11 @@ tracked, so `bump-core.sh` cannot touch it) and `docker compose up -d --build`.
 ## Rolling back
 
 Reverting the code is easy; reverting a database is not.
+
+After `./update.sh`, `./update.sh --rollback` does it for you: it stops the app, puts the checkout and
+`.env` back as they were before that update, restores the backup the update took, starts the stack and
+runs `kyoube doctor`. It undoes the last update only, and everything written since that backup is
+replaced. The steps below are for everything else.
 
 ```bash
 git revert <the bump commit>       # or: git checkout <previous tag>
