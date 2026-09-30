@@ -92,12 +92,14 @@ Terminal `sudo`. Take a backup first: `bash scripts/backup.sh`.
   On an install built from source, `git pull` and then `./install.sh --edge` do the same and rebuild.
   There is no `.kyoube/update-state` yet, so `./update.sh --rollback` has nothing to undo: to go back,
   follow [Rolling back](#rolling-back) with the backup you just took.
-- **pi and Hermes Agent are no longer in the image**, and neither is a pinned Claude Code. Install the
-  ones your agents use from the Terminal: `kyoube harness install pi`, `kyoube harness install hermes`,
-  `kyoube harness install claude`. `kyoube doctor` (which `install.sh` runs at the end) fails
-  `harnesses in use` for each one that is missing and names the command. Hermes' settings, sessions and
-  memory in `~/.hermes` are reused. From then on, `./update.sh` shows which harnesses your agents use
-  before it changes anything, and offers to install the missing ones right after the restart.
+- **pi and Hermes Agent are no longer in the image**, and Claude Code is no longer pinned (the core
+  image keeps its own copy as a fallback). Install the ones your agents use from the Terminal:
+  `kyoube harness install pi`, `kyoube harness install hermes`, and `kyoube harness install claude`
+  for a Claude Code of your own. `kyoube doctor` (which `install.sh` runs at the end) fails
+  `harnesses in use` for each harness an agent needs that is missing, and names the command. Hermes'
+  settings, sessions and memory in `~/.hermes` are reused. From then on, `./update.sh` shows which
+  harnesses your agents use before it changes anything, and offers to install the missing ones right
+  after the restart.
 - **Claude subscription connections made before 1.1 hold an 8-hour token.** Connect each one again
   (README → Harnesses → [Claude Code](../README.md#claude-code)).
 - **Keep local compose wiring in an untracked `docker-compose.override.yml`.** It is now in
