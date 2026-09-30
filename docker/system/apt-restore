@@ -10,6 +10,7 @@ limit="${KYOUBE_APT_RESTORE_TIMEOUT:-300}"
 list="$state/apt-packages.txt"
 log="$state/apt-restore.log"
 status="$state/apt-restore.status"
+pending="$state/apt-pending.txt"
 now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 finish() { chown -R node:node "$state" 2>/dev/null || true; exit 0; }
 
@@ -27,7 +28,7 @@ while IFS= read -r pkg || [ -n "$pkg" ]; do
   missing="$missing $pkg"
 done < "$list"
 
-if [ -z "$missing" ]; then echo "ok 0" > "$status"; finish; fi
+if [ -z "$missing" ]; then echo "ok 0" > "$status"; rm -f "$pending"; finish; fi
 echo "$(now) reinstalling:$missing" >> "$log"
 # The index lives on the volume too (90kyoube), so an offline start can still
 # install from the cached .debs.
@@ -42,7 +43,39 @@ if [ "$rc" -eq 0 ]; then
   # shellcheck disable=SC2086
   set -- $missing
   echo "ok $#" > "$status"
+  rm -f "$pending"
 else
-  echo "failed $rc" > "$status"
+  # Retry each package individually to avoid losing all due to one failure
+  echo "$(now) bulk install failed; retrying each package individually" >> "$log"
+  installed=0
+  # shellcheck disable=SC2086
+  for pkg in $missing; do
+    DEBIAN_FRONTEND=noninteractive timeout "$limit" apt-get install -y --no-install-recommends "$pkg" >> "$log" 2>&1
+    pkg_rc=$?
+    if [ "$pkg_rc" -eq 0 ]; then
+      apt-mark manual "$pkg" >> "$log" 2>&1 || true
+      installed=$((installed + 1))
+    fi
+  done
+
+  # Collect still-uninstalled packages into apt-pending.txt
+  uninstalled=""
+  # shellcheck disable=SC2086
+  for pkg in $missing; do
+    if ! dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed'; then
+      uninstalled="$uninstalled$pkg
+"
+    fi
+  done
+
+  if [ -n "$uninstalled" ]; then
+    printf '%s' "$uninstalled" > "$pending"
+    chmod 0644 "$pending"
+    chown node:node "$pending" 2>/dev/null || true
+    echo "failed $rc" > "$status"
+  else
+    rm -f "$pending"
+    echo "ok $installed" > "$status"
+  fi
 fi
 finish

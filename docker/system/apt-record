@@ -4,18 +4,36 @@
 # apt-restore can put them back when the container is recreated (down/up, an
 # image update, a core bump). The image's own packages are the baseline taken
 # at build time and are never listed; a removal drops out the same way.
+# Pending entries from a failed apt-restore (packages that couldn't be installed)
+# are carried over so they aren't lost; they appear here only if still marked
+# manual or if apt-restore failed to install them.
 set -eu
 baseline="${KYOUBE_APT_BASELINE:-/opt/kyoube/apt-baseline.txt}"
 state="${KYOUBE_STATE_DIR:-/kyoubeai/.kyoube}"
+pending="$state/apt-pending.txt"
 [ -r "$baseline" ] || exit 0
 mkdir -p "$state"
 manual="$(mktemp)"
+merged="$(mktemp)"
 tmp="$(mktemp "$state/.apt-packages.XXXXXX")"
-trap 'rm -f "$manual" "$tmp"' EXIT
+trap 'rm -f "$manual" "$merged" "$tmp"' EXIT
 # A failed query must not be mistaken for "nothing installed", which would
-# erase the list.
+# erase the list. If apt-mark succeeds but prints nothing, leave the existing
+# list untouched; the real manual set is never empty.
 apt-mark showmanual > "$manual" || exit 0
-LC_ALL=C sort -u "$manual" | LC_ALL=C comm -13 "$baseline" - > "$tmp"
-chmod 0644 "$tmp"
-mv -f "$tmp" "$state/apt-packages.txt"
+if [ ! -s "$manual" ]; then exit 0; fi
+# Merge manually-marked packages with pending entries that aren't yet installed
+LC_ALL=C sort -u "$manual" > "$merged"
+if [ -f "$pending" ]; then
+  while IFS= read -r pkg || [ -n "$pkg" ]; do
+    # Only include pending entries that are not currently installed
+    if ! dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed'; then
+      printf '%s\n' "$pkg"
+    fi
+  done < "$pending" >> "$merged"
+fi
+LC_ALL=C sort -u "$merged" > "$tmp"
+LC_ALL=C comm -13 "$baseline" "$tmp" > "$tmp.filtered"
+chmod 0644 "$tmp.filtered"
+mv -f "$tmp.filtered" "$state/apt-packages.txt"
 chown node:node "$state" "$state/apt-packages.txt" 2>/dev/null || true

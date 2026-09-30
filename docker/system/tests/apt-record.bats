@@ -9,9 +9,16 @@ setup() {
   cat > "$FAKE/apt-mark" <<'EOF'
 #!/bin/sh
 [ "${FAKE_APT_MARK_FAIL:-0}" = 1 ] && exit 1
-printf '%s\n' $FAKE_MANUAL
+if [ -n "$FAKE_MANUAL" ]; then
+  printf '%s\n' $FAKE_MANUAL
+fi
 EOF
-  chmod +x "$FAKE/apt-mark"
+  cat > "$FAKE/dpkg-query" <<'EOF'
+#!/bin/sh
+for p in $FAKE_INSTALLED; do [ "$p" = "$3" ] && { printf 'install ok installed'; exit 0; }; done
+exit 1
+EOF
+  chmod +x "$FAKE"/*
   export PATH="$FAKE:$PATH"
 }
 
@@ -40,4 +47,28 @@ EOF
   FAKE_MANUAL="tree" run "$SCRIPT"
   [ "$status" -eq 0 ]
   [ ! -e "$KYOUBE_STATE_DIR/apt-packages.txt" ]
+}
+
+@test "a pending entry that is not installed is kept in the list alongside manual packages" {
+  mkdir -p "$KYOUBE_STATE_DIR"
+  echo "jq" > "$KYOUBE_STATE_DIR/apt-pending.txt"
+  FAKE_MANUAL="tree git ffmpeg curl" FAKE_INSTALLED="" run "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$KYOUBE_STATE_DIR/apt-packages.txt")" = "$(printf 'ffmpeg\njq\ntree')" ]
+}
+
+@test "a pending entry that is installed now is not added from the pending file" {
+  mkdir -p "$KYOUBE_STATE_DIR"
+  echo "jq" > "$KYOUBE_STATE_DIR/apt-pending.txt"
+  FAKE_MANUAL="tree git ffmpeg curl" FAKE_INSTALLED="jq" run "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$KYOUBE_STATE_DIR/apt-packages.txt")" = "$(printf 'ffmpeg\ntree')" ]
+}
+
+@test "apt-mark exiting 0 with no output leaves the existing list untouched" {
+  mkdir -p "$KYOUBE_STATE_DIR"
+  echo "existing-pkg" > "$KYOUBE_STATE_DIR/apt-packages.txt"
+  FAKE_MANUAL="" run "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$KYOUBE_STATE_DIR/apt-packages.txt")" = "existing-pkg" ]
 }
