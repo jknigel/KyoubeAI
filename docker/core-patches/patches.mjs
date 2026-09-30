@@ -11,7 +11,9 @@
  *
  * Patterns are written against the compiled, minified bundle the image ships
  * (`ui/dist`), so they anchor on string literals and code shape, never on
- * minifier-chosen identifier names. See CONTRIBUTING.md, "Never patch the core".
+ * minifier-chosen identifier names. The server's `server/dist` is compiled but
+ * not minified; its patterns anchor on the statements themselves.
+ * See CONTRIBUTING.md, "Never patch the core".
  */
 
 /**
@@ -110,6 +112,45 @@ export const PATCHES = [
       '$1&&(0,$2.jsx)("div",{className:"mt-3",children:(0,$2.jsx)("p",{className:"text-xs text-destructive",children:$1})}),' +
       `$5===4&&$1&&(0,$2.jsx)("div",{className:"mt-2",children:(0,$2.jsx)("button",{type:"button",className:"text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground transition-colors",disabled:$7,onClick:()=>$8(!0),children:${JSON.stringify(SKIP_HARNESS_LABEL)}})}),` +
       "$3",
+    expect: 1,
+  },
+  // ── Connections: a Claude subscription that lasts a year ────────────────
+  // The server-host sign-in runs `claude auth login` in a folder per attempt,
+  // keeps only claudeAiOauth.accessToken (an 8-hour token) and deletes the
+  // folder with the refresh token, so every managed Claude run fails ~8 hours
+  // after connecting. `kyoube connect claude` (docker/bootstrap) runs
+  // `claude setup-token` in that same folder and writes the one-year token
+  // where the Connect step reads it. Upstream's own sandbox sign-in already
+  // stores setup-tokens as this credential (routes/agents.ts, setupTokenLogin).
+  {
+    id: "anthropic-signin-setup-token",
+    title: "Connections: the Claude subscription sign-in command produces a one-year setup-token",
+    upstream: "https://github.com/paperclipai/paperclip (server/src/services/local-ai-login.ts presentAttempt, local-ai-credentials.ts; issue pending)",
+    files: ["server/dist/services/local-ai-login.js"],
+    pattern: /mkdir -p "\$CLAUDE_CONFIG_DIR" && claude auth login\)/g,
+    replacement: 'mkdir -p "$CLAUDE_CONFIG_DIR" && kyoube connect claude)',
+    expect: 1,
+  },
+  // ── Agents: Test works on a harness switch before it is saved ───────────
+  // The UI always sends the saved agent's id with the test, so testing any
+  // unsaved harness switch failed with "Saved agent is not compatible with the
+  // adapter being tested". Same change as upstream 9335b7d: test the submitted
+  // config, and restore the saved agent's hidden env values only for the same
+  // harness. Delete at the first stable core that carries 9335b7d (it is in
+  // 2026.921.0-beta.1).
+  {
+    id: "adapter-test-unsaved-harness-switch",
+    title: "agents: Test works on a harness switch that is not saved yet",
+    upstream: "https://github.com/paperclipai/paperclip/commit/9335b7db10425277bcb84ba8137d08c498324dba",
+    files: ["server/dist/routes/agents.js"],
+    pattern: /if \(savedAgent\.adapterType !== type && providerAdapter !== type\) \{\s*throw unprocessable\("Saved agent is not compatible with the adapter being tested"\);\s*\}(\s*)await assertCanUpdateAgent\(req, savedAgent\);\s*adapterConfigForTest = restoreRedactedAgentEnv\(inputAdapterConfig, savedAgent\.adapterConfig\);/g,
+    replacement:
+      "const kyoubeCanRestoreEnv = savedAgent.adapterType === type || providerAdapter === type;$1" +
+      'if (!kyoubeCanRestoreEnv && Object.values(parseObject(inputAdapterConfig.env)).some((value) => { const binding = asRecord(value); return binding?.type === "plain" && binding.value === REDACTED_EVENT_VALUE; })) {$1' +
+      '    throw unprocessable("Re-enter environment values when testing a different adapter");$1' +
+      "}$1" +
+      "await assertCanUpdateAgent(req, savedAgent);$1" +
+      "adapterConfigForTest = kyoubeCanRestoreEnv ? restoreRedactedAgentEnv(inputAdapterConfig, savedAgent.adapterConfig) : inputAdapterConfig;",
     expect: 1,
   },
 ];
