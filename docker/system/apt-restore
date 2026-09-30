@@ -45,37 +45,51 @@ if [ "$rc" -eq 0 ]; then
   echo "ok $#" > "$status"
   rm -f "$pending"
 else
-  # Retry each package individually to avoid losing all due to one failure
-  echo "$(now) bulk install failed; retrying each package individually" >> "$log"
-  installed=0
-  # shellcheck disable=SC2086
-  for pkg in $missing; do
-    DEBIAN_FRONTEND=noninteractive timeout "$limit" apt-get install -y --no-install-recommends "$pkg" >> "$log" 2>&1
-    pkg_rc=$?
-    if [ "$pkg_rc" -eq 0 ]; then
-      apt-mark manual "$pkg" >> "$log" 2>&1 || true
-      installed=$((installed + 1))
-    fi
-  done
+  # Write the whole missing set to pending immediately, before retrying. This prevents
+  # apt-record (running via DPkg::Post-Invoke after each install) from rebuilding the
+  # list from apt-mark alone and losing the packages that haven't been installed yet.
+  # shellcheck disable=SC2086 # one word per package, each validated above
+  printf '%s\n' $missing > "$pending"
+  chmod 0644 "$pending"
+  chown node:node "$pending" 2>/dev/null || true
 
-  # Collect still-uninstalled packages into apt-pending.txt
-  uninstalled=""
-  # shellcheck disable=SC2086
-  for pkg in $missing; do
-    if ! dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed'; then
-      uninstalled="$uninstalled$pkg
-"
-    fi
-  done
-
-  if [ -n "$uninstalled" ]; then
-    printf '%s' "$uninstalled" > "$pending"
-    chmod 0644 "$pending"
-    chown node:node "$pending" 2>/dev/null || true
-    echo "failed $rc" > "$status"
+  # If timeout (124), don't retry: the network is stuck. Keep everything pending.
+  if [ "$rc" -eq 124 ]; then
+    echo "$(now) bulk install timed out; skipping per-package retries" >> "$log"
+    echo "failed 124" > "$status"
   else
-    rm -f "$pending"
-    echo "ok $installed" > "$status"
+    # Retry each package individually to avoid losing all due to one failure
+    echo "$(now) bulk install failed; retrying each package individually" >> "$log"
+    installed=0
+    # shellcheck disable=SC2086
+    for pkg in $missing; do
+      DEBIAN_FRONTEND=noninteractive timeout "$limit" apt-get install -y --no-install-recommends "$pkg" >> "$log" 2>&1
+      pkg_rc=$?
+      if [ "$pkg_rc" -eq 0 ]; then
+        apt-mark manual "$pkg" >> "$log" 2>&1 || true
+        installed=$((installed + 1))
+      fi
+    done
+
+    # Collect still-uninstalled packages into apt-pending.txt
+    uninstalled=""
+    # shellcheck disable=SC2086
+    for pkg in $missing; do
+      if ! dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed'; then
+        uninstalled="$uninstalled$pkg
+"
+      fi
+    done
+
+    if [ -n "$uninstalled" ]; then
+      printf '%s' "$uninstalled" > "$pending"
+      chmod 0644 "$pending"
+      chown node:node "$pending" 2>/dev/null || true
+      echo "failed $rc" > "$status"
+    else
+      rm -f "$pending"
+      echo "ok $installed" > "$status"
+    fi
   fi
 fi
 finish
