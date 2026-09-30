@@ -13,6 +13,9 @@ Usage: ./update.sh [options]
   --rollback          Go back to the release and data from before the last update
   --edge              Follow the current branch: git pull and rebuild from source
   --yes               Answer yes to every question
+
+An update that stopped before it finished is continued by running the same
+command again (no second backup); --rollback undoes it instead.
 EOF
 }
 
@@ -53,6 +56,7 @@ main() {
   pin_project_name
   if [ "$rollback" = 1 ]; then do_rollback; return; fi
   git diff --quiet HEAD -- || die "tracked files have local changes; stash them (git stash) and run again"
+  if [ -n "$(env_get "$STATE" to)" ] && [ "$(env_get "$STATE" "done")" != 1 ]; then resume_update "$mode" "$want"; return; fi
   if [ "$mode" = edge ]; then update_edge; else update_release "$want"; fi
 }
 
@@ -85,12 +89,15 @@ run_backup() {
   [ -n "$BACKUP" ] || die "the backup did not say where it wrote; nothing was changed. Run bash scripts/backup.sh and check its output, then run ./update.sh again"
 }
 
-save_state() { # MODE FROM_LABEL
+# save_state MODE FROM_LABEL TO_LABEL: the rollback point; done=0 until the update has restarted on the new version.
+save_state() {
   mkdir -p .kyoube
   cp .env "$ENV_BEFORE"
   : > "$STATE"
   env_set "$STATE" mode "$1"
   env_set "$STATE" from "$2"
+  env_set "$STATE" to "$3"
+  env_set "$STATE" "done" 0
   env_set "$STATE" ref "$(git rev-parse HEAD)"
   env_set "$STATE" branch "$(git symbolic-ref --quiet --short HEAD || true)"
   env_set "$STATE" image "$(env_get .env KYOUBE_IMAGE)"
@@ -146,6 +153,21 @@ offer_harnesses() {
   done
 }
 
+# release_image_repo: the image repository a release install runs; an install that built its own image moves to the published one.
+release_image_repo() {
+  local repo
+  repo="$(env_get .env KYOUBE_IMAGE)"
+  case "$repo" in ""|kyoubeai) repo="$KYOUBE_IMAGE_DEFAULT" ;; esac
+  printf '%s\n' "$repo"
+}
+
+# runs_source_build: true when .env selects the image `docker compose build` makes (kyoubeai:dev; empty means that default).
+runs_source_build() {
+  local image version
+  image="$(env_get .env KYOUBE_IMAGE)"; version="$(env_get .env KYOUBE_VERSION)"
+  [ "${image:-kyoubeai}" = kyoubeai ] && [ "${version:-dev}" = dev ]
+}
+
 update_release() {
   local want="$1" current target from image_repo new_ref
   # A commit can carry several tags (v1.2.0 and v1.2.0-rc1); only a release tag counts.
@@ -161,15 +183,18 @@ update_release() {
   # HEAD may carry more than one release tag; the one asked for is enough.
   if git tag --points-at HEAD 2>/dev/null | grep -Fx "$target" >/dev/null; then current="$target"; fi
   if [ "$current" = "$target" ]; then say "already on $target"; return; fi
-  if [ -n "$current" ] && ! version_ge "${target#v}" "${current#v}"; then
-    die "$target is older than $current; databases only migrate forward. To go back after an update: ./update.sh --rollback"
+  if [ -n "$current" ]; then
+    version_ge "${target#v}" "${current#v}" \
+      || die "$target is older than $current; databases only migrate forward. To go back after an update: ./update.sh --rollback"
+  else
+    # On a branch or an untagged commit: the release has to contain this code, or it would be older.
+    git merge-base --is-ancestor HEAD "refs/tags/$target" \
+      || die "this checkout ($(git rev-parse --short HEAD)) is not part of $target's history, so $target may be older than the code here; databases only migrate forward. To keep following this branch: ./update.sh --edge. To go back after an update: ./update.sh --rollback"
   fi
   from="${current:-$(git rev-parse --short HEAD)}"
-  image_repo="$(env_get .env KYOUBE_IMAGE)"
-  case "$image_repo" in ""|kyoubeai)
-    image_repo="$KYOUBE_IMAGE_DEFAULT"
-    say "    this install built its own image; from now on it uses the published one (./update.sh --edge keeps building from source)" ;;
-  esac
+  image_repo="$(release_image_repo)"
+  [ "$image_repo" = "$(env_get .env KYOUBE_IMAGE)" ] \
+    || say "    this install built its own image; from now on it uses the published one (./update.sh --edge keeps building from source)"
   new_ref="$image_repo:${target#v}"
   say "Update KyoubeAI $from -> $target"
   say "Release notes: https://github.com/jknigel/KyoubeAI/blob/$target/CHANGELOG.md"
@@ -181,36 +206,87 @@ update_release() {
   USED="$(harness_types_in_use)"
   [ -z "$USED" ] || say "    agents use: $(printf '%s' "$USED" | tr '\n' ',' | sed 's/,$//; s/,/, /g')"
   run_backup
-  save_state release "$from"
-  git -c advice.detachedHead=false checkout --quiet "$target" \
-    || die "could not switch this checkout to $target; nothing else was changed. Fix what git reported and run ./update.sh again"
+  save_state release "$from" "$target"
+  release_apply "$target" "$from"
+}
+
+# release_apply TARGET FROM: everything after the backup; safe to run again (resume_update does).
+release_apply() {
+  local target="$1" from="$2"
+  if ! git tag --points-at HEAD 2>/dev/null | grep -Fx "$target" >/dev/null; then
+    git -c advice.detachedHead=false checkout --quiet "$target" \
+      || die "could not switch this checkout to $target; nothing else was changed. Fix what git reported and run ./update.sh again to continue, or ./update.sh --rollback to undo"
+  fi
   merge_settings "${target#v}"
-  env_set .env KYOUBE_IMAGE "$image_repo"
+  env_set .env KYOUBE_IMAGE "$(release_image_repo)"
   env_set .env KYOUBE_VERSION "${target#v}"
   restart_and_check "$target"
+  env_set "$STATE" "done" 1
   say "updated to $target. The pre-update backup is $BACKUP; ./update.sh --rollback returns to $from."
 }
 
 update_edge() {
-  local branch upstream behind from
+  local branch upstream behind from to rebuild=0
   branch="$(git symbolic-ref --quiet --short HEAD)" || die "--edge follows a branch, but this checkout is on a release tag; git checkout main first"
   upstream="$(git rev-parse --abbrev-ref '@{u}' 2>/dev/null)" || die "branch $branch has no upstream to pull from; git branch --set-upstream-to origin/$branch"
   git fetch --quiet || die "could not fetch from origin; check the network and run ./update.sh --edge again"
   behind="$(git rev-list --count "HEAD..@{u}")" || die "could not compare $branch with $upstream; run git status"
-  if [ "$behind" = 0 ]; then say "already up to date with $upstream"; return; fi
+  # An install on a published image gets one rebuild from source even when the branch has nothing new.
+  runs_source_build || rebuild=1
+  if [ "$behind" = 0 ] && [ "$rebuild" = 0 ]; then say "already up to date with $upstream"; return; fi
   from="$branch@$(git rev-parse --short HEAD)"
-  say "Update KyoubeAI $from -> $upstream ($behind new commits), then rebuild from source"
+  if [ "$behind" != 0 ]; then
+    git merge-base --is-ancestor HEAD '@{u}' \
+      || die "branch $branch has diverged from $upstream (it has commits $upstream lacks, and the other way round); nothing was changed. Rebase it onto $upstream or merge $upstream into it (git status), then run ./update.sh --edge again"
+    to="$branch@$(git rev-parse --short '@{u}')"
+    say "Update KyoubeAI $from -> $upstream ($behind new commits), then rebuild from source"
+  else
+    to="$from"
+    say "Update KyoubeAI $from -> $from: no new commits, but this install runs a published image; it will be rebuilt from source"
+  fi
   confirm "A backup is taken first. Continue?" || { say "Nothing was changed."; exit 1; }
   USED="$(harness_types_in_use)"
   run_backup
-  save_state edge "$from"
-  git pull --ff-only --quiet \
-    || die "git pull --ff-only failed (commits here that $upstream lacks?); the code was not changed. Fix that (git status), then run ./update.sh --edge again"
+  save_state edge "$from" "$to"
+  edge_apply "$from"
+}
+
+# edge_apply FROM: everything after the backup; safe to run again (resume_update does).
+edge_apply() {
+  local from="$1" pending
+  # The fast-forward is still to do while the branch sits where the update started.
+  if [ "$(git rev-parse HEAD)" = "$(env_get "$STATE" ref)" ]; then
+    pending="$(git rev-list --count "HEAD..@{u}")" || die "could not compare this branch with its upstream; run git status"
+    if [ "$pending" != 0 ]; then
+      git merge --ff-only --quiet '@{u}' \
+        || die "git merge --ff-only failed; the code was not changed. Fix what git reported (git status), then run ./update.sh --edge again to continue, or ./update.sh --rollback to undo"
+    fi
+  fi
+  if ! runs_source_build; then
+    say "    switching this install from the published image to a source build"
+    env_set .env KYOUBE_IMAGE kyoubeai
+    env_set .env KYOUBE_VERSION dev
+  fi
   merge_settings "edge-$(git rev-parse --short HEAD)"
   say "==> building (10-25 minutes when the core changed)"
-  docker compose build app || die "the build failed; the stack still runs the previous image. To go back to the previous code: ./update.sh --rollback"
-  restart_and_check "$branch@$(git rev-parse --short HEAD)"
+  docker compose build app || die "the build failed; the stack still runs the previous image. To try again: ./update.sh --edge. To go back to the previous code: ./update.sh --rollback"
+  restart_and_check "$(git symbolic-ref --quiet --short HEAD || true)@$(git rev-parse --short HEAD)"
+  env_set "$STATE" "done" 1
   say "updated. The pre-update backup is $BACKUP; ./update.sh --rollback returns to $from."
+}
+
+# resume_update MODE WANT: the last update stopped before it finished. Continue it when this run asks for the same
+# update (no new backup, the rollback point stays); refuse anything else so the rollback point is not replaced.
+resume_update() {
+  local mode="$1" want="$2" smode to from resume="./update.sh"
+  smode="$(env_get "$STATE" mode)"; to="$(env_get "$STATE" to)"; from="$(env_get "$STATE" from)"; BACKUP="$(env_get "$STATE" backup)"
+  if [ "$smode" = edge ]; then resume="./update.sh --edge"; fi
+  if [ "$mode" != "$smode" ] || { [ "$mode" = release ] && [ -n "$want" ] && [ "v$want" != "$to" ]; }; then
+    die "an update to $to did not finish: run $resume to resume it, or ./update.sh --rollback to undo it"
+  fi
+  say "resuming the unfinished update to $to (the pre-update backup $BACKUP is kept for --rollback)"
+  USED="$(harness_types_in_use)"
+  if [ "$mode" = edge ]; then edge_apply "$from"; else release_apply "$to" "$from"; fi
 }
 
 do_rollback() {
