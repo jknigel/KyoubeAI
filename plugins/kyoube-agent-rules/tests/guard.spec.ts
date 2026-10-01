@@ -1,0 +1,208 @@
+import { describe, expect, it } from "vitest";
+import { reconcileGuard, revertGuard, type GuardPort, type GuardRecord } from "../src/guard.js";
+import { isProtected, ownTeamGrant, type AgentRow, type Grant, type Policy } from "../src/policy.js";
+
+const C = "11111111-1111-4111-8111-111111111111";
+const BROAD: Grant = { permissionKey: "tasks:assign", scope: null };
+const agent = (id: string, reportsTo: string | null, status = "idle"): AgentRow => ({ id, name: id.toUpperCase(), status, reportsTo });
+
+/**
+ * An in-memory core. `previewAssign` follows core's rule for a protected target
+ * (server/src/services/authorization.ts, 2026.916.1): the actor needs the broad
+ * grant, or an own-team grant whose subtree holds the target.
+ */
+class FakeCore implements GuardPort {
+  policies = new Map<string, Policy>();
+  grants = new Map<string, Grant[]>();
+  record: GuardRecord = { protected: [], scoped: [], broadRemoved: [] };
+  writes: string[] = [];
+  failing = new Set<string>();
+  /** A core that quietly stopped honouring policy writes. */
+  ignorePolicyWrites = false;
+
+  constructor(public agents: AgentRow[]) {
+    for (const row of agents) this.grants.set(row.id, [BROAD]);
+  }
+
+  private fail(key: string) {
+    if (this.failing.has(key)) throw new Error(`refused ${key}`);
+  }
+
+  async listAgents() { return this.agents.map((row) => ({ ...row })); }
+  async getPolicy(_companyId: string, id: string) { return structuredClone(this.policies.get(id) ?? null); }
+  async setPolicy(_companyId: string, id: string, policy: Policy) {
+    this.fail(`setPolicy:${id}`);
+    this.writes.push(`policy ${id}`);
+    if (!this.ignorePolicyWrites) this.policies.set(id, structuredClone(policy));
+  }
+  async listGrants(_companyId: string, id: string) { return structuredClone(this.grants.get(id) ?? []); }
+  async setGrants(_companyId: string, id: string, grants: Grant[]) {
+    this.fail(`setGrants:${id}`);
+    this.writes.push(`grants ${id}`);
+    this.grants.set(id, structuredClone(grants));
+  }
+  async readRecord() { return structuredClone(this.record); }
+  async writeRecord(_companyId: string, record: GuardRecord) {
+    this.fail("writeRecord");
+    this.record = structuredClone(record);
+  }
+  async previewAssign(_companyId: string, actor: string, target: string) {
+    if (!isProtected(this.policies.get(target) ?? null)) return { allowed: true, reason: "allow_simple_company_member" };
+    const held = this.grants.get(actor) ?? [];
+    if (held.some((grant) => grant.permissionKey === "tasks:assign" && grant.scope === null)) return { allowed: true, reason: "allow_grant" };
+    const inSubtree = (root: string, id: string) => {
+      let current: string | null | undefined = id;
+      for (let hops = 0; current && hops < 50; hops += 1) {
+        if (current === root) return true;
+        current = this.agents.find((row) => row.id === current)?.reportsTo;
+      }
+      return false;
+    };
+    const covered = held.some((grant) => {
+      const root = grant.permissionKey === "tasks:assign_scope" && grant.scope ? grant.scope.subtreeRootAgentId : undefined;
+      return typeof root === "string" && inSubtree(root, target);
+    });
+    return covered ? { allowed: true, reason: "allow_scoped_grant" } : { allowed: false, reason: "deny_restricted_assignment_policy" };
+  }
+}
+
+const org = () => new FakeCore([agent("ceo", null), agent("cto", "ceo"), agent("dev", "cto"), agent("solo", null)]);
+
+describe("reconcileGuard", () => {
+  it("protects managers, gives each its own-team grant and takes the broad grant from everyone", async () => {
+    const core = org();
+    const report = await reconcileGuard(core, C);
+    expect(report.managers).toEqual(["ceo", "cto"]);
+    expect(isProtected(core.policies.get("ceo") ?? null)).toBe(true);
+    expect(isProtected(core.policies.get("cto") ?? null)).toBe(true);
+    expect(core.policies.has("dev")).toBe(false);
+    expect(core.grants.get("cto")).toEqual([ownTeamGrant("cto")]);
+    expect(core.grants.get("dev")).toEqual([]);
+    expect(core.record).toEqual({ protected: ["ceo", "cto"], scoped: ["ceo", "cto"], broadRemoved: ["ceo", "cto", "dev", "solo"] });
+    expect(report.updated).toEqual(["ceo", "cto", "dev", "solo"]);
+    expect(report.failures).toEqual([]);
+    expect(report.selfTest).toEqual({ status: "pass", detail: "CTO cannot assign to CEO; CEO can assign to CTO" });
+  });
+
+  it("makes no writes on a second pass", async () => {
+    const core = org();
+    await reconcileGuard(core, C);
+    const writes = core.writes.length;
+    const report = await reconcileGuard(core, C);
+    expect(core.writes.length).toBe(writes);
+    expect(report.updated).toEqual([]);
+  });
+
+  it("keeps every other policy key and every other grant", async () => {
+    const core = org();
+    core.policies.set("cto", { agentVisibility: { mode: "discoverable" } });
+    core.grants.set("cto", [BROAD, { permissionKey: "agents:create", scope: null }]);
+    await reconcileGuard(core, C);
+    expect(core.policies.get("cto")).toEqual({ agentVisibility: { mode: "discoverable" }, assignmentPolicy: { mode: "protected" } });
+    expect(core.grants.get("cto")).toEqual([{ permissionKey: "agents:create", scope: null }, ownTeamGrant("cto")]);
+  });
+
+  it("skips a manager whose policy the core cannot evaluate, and still fixes its grants", async () => {
+    const core = org();
+    core.policies.set("cto", { trustPreset: "low_trust_review" });
+    const report = await reconcileGuard(core, C);
+    expect(report.skipped).toEqual([{ agentId: "cto", name: "CTO", reason: "has an authorization policy KyoubeAI does not change" }]);
+    expect(core.policies.get("cto")).toEqual({ trustPreset: "low_trust_review" });
+    expect(core.grants.get("cto")).toEqual([ownTeamGrant("cto")]);
+    expect(core.record.protected).toEqual(["ceo"]);
+  });
+
+  it("leaves an agent waiting for approval alone and says why", async () => {
+    const core = new FakeCore([agent("m", null), agent("new", "m", "pending_approval")]);
+    const report = await reconcileGuard(core, C);
+    expect(report.skipped).toEqual([{ agentId: "new", name: "NEW", reason: "waiting for approval; core freezes its permissions until then" }]);
+    expect(core.grants.get("new")).toEqual([BROAD]);
+    expect(report.managers).toEqual(["m"]);
+  });
+
+  it("unprotects a former manager it protected, but not one someone else protected", async () => {
+    const core = org();
+    core.policies.set("solo", { assignmentPolicy: { mode: "protected" } });
+    await reconcileGuard(core, C);
+    core.agents = core.agents.map((row) => (row.id === "dev" ? { ...row, status: "terminated" } : row));
+    await reconcileGuard(core, C);
+    expect(core.policies.get("cto")).toBeNull();
+    expect(core.grants.get("cto")).toEqual([]);
+    expect(core.record.protected).toEqual(["ceo"]);
+    expect(core.record.scoped).toEqual(["ceo"]);
+    expect(isProtected(core.policies.get("solo") ?? null)).toBe(true);
+  });
+
+  it("goes on after one agent fails, and the record still names it", async () => {
+    const core = org();
+    core.failing.add("setPolicy:ceo");
+    const report = await reconcileGuard(core, C);
+    expect(report.failures).toEqual([{ agentId: "ceo", name: "CEO", step: "policy", error: "refused setPolicy:ceo" }]);
+    expect(isProtected(core.policies.get("cto") ?? null)).toBe(true);
+    expect(core.record.protected).toContain("ceo");
+    core.failing.clear();
+    await reconcileGuard(core, C);
+    expect(isProtected(core.policies.get("ceo") ?? null)).toBe(true);
+  });
+
+  it("changes nothing for an agent when the record cannot be written first", async () => {
+    const core = org();
+    core.failing.add("writeRecord");
+    const report = await reconcileGuard(core, C);
+    expect(core.writes).toEqual([]);
+    expect(report.failures.every((failure) => failure.step === "record")).toBe(true);
+  });
+
+  it("reports a failed self-test when protection does not hold on this core", async () => {
+    const core = org();
+    core.ignorePolicyWrites = true;
+    const report = await reconcileGuard(core, C);
+    expect(report.selfTest.status).toBe("fail");
+    expect(report.selfTest.detail).toContain("CTO can still assign to its manager CEO");
+  });
+
+  it("calls the self-test not applicable without an active manager and report", async () => {
+    const report = await reconcileGuard(new FakeCore([agent("solo", null), agent("x", "solo", "paused")]), C);
+    expect(report.selfTest.status).toBe("not_applicable");
+  });
+});
+
+describe("revertGuard", () => {
+  it("undoes exactly what the record lists and empties it", async () => {
+    const core = org();
+    core.grants.set("dev", [BROAD, { permissionKey: "agents:create", scope: null }]);
+    await reconcileGuard(core, C);
+    const report = await revertGuard(core, C);
+    expect(report).toEqual({ reverted: ["ceo", "cto", "dev", "solo"], failures: [] });
+    expect(core.policies.get("ceo")).toBeNull();
+    expect(core.policies.get("cto")).toBeNull();
+    expect(core.grants.get("cto")).toEqual([BROAD]);
+    expect(core.grants.get("dev")).toEqual([{ permissionKey: "agents:create", scope: null }, BROAD]);
+    expect(core.record).toEqual({ protected: [], scoped: [], broadRemoved: [] });
+  });
+
+  it("leaves a protection it did not set", async () => {
+    const core = org();
+    core.policies.set("solo", { assignmentPolicy: { mode: "protected" } });
+    await reconcileGuard(core, C);
+    await revertGuard(core, C);
+    expect(isProtected(core.policies.get("solo") ?? null)).toBe(true);
+  });
+
+  it("drops a deleted agent from the record without a failure", async () => {
+    const core = org();
+    core.record = { protected: ["gone"], scoped: [], broadRemoved: ["gone"] };
+    const report = await revertGuard(core, C);
+    expect(report.failures).toEqual([]);
+    expect(core.record).toEqual({ protected: [], scoped: [], broadRemoved: [] });
+  });
+
+  it("keeps an agent it could not revert in the record", async () => {
+    const core = org();
+    await reconcileGuard(core, C);
+    core.failing.add("setGrants:dev");
+    const report = await revertGuard(core, C);
+    expect(report.failures).toEqual([{ agentId: "dev", name: "DEV", step: "grants", error: "refused setGrants:dev" }]);
+    expect(core.record).toEqual({ protected: [], scoped: [], broadRemoved: ["dev"] });
+  });
+});
