@@ -13,9 +13,11 @@ const base: NodeUserInput = {
 };
 
 describe("writesAsNode", () => {
-  it("covers a harness install and a Claude sign-in, nothing else", () => {
+  it("covers a harness install, a Claude sign-in and the agent-rules state, nothing else", () => {
     expect(writesAsNode("harness", ["install", "pi"])).toBe(true);
     expect(writesAsNode("connect", ["claude"])).toBe(true);
+    expect(writesAsNode("agent-rules", ["off"])).toBe(true);
+    expect(writesAsNode("agent-rules", [])).toBe(true);
     expect(writesAsNode("harness", ["list"])).toBe(false);
     expect(writesAsNode("harness", ["missing", "pi_local"])).toBe(false);
     expect(writesAsNode("doctor", [])).toBe(false);

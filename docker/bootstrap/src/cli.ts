@@ -1,3 +1,4 @@
+import { runAgentRules } from "./commands/agent-rules.js";
 import { runConnect } from "./commands/connect.js";
 import { runDoctor } from "./commands/doctor.js";
 import { runEnsurePlugins } from "./commands/ensure-plugins.js";
@@ -45,6 +46,7 @@ Usage: kyoube <command> [flags]
 Commands:
   setup                 One-time: log in as instance admin (browser approval), store a board key, install plugins
   ensure-plugins        Install/upgrade Kyoube plugins into the core host (flags: --watch, --api-key <key>, --api-base <url>)
+  agent-rules           Keep the agent working rules in force (--once, --watch) or remove them (off)
   doctor                Check config, databases, plugins, harnesses and kept system packages
   harness list          Show the agent harness CLIs on PATH, their versions and where they come from
   harness install <name>  Install a harness with its official installer (claude, codex, hermes, pi, gemini, opencode, kimi)
@@ -81,6 +83,8 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
       return runSetup(parsed.flags, env);
     case "ensure-plugins":
       return runEnsurePlugins(parsed.flags, env);
+    case "agent-rules":
+      return runAgentRules(parsed.positionals, parsed.flags, env);
     case "doctor":
       return runDoctor(env);
     case "harness":
