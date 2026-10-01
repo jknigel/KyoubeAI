@@ -26,6 +26,8 @@ EOF
   cat > "$FAKE/apt-get" <<'EOF'
 #!/bin/sh
 echo "apt-get $*" >> "$CALLS"
+# A network that never answers: every apt-get hangs until it is killed.
+[ -z "$FAKE_HANG" ] || exec sleep 60
 case "$1" in
   update) exit "${FAKE_UPDATE_EXIT:-0}" ;;
   install)
@@ -208,4 +210,41 @@ EOF
   # All packages should be pending
   [ "$(cat "$KYOUBE_STATE_DIR/apt-pending.txt")" = "$(printf 'tree\njq\nffmpeg')" ]
   [ "$(cat "$KYOUBE_STATE_DIR/apt-restore.status")" = "failed 124" ]
+}
+
+@test "a hung network delays the start by the restore's time budget at most, and keeps everything pending" {
+  printf 'tree\njq\n' > "$KYOUBE_STATE_DIR/apt-packages.txt"
+  start=$SECONDS
+  KYOUBE_APT_RESTORE_BUDGET=4 FAKE_HANG=1 run "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [ $((SECONDS - start)) -le 7 ]
+  # the update got half the budget, the install the rest; nothing was retried one by one
+  grep -qx 'apt-get update -q' "$CALLS"
+  [ "$(grep -c '^apt-get install' "$CALLS")" -eq 1 ]
+  [ "$(cat "$KYOUBE_STATE_DIR/apt-restore.status")" = "failed 124" ]
+  [ "$(cat "$KYOUBE_STATE_DIR/apt-pending.txt")" = "$(printf 'tree\njq')" ]
+  grep -q "time budget is 4s" "$KYOUBE_STATE_DIR/apt-restore.log"
+}
+
+@test "per-package retries stop when the budget is spent, and what is left stays pending" {
+  printf 'tree\njq\nffmpeg\n' > "$KYOUBE_STATE_DIR/apt-packages.txt"
+  # the bulk install fails fast; the first retry hangs past the budget
+  cat > "$FAKE/apt-get" <<'EOF'
+#!/bin/sh
+echo "apt-get $*" >> "$CALLS"
+case "$*" in
+  update*) exit 0 ;;
+  *"tree jq ffmpeg"*) exit 100 ;;
+  *) exec sleep 60 ;;
+esac
+EOF
+  chmod +x "$FAKE/apt-get"
+  start=$SECONDS
+  KYOUBE_APT_RESTORE_BUDGET=3 run "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [ $((SECONDS - start)) -le 6 ]
+  grep -q "time budget (3s) is spent; the rest stay pending" "$KYOUBE_STATE_DIR/apt-restore.log"
+  [ "$(grep -c 'apt-get install -y --no-install-recommends [a-z]*$' "$CALLS")" -eq 1 ]
+  [ "$(cat "$KYOUBE_STATE_DIR/apt-pending.txt")" = "$(printf 'tree\njq\nffmpeg')" ]
+  [ "$(cat "$KYOUBE_STATE_DIR/apt-restore.status")" = "failed 100" ]
 }
