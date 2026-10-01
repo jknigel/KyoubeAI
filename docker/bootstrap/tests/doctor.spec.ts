@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { mkdtemp } from "node:fs/promises";
+import path from "node:path";
+import os from "node:os";
 import {
-  LEGACY_ENV_KEYS, agentRulesChecks, claudeCredentialDetail, exposureWarning, harnessChecks, harnessesInUseCheck, legacyEnvCheck, legacyHomeLinkCheck, skillsCheck, systemPackagesCheck,
+  LEGACY_ENV_KEYS, agentRulesChecks, agentRulesDoctorChecks, claudeCredentialDetail, exposureWarning, harnessChecks, harnessesInUseCheck, legacyEnvCheck, legacyHomeLinkCheck, skillsCheck, systemPackagesCheck,
 } from "../src/commands/doctor.js";
 import { HARNESSES, type HarnessStatus } from "../src/harnesses.js";
 import { EMPTY_STATE, type AgentRulesState } from "../src/agent-rules/state.js";
@@ -236,5 +239,48 @@ describe("agentRulesChecks", () => {
 
   it("fails after off while the switch is still on", () => {
     expect(agentRulesChecks({}, state(pass({ mode: "revert" })), NOW)[0]?.detail).toContain("removed at");
+  });
+});
+
+describe("agentRulesDoctorChecks", () => {
+  const NOW = Date.parse("2026-10-01T10:00:00Z");
+  const statePath = "/some/state/path.json";
+
+  it("with a read that rejects with EACCES, resolves to exactly one FAIL line", async () => {
+    const read = async () => { throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" }); };
+    const result = await agentRulesDoctorChecks({}, statePath, NOW, read);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ name: "agent rules", ok: false });
+    expect(result[0]!.detail).toContain("cannot read");
+    expect(result[0]!.detail).toContain("EACCES");
+  });
+
+  it("with KYOUBE_AGENT_RULES: off and a read that throws, returns the ok off line and never calls read", async () => {
+    let called = false;
+    const read = async () => { called = true; throw new Error("should not be called"); };
+    const result = await agentRulesDoctorChecks({ KYOUBE_AGENT_RULES: "off" }, statePath, NOW, read);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEqual({ name: "agent rules", ok: true, detail: "off (KYOUBE_AGENT_RULES=off)" });
+    expect(called).toBe(false);
+  });
+
+  it("with a read that resolves a state whose lastPass is {}, returns one FAIL line instead of throwing", async () => {
+    const read = async () => ({ ...EMPTY_STATE, lastPass: {} as any });
+    const result = await agentRulesDoctorChecks({}, statePath, NOW, read);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ name: "agent rules", ok: false });
+  });
+
+  it("with the default read on a directory path (EISDIR), returns the FAIL line", async () => {
+    const tmpdir = await mkdtemp(path.join(os.tmpdir(), "kyoube-doctor-test-"));
+    try {
+      const result = await agentRulesDoctorChecks({}, tmpdir, NOW);
+      expect(result).toHaveLength(1);
+      expect(result[0]).toMatchObject({ name: "agent rules", ok: false });
+      expect(result[0]!.detail).toContain("cannot read");
+      expect(result[0]!.detail).toContain("EISDIR");
+    } finally {
+      // Cleanup is best-effort; test framework will clean tmpdir
+    }
   });
 });

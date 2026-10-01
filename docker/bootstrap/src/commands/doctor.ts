@@ -6,7 +6,7 @@ import { readBoardKey, resolveBoardApiKey, resolveBoardKeyPath } from "../key-st
 import { createCoreClient, type CompanySkill, type CompanySummary } from "../core-api.js";
 import { describeHarness, harnessesForAdapterTypes, missingHarnesses, probeHarnesses, systemProbe, type HarnessSpec, type HarnessStatus } from "../harnesses.js";
 import { describeMissing, KYOUBE_SKILLS, missingKyoubeSkills } from "../skills.js";
-import { readState, resolveStatePath, type AgentRulesState } from "../agent-rules/state.js";
+import { EMPTY_STATE, readState, resolveStatePath, type AgentRulesState } from "../agent-rules/state.js";
 import { failureLines } from "../agent-rules/report.js";
 import { agentRulesEnabled } from "./agent-rules.js";
 
@@ -175,6 +175,21 @@ export function agentRulesChecks(env: NodeJS.ProcessEnv, state: AgentRulesState,
   return [{ name: "agent rules", ok: true, detail: `in force in ${companies} ${companies === 1 ? "company" : "companies"} (self-test passed in ${passed}) as of ${pass.at}` }, skipped];
 }
 
+export async function agentRulesDoctorChecks(
+  env: NodeJS.ProcessEnv,
+  statePath: string,
+  now: number,
+  read: (file: string) => Promise<AgentRulesState> = (file) => readState(file, () => {}),
+): Promise<Check[]> {
+  if (!agentRulesEnabled(env)) return agentRulesChecks(env, EMPTY_STATE, now);
+  try {
+    return agentRulesChecks(env, await read(statePath), now);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return [{ name: "agent rules", ok: false, detail: `cannot read ${statePath}: ${message}` }];
+  }
+}
+
 export function claudeCredentialDetail(raw: string | null, filePath: string): string {
   if (raw === null) return `not found (${filePath}) — only agents without an AI connection use it`;
   try {
@@ -283,7 +298,7 @@ export async function runDoctor(env: NodeJS.ProcessEnv): Promise<number> {
     await readOptional(path.posix.join(stateDir, "apt-restore.status")),
     path.posix.join(stateDir, "apt-restore.log"),
   ));
-  checks.push(...agentRulesChecks(env, await readState(resolveStatePath(config.home), () => {}), Date.now()));
+  checks.push(...await agentRulesDoctorChecks(env, resolveStatePath(config.home), Date.now()));
 
   const claudeFile = path.posix.join(config.home, ".claude", ".credentials.json");
   checks.push({ name: "claude credentials", ok: true, detail: claudeCredentialDetail(await readOptional(claudeFile), claudeFile) });
