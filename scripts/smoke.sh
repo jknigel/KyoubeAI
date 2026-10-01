@@ -189,12 +189,12 @@ STUDIO_SHIPPED="$(jq -r .version "$ROOT/plugins/kyoube-studio/package.json")"
 [[ "$STUDIO_SHIPPED" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected kyoube.studio version '$STUDIO_SHIPPED' in package.json" >&2; exit 1; }
 
 echo "==> install plugins via kyoube ensure-plugins"
-# Four plugins ship in the image (/opt/kyoube/plugins/{terminal,apps,files,studio}),
-# so the first pass installs all four — `installed 4`, nothing upgraded or
+# Five plugins ship in the image (/opt/kyoube/plugins/{terminal,apps,files,studio,agent-rules}),
+# so the first pass installs all five — `installed 5`, nothing upgraded or
 # skipped.
 compose exec -T app kyoube ensure-plugins --api-key "$TOKEN" | tee "$TMP/ensure-first.log"
-grep -q 'installed 4, upgraded 0, skipped 0' "$TMP/ensure-first.log" \
-  || { echo "expected all four bundled plugins to install on the first pass:" >&2; cat "$TMP/ensure-first.log" >&2; exit 1; }
+grep -q 'installed 5, upgraded 0, skipped 0' "$TMP/ensure-first.log" \
+  || { echo "expected all five bundled plugins to install on the first pass:" >&2; cat "$TMP/ensure-first.log" >&2; exit 1; }
 curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/plugins" \
   | jq -e 'map(select(.pluginKey == "kyoube.terminal")) | length == 1 and .[0].status == "ready"' >/dev/null
 wait_for_plugin kyoube.apps "$APPS_SHIPPED"
@@ -229,10 +229,10 @@ done
 compose exec -T app sh -c 'sed "s/^/    setup| /" /tmp/setup.log'
 [[ "$SETUP_EXIT" == "0" ]] || { echo "kyoube setup exited '${SETUP_EXIT:-<timeout>}'" >&2; exit 1; }
 # setup ends by running ensure-plugins with the key it just stored; the bundled
-# plugins are already installed at the on-disk version, so it skips all four.
+# plugins are already installed at the on-disk version, so it skips all five.
 compose exec -T app sh -c 'cat /tmp/setup.log' >"$TMP/setup.log"
-grep -q 'installed 0, upgraded 0, skipped 4' "$TMP/setup.log" \
-  || { echo "expected setup's ensure-plugins to skip the four bundled plugins:" >&2; cat "$TMP/setup.log" >&2; exit 1; }
+grep -q 'installed 0, upgraded 0, skipped 5' "$TMP/setup.log" \
+  || { echo "expected setup's ensure-plugins to skip the five bundled plugins:" >&2; cat "$TMP/setup.log" >&2; exit 1; }
 # No company exists at this point, so setup has nothing to verify and says so
 # rather than waiting for skills that cannot appear yet.
 grep -q 'no company exists yet' "$TMP/setup.log" \
@@ -254,9 +254,9 @@ grep -q 'kyoube.files skip' "$TMP/ensure-stored.log" \
 grep -q 'kyoube.studio skip' "$TMP/ensure-stored.log" \
   || { echo "expected kyoube.studio to be skipped:" >&2; cat "$TMP/ensure-stored.log" >&2; exit 1; }
 # All bundled plugins are already at the on-disk version by now, so the whole
-# run is a no-op: four skips, nothing installed or upgraded.
-grep -q 'installed 0, upgraded 0, skipped 4' "$TMP/ensure-stored.log" \
-  || { echo "expected 'installed 0, upgraded 0, skipped 4' in the summary:" >&2; cat "$TMP/ensure-stored.log" >&2; exit 1; }
+# run is a no-op: five skips, nothing installed or upgraded.
+grep -q 'installed 0, upgraded 0, skipped 5' "$TMP/ensure-stored.log" \
+  || { echo "expected 'installed 0, upgraded 0, skipped 5' in the summary:" >&2; cat "$TMP/ensure-stored.log" >&2; exit 1; }
 sed 's/^/    /' "$TMP/ensure-stored.log"
 
 echo "==> the entrypoint plugin watcher finishes and exits"
