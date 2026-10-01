@@ -48,7 +48,7 @@ describe("kyoube.studio worker", () => {
     expect(home.needsTotal).toBe(2);
     expect(home.doneThisWeek).toBe(1);
     expect(home.updates[0]!.identifier).toBe("BAP-1");
-    expect(home.steps).toEqual({ hireAgent: true, giveTask: true, teamwork: false });
+    expect(home.steps).toEqual({ hireAgent: true, giveTask: true, seenThrough: false });
   });
 
   it("serves the Workspace figures and marks owners and admins", async () => {

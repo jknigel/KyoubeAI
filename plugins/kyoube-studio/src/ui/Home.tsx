@@ -52,7 +52,7 @@ export function StudioHome(_props: PluginWidgetProps) {
 
   const title = headline(data.needsTotal);
   const steps = data.steps;
-  const showSteps = !dismissed && !(steps.hireAgent && steps.giveTask && steps.teamwork);
+  const showSteps = !dismissed && !(steps.hireAgent && steps.giveTask && steps.seenThrough);
   const dismiss = () => {
     setDismissed(true);
     try { localStorage.setItem(dismissKey(host.companyId), "1"); } catch { /* private window: the strip just comes back next time */ }
@@ -81,9 +81,9 @@ export function StudioHome(_props: PluginWidgetProps) {
             <span className="ks-step-text"><b>Give it a task</b><span>Plain words are enough</span></span>
           </a>
           <span className="ks-arrow" aria-hidden="true"><Icon name="arrow" size={18} /></span>
-          <a {...navigation.linkProps("/agents/all")} className="ks-step" data-done={steps.teamwork}>
-            <span className="ks-check" data-done={steps.teamwork}>{steps.teamwork ? <Icon name="check" size={12} /> : "3"}</span>
-            <span className="ks-step-text"><b>Let the team work together</b><span>Agents hand work to each other and keep memory</span></span>
+          <a {...navigation.linkProps("/issues")} className="ks-step" data-done={steps.seenThrough}>
+            <span className="ks-check" data-done={steps.seenThrough}>{steps.seenThrough ? <Icon name="check" size={12} /> : "3"}</span>
+            <span className="ks-step-text"><b>See it through</b><span>It finishes the task and asks you only when it needs you</span></span>
             {team.length > 0 ? (
               <span className="ks-stack" aria-hidden="true">
                 {team.slice(0, 3).map((member) => <Avatar key={member.id} icon={member.icon} name={member.name} size={30} />)}

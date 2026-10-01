@@ -96,9 +96,12 @@ describe("counts and steps", () => {
   });
 
   it("ticks off the getting-started steps from what exists", () => {
-    expect(gettingStarted([], [])).toEqual({ hireAgent: false, giveTask: false, teamwork: false });
-    expect(gettingStarted(agents, issues.filter((i) => !i.createdByAgentId))).toEqual({ hireAgent: true, giveTask: true, teamwork: false });
-    expect(gettingStarted(agents, issues)).toEqual({ hireAgent: true, giveTask: true, teamwork: true });
+    expect(gettingStarted([], [])).toEqual({ hireAgent: false, giveTask: false, seenThrough: false });
+    expect(gettingStarted(agents, issues)).toEqual({ hireAgent: true, giveTask: true, seenThrough: false });
+    const finished: IssueLike = { id: "i9", identifier: "BAP-52", title: "Post written", status: "done", assigneeAgentId: "a-writer", createdByUserId: "user-1", updatedAt: ago(5) };
+    expect(gettingStarted(agents, [...issues, finished])).toEqual({ hireAgent: true, giveTask: true, seenThrough: true });
+    // The step is about a person's task: one an agent created does not count.
+    expect(gettingStarted(agents, [{ ...finished, createdByUserId: null, createdByAgentId: "a-mgr" }]).seenThrough).toBe(false);
   });
 
   it("builds the whole Home snapshot and caps the Needs you list", () => {

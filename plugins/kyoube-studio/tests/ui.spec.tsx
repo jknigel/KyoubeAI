@@ -93,7 +93,7 @@ const home: HomeSnapshot = {
   needsTotal: 3,
   doneThisWeek: 12,
   updates: [{ id: "i2", label: "Done", identifier: "BAP-40", title: "Campaign brief", href: "/issues/BAP-40", agentName: "Agent 1", tone: "teal", at: new Date().toISOString() }],
-  steps: { hireAgent: true, giveTask: true, teamwork: false },
+  steps: { hireAgent: true, giveTask: true, seenThrough: false },
 };
 
 describe("Home", () => {
@@ -107,10 +107,12 @@ describe("Home", () => {
     expect(html).toContain('href="/BAP/issues/BAP-41"');
     expect(html).toContain("BAP-45 · Three posts");
     expect(html).toContain("Done: BAP-40");
+    expect(html).toContain("<b>See it through</b>");
+    expect(html).not.toContain("hand work to each other");
   });
 
   it("drops the strip once every step is done", () => {
-    installBridge({ home: { ...home, steps: { hireAgent: true, giveTask: true, teamwork: true } } });
+    installBridge({ home: { ...home, steps: { hireAgent: true, giveTask: true, seenThrough: true } } });
     expect(render(StudioHome)).not.toContain("Getting started");
   });
 

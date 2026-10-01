@@ -28,6 +28,7 @@ export interface IssueLike {
   status: string;
   assigneeAgentId?: string | null;
   createdByAgentId?: string | null;
+  createdByUserId?: string | null;
   executionRunId?: string | null;
   hiddenAt?: Date | string | null;
   createdAt?: Date | string | null;
@@ -92,7 +93,8 @@ export interface UpdateItem {
 export interface GettingStarted {
   hireAgent: boolean;
   giveTask: boolean;
-  teamwork: boolean;
+  /** A task a person gave an agent has been finished by that agent (docs/agent-rules.md: agents finish their own tasks). */
+  seenThrough: boolean;
 }
 
 export interface TeamSnapshot {
@@ -305,7 +307,7 @@ export function gettingStarted(agents: AgentLike[], issues: IssueLike[]): Gettin
   return {
     hireAgent: agents.some((agent) => agent.status !== "terminated"),
     giveTask: issues.length > 0,
-    teamwork: issues.some((issue) => issue.createdByAgentId != null),
+    seenThrough: issues.some((issue) => issue.status === "done" && issue.createdByUserId != null && issue.assigneeAgentId != null),
   };
 }
 
