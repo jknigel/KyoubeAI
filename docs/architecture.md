@@ -34,7 +34,8 @@ docker compose
 │   │    ├─ plugin runtime
 │   │    │     ├─ worker  kyoube.terminal   — node-pty PTY sessions
 │   │    │     ├─ worker  kyoube.apps       — DataService + AppService
-│   │    │     └─ worker  kyoube.files      — WorkspaceFiles over each project's folder
+│   │    │     ├─ worker  kyoube.files      — WorkspaceFiles over each project's folder
+│   │    │     └─ worker  kyoube.agent-rules — protected manager agents (docs/agent-rules.md)
 │   │    └─ plugin API routes  ◀── agent runs (Claude Code, pi, Hermes) over REST
 │   │
 │   ├─ CLIs on PATH: yours in /kyoubeai/.local/bin, then the core image's claude, codex, gemini, kimi, opencode
@@ -57,6 +58,11 @@ one worker because apps need in-process access to the data service and plugins c
 and `@kyoube/plugin-files` (`plugins/kyoube-files`), the Files tab on project pages. Everything Kyoube adds
 is one of these three plugins, the `@kyoube/app-sdk` package the apps plugin injects into apps
 (`packages/kyoube-app-sdk`), and the `kyoube` bootstrap CLI (`docker/bootstrap`) that installs them.
+
+`@kyoube/plugin-agent-rules` (`plugins/kyoube-agent-rules`) has no UI and no tools. It holds the one
+part of the agent working rules the core lets only a plugin do: setting a manager agent's assignment
+policy and its own-team grant through the SDK's `ctx.authorization`. `kyoube agent-rules` calls its two
+board-only routes once a minute (`docs/agent-rules.md`).
 
 ## Request paths
 

@@ -97,7 +97,7 @@ The workspace is the private root and these build-time or deployable members:
 | Path | Package | What it is |
 |---|---|---|
 | *(root)* | `kyoubeai` | Workspace root: `install.sh`, `update.sh`, `docker-compose.yml`, `docker/`, `docs/`, `scripts/`, `.github/`. |
-| `docker/bootstrap/` | `@kyoube/bootstrap` | The `kyoube` CLI (`setup`, `ensure-plugins`, `doctor`, `harness`, `connect`). |
+| `docker/bootstrap/` | `@kyoube/bootstrap` | The `kyoube` CLI (`setup`, `ensure-plugins`, `agent-rules`, `doctor`, `harness`, `connect`). |
 | `docker/system/` | *(not a package)* | What the image adds for the Terminal: passwordless `sudo`, the apt hook that keeps installed system packages (`apt-record`, `apt-restore`), `/etc/profile.d` and npm's prefix. |
 | `docker/rebrand/` | `@kyoube/rebrand` | The build-time brand transform: names, logo and artwork (see `docs/branding.md`). |
 | `docker/core-patches/` | `@kyoube/core-patches` | Build-time fixes to upstream bugs, held only until the upstream fix ships (see "Never patch the core"). |
@@ -106,6 +106,7 @@ The workspace is the private root and these build-time or deployable members:
 | `plugins/kyoube-apps/` | `@kyoube/plugin-apps` | The organisation database and Apps plugin (one worker, two modules). |
 | `plugins/kyoube-files/` | `@kyoube/plugin-files` | The project Files tab: a browser and editor for each project's working folder. |
 | `plugins/kyoube-studio/` | `@kyoube/plugin-studio` | The Studio layout: Home, the sidebar's Build group and Team roster, the Workspace page, agent characters. |
+| `plugins/kyoube-agent-rules/` | `@kyoube/plugin-agent-rules` | The agent working rules guardrail: protected manager agents and their own-team assign grants (no UI; `kyoube agent-rules` drives it, see `docs/agent-rules.md`). |
 | `packages/kyoube-app-sdk/` | `@kyoube/app-sdk` | `window.kyoube`, injected into every app's iframe. |
 
 Within `plugins/kyoube-apps/src/`: `data/` is the schema/records/permissions/SQL-validation service,
