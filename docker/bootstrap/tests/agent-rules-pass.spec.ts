@@ -86,6 +86,20 @@ describe("applyPass", () => {
     expect(api.calls.filter((call) => call.startsWith("write"))).toEqual([]);
   });
 
+  it("leaves an agent waiting for approval alone, without a skipped entry (the plugin's report lists it)", async () => {
+    const api = new FakeApi();
+    api.agents.c1 = [{ id: "a1", name: "Writer", status: "idle" }, { id: "p1", name: "Hire", status: "pending_approval" }];
+    api.files.p1 = "You are new.\n";
+    const bundlesRead: string[] = [];
+    const getBundle = api.getInstructionsBundle.bind(api);
+    api.getInstructionsBundle = async (agentId: string) => { bundlesRead.push(agentId); return getBundle(agentId); };
+    const { report } = await applyPass(deps(api), EMPTY_STATE);
+    expect(bundlesRead).toEqual(["a1"]);
+    expect(api.calls.filter((call) => call.startsWith("write"))).toEqual(["write a1"]);
+    expect(api.files.p1).toBe("You are new.\n");
+    expect(report.companies[0]?.skipped).toEqual([]);
+  });
+
   it("carries the guard's skipped agents, failures and a failed self-test", async () => {
     const api = new FakeApi();
     api.guard = {

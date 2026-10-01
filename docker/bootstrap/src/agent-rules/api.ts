@@ -47,7 +47,10 @@ export interface RulesApi {
   writeInstructionsFile(agentId: string, path: string, content: string): Promise<void>;
   reconcileGuard(companyId: string): Promise<GuardReport>;
   revertGuard(companyId: string): Promise<GuardRevertReport>;
-  /** False while the core answers the plugin's routes 503: right after a start, before its worker runs. */
+  /**
+   * False while the core answers the plugin's routes 503, right after a start before its worker
+   * runs, or 404 `Plugin not found`, before `ensure-plugins` has installed it (the first start after an update).
+   */
   pluginReady(): Promise<boolean>;
 }
 
@@ -141,13 +144,15 @@ export function createRulesApi(opts: CoreClientOptions): RulesApi {
     async pluginReady() {
       // The route takes POST only. The core checks the plugin's status and
       // worker before it matches a route, so a GET answers 503 until the worker
-      // runs and 404 after, and never reaches the worker. Anything but a 503 is
-      // left for the pass to report.
+      // runs and 404 after, and never reaches the worker. A plugin not installed
+      // yet answers 404 `Plugin not found`. Anything else is left for the pass
+      // to report.
       try {
         await request<unknown>(GUARD_PLUGIN_ROUTES.reconcile);
         return true;
       } catch (error) {
-        return !(error instanceof CoreApiError && error.status === 503);
+        if (!(error instanceof CoreApiError)) return true;
+        return !(error.status === 503 || (error.status === 404 && error.message === "Plugin not found"));
       }
     },
   };

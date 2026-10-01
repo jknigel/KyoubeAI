@@ -55,6 +55,7 @@ describe("applyRules", () => {
     expect(applyRules("<!-- kyoube:working-rules v1. x -->\nno end\n").kind).toBe("corrupt");
     expect(applyRules(`${RULES_BLOCK}\n${RULES_BLOCK}\n`).kind).toBe("corrupt");
     expect(applyRules(`${END_MARKER}\n<!-- kyoube:working-rules v1. x -->\n`).kind).toBe("corrupt");
+    expect(applyRules(`${END_MARKER}<!-- kyoube:working-rules v1. x -->\n`).kind).toBe("corrupt");
   });
 
   it("leaves reworded handoff text and an existing Handoffs section alone", () => {
@@ -66,6 +67,16 @@ describe("applyRules", () => {
 
   it("handles an empty file", () => {
     expect(changed("")).toBe(`${RULES_BLOCK}\n\n${HANDOFFS_SECTION}`);
+  });
+
+  it("trims a long run of whitespace in linear time", () => {
+    const spaces = " ".repeat(50_000);
+    const started = performance.now();
+    // Only spaces: the run is trailing and goes.
+    expect(changed(spaces)).toBe(`${RULES_BLOCK}\n\n${HANDOFFS_SECTION}`);
+    // A word after the run: a backtracking /\s*$/ retries the run from each of its positions.
+    expect(changed(`${spaces}x`)).toBe(`${RULES_BLOCK}\n\n${spaces}x\n\n${HANDOFFS_SECTION}`);
+    expect(performance.now() - started).toBeLessThan(1000);
   });
 });
 
@@ -81,5 +92,9 @@ describe("removeRules", () => {
 
   it("refuses to guess about incomplete markers", () => {
     expect(removeRules("<!-- kyoube:working-rules v1. x -->\n").kind).toBe("corrupt");
+  });
+
+  it("refuses an end marker right before the start marker", () => {
+    expect(removeRules(`${END_MARKER}<!-- kyoube:working-rules v1. x -->\n`).kind).toBe("corrupt");
   });
 });

@@ -79,7 +79,9 @@ async function editAgents(api: RulesApi, companyId: string, entry: CompanyReport
     return;
   }
   for (const agent of agents) {
-    if (agent.status === "terminated") continue;
+    // The core freezes the config of an agent waiting for approval, and an instructions write
+    // updates its adapterConfig. No skipped entry: the plugin's report lists it as waiting.
+    if (agent.status === "terminated" || agent.status === "pending_approval") continue;
     await editAgent(api, agent, entry, edit);
   }
 }
