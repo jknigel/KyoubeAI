@@ -1,0 +1,32 @@
+{
+  "name": "@kyoube/plugin-agent-rules",
+  "version": "0.1.0",
+  "description": "KyoubeAI's agent working rules guardrail: manager agents are protected, so work moves up only with a person's decision (Paperclip plugin)",
+  "license": "BUSL-1.1",
+  "type": "module",
+  "files": [
+    "dist",
+    "package.json"
+  ],
+  "paperclipPlugin": {
+    "manifest": "./dist/manifest.js",
+    "worker": "./dist/worker.js"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@paperclipai/plugin-sdk": "2026.916.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=24.11.0"
+  }
+}
