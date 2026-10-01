@@ -31,8 +31,8 @@ cleanup() {
   local code=$?
   [ -z "$INSTALL_PID" ] || kill "$INSTALL_PID" 2>/dev/null || true
   if [ -f "$CLONE/.env" ]; then
-    if [ "$code" -ne 0 ]; then (cd "$CLONE" && docker compose -p "$PROJECT" logs --tail 100 app >&2 || true); fi
-    (cd "$CLONE" && docker compose -p "$PROJECT" down -v --remove-orphans >/dev/null 2>&1 || true)
+    if [ "$code" -ne 0 ]; then (cd "$CLONE" && docker compose -p "$PROJECT" logs --tail 100 app >&2) || true; fi
+    (cd "$CLONE" && docker compose -p "$PROJECT" down -v --remove-orphans >/dev/null 2>&1) || true
   fi
   docker rmi "$REPO:9.9.0" "$REPO:9.9.1" >/dev/null 2>&1 || true
   rm -rf "$WORK"
@@ -126,7 +126,7 @@ PI_OWNERS="$(docker compose exec -T app stat -c %U /kyoubeai/.local/bin/pi /kyou
 [ -f .kyoube/update-state ] || fail "no rollback state was saved"
 # Written after the backup, so only a real restore can take it away again.
 AFTER_ID="$(curl -fsS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -X POST "$BASE_URL/api/companies" --data '{"name":"E2E After Update"}' | jq -r .id)"
-[ -n "$AFTER_ID" ] && [ "$AFTER_ID" != null ] || fail "could not create the company for after the update"
+if [ -z "$AFTER_ID" ] || [ "$AFTER_ID" = null ]; then fail "could not create the company for after the update"; fi
 companies_have "$AFTER_ID" || fail "the company made after the update is not listed"
 show "$WORK/update.log" '^(Update KyoubeAI|    agents use|    added to \.env|==> npm install|pi: |updated to)'
 

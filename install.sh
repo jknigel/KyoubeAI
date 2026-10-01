@@ -85,17 +85,17 @@ main() {
   else
     git diff --quiet HEAD -- || die "tracked files in $KYOUBE_DIR have local changes; stash them (git stash) or use --edge"
     # A commit can carry several tags (v1.2.0 and v1.2.0-rc1); only a release tag counts.
-    current="$(git tag --points-at HEAD 2>/dev/null | latest_release || true)"
+    current="$(git tag --points-at HEAD 2>/dev/null | latest_release "$KYOUBE_MIN_RELEASE" || true)"
     if [ -n "$want" ]; then
       version_ge "$want" "$KYOUBE_MIN_RELEASE" || die "install.sh installs $KYOUBE_MIN_RELEASE or later; see README for older releases"
       tag="v$want"
       # HEAD may carry more than one release tag; the one asked for is enough.
       if git tag --points-at HEAD 2>/dev/null | grep -Fx "$tag" >/dev/null; then current="$tag"; fi
-    elif [ -n "$current" ] && [ "$(printf '%s\n' "$current" | latest_release)" = "$current" ]; then
+    elif [ -n "$current" ] && [ "$(printf '%s\n' "$current" | latest_release "$KYOUBE_MIN_RELEASE")" = "$current" ]; then
       tag="$current"
     else
       git fetch --tags --quiet origin 2>/dev/null || warn "could not fetch releases from origin; using the tags this checkout has"
-      tag="$(git tag -l 'v*' | latest_release)"
+      tag="$(git tag -l 'v*' | latest_release "$KYOUBE_MIN_RELEASE")"
       [ -n "$tag" ] || die "no KyoubeAI release ($KYOUBE_MIN_RELEASE or later) found. To run the current code instead: ./install.sh --edge"
     fi
     if [ "$current" != "$tag" ]; then
@@ -120,7 +120,7 @@ main() {
     # A source build keeps a local image name the .env already has (two source installs on one machine each use
     # their own, docs/operations.md).
     repo=kyoubeai; version_tag=dev
-    if [ -f .env ] && runs_source_build; then repo="$(env_get .env KYOUBE_IMAGE)"; repo="${repo:-kyoubeai}"; fi
+    if [ -f .env ] && runs_source_build .env; then repo="$(env_get .env KYOUBE_IMAGE)"; repo="${repo:-kyoubeai}"; fi
   else
     repo="$KYOUBE_IMAGE_DEFAULT"; version_tag="$release"
   fi
@@ -160,7 +160,7 @@ main() {
 
   # 3. The image: the one .env selects (on an existing install it keeps its own KYOUBE_IMAGE, a mirror for one).
   local ref attempt
-  ref="$(image_ref)"
+  ref="$(image_ref .env)"
   if [ -n "$image" ]; then
     docker image inspect "$image" >/dev/null 2>&1 || die "image $image is not on this machine"
   elif [ "$edge" = 1 ]; then
@@ -226,15 +226,15 @@ main() {
 keep_version() {
   local tag="${1:-}" here commit why=""
   if [ -n "$tag" ]; then
-    here="$(git tag --points-at HEAD 2>/dev/null | latest_release || true)"; here="${here:-$(git rev-parse --short HEAD)}"
+    here="$(git tag --points-at HEAD 2>/dev/null | latest_release "$KYOUBE_MIN_RELEASE" || true)"; here="${here:-$(git rev-parse --short HEAD)}"
     [ "$(env_get .env KYOUBE_VERSION)" != "${tag#v}" ] \
       || die "this install runs $tag (KYOUBE_VERSION in .env), but this checkout is at $here, and ./install.sh never switches the checkout of an install that has data; nothing was changed. To repair it: git checkout $tag, then ./install.sh. Moving to another version is ./update.sh"
     keep_refusal "$tag"
   fi
   if [ -n "$image" ]; then
-    [ "$(image_ref)" = "$repo:$version_tag" ] || keep_refusal "the image $repo:$version_tag"
+    [ "$(image_ref .env)" = "$repo:$version_tag" ] || keep_refusal "the image $repo:$version_tag"
   elif [ "$edge" = 1 ]; then
-    runs_source_build || keep_refusal "a build of this checkout" "To switch it to a build from source: ./update.sh --edge (it backs up first)"
+    runs_source_build .env || keep_refusal "a build of this checkout" "To switch it to a build from source: ./update.sh --edge (it backs up first)"
     commit="$(build_record || true)"
     if [ -z "$commit" ]; then
       why="nothing records which commit its image was built from"
@@ -242,7 +242,7 @@ keep_version() {
       why="its image was built from $(git rev-parse --short "$commit"), and this checkout is at $(git rev-parse --short HEAD)"
     fi
     [ -z "$why" ] \
-      || die "this install runs a source build ($(image_ref)), and $why, so ./install.sh --edge could build other code onto its data; nothing was changed. To move it to this checkout's code: ./update.sh --edge (it backs up first)"
+      || die "this install runs a source build ($(image_ref .env)), and $why, so ./install.sh --edge could build other code onto its data; nothing was changed. To move it to this checkout's code: ./update.sh --edge (it backs up first)"
   else
     [ "$(env_get .env KYOUBE_VERSION)" = "$version_tag" ] || keep_refusal "v$version_tag"
   fi
@@ -251,14 +251,14 @@ keep_version() {
 # keep_refusal WHAT [FIX]: keep_version's refusal when the stack runs other code than WHAT; FIX replaces the usual advice.
 keep_refusal() {
   local runs fix
-  if runs_source_build; then
-    runs="a source build ($(image_ref))"
+  if runs_source_build .env; then
+    runs="a source build ($(image_ref .env))"
     fix="To update it: ./update.sh --edge (it backs up first). Re-running ./install.sh --edge on the commit it was built from repairs it"
   else
     if is_release_version "$(env_get .env KYOUBE_VERSION)"; then
       runs="v$(env_get .env KYOUBE_VERSION) (KYOUBE_VERSION in .env)"
     else
-      runs="$(image_ref) (KYOUBE_IMAGE and KYOUBE_VERSION in .env)"
+      runs="$(image_ref .env) (KYOUBE_IMAGE and KYOUBE_VERSION in .env)"
     fi
     fix="Re-running ./install.sh repairs the version you have; moving to another version is ./update.sh (it backs up first)"
   fi

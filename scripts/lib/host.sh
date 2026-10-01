@@ -134,7 +134,7 @@ normalize_project_name() {
 # a compose or override file, then the folder name. Without a docker that answers, the same order without `name:`.
 resolve_project_name() {
   local dir="$1" name
-  name="$(cd "$dir" && docker compose config 2>/dev/null </dev/null | tr -d '\r' | awk 'NR == 1 && sub(/^name:[ \t]*/, "") { print }' || true)"
+  name="$( (cd "$dir" && docker compose config 2>/dev/null </dev/null | tr -d '\r' | awk 'NR == 1 && sub(/^name:[ \t]*/, "") { print }') || true)"
   [ -n "$name" ] || name="${COMPOSE_PROJECT_NAME:-}"
   [ -n "$name" ] || name="$(env_get "$dir/.env" COMPOSE_PROJECT_NAME)"
   [ -n "$name" ] || name="$(normalize_project_name "$(basename "$dir")")"
@@ -206,7 +206,7 @@ stack_image_id() {
   if [ -n "$cid" ]; then
     docker inspect -f '{{.Image}}' "$cid" 2>/dev/null </dev/null || true
   else
-    docker image inspect -f '{{.Id}}' "$(image_ref)" 2>/dev/null </dev/null || true
+    docker image inspect -f '{{.Id}}' "$(image_ref .env)" 2>/dev/null </dev/null || true
   fi
 }
 
