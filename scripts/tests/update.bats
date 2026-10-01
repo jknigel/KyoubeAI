@@ -33,7 +33,8 @@ exit 0
 EOF
   chmod +x "$STUB_BIN/docker"
 
-  # origin: v1.1.0, an untagged commit, v1.2.0 (main sits on it). backup.sh and restore.sh are stubs that log.
+  # origin: v1.1.0, an untagged commit, v1.2.0 (main sits on it). backup.sh and restore.sh are stubs that log; the
+  # backup has a SHA256SUMS like a real one, and the restore fails once when STUB_FAIL_RESTORE is set.
   SEED="$BATS_TEST_TMPDIR/seed"; INST="$BATS_TEST_TMPDIR/inst"
   mkdir -p "$SEED/scripts/lib"
   cp "$BATS_TEST_DIRNAME/../../update.sh" "$SEED/"
@@ -42,9 +43,15 @@ EOF
 #!/bin/sh
 echo run >> "$MARKS/backups"
 mkdir -p "$MARKS/backup-dir"
+echo dump > "$MARKS/backup-dir/kyoubeai.dump"
+(cd "$MARKS/backup-dir" && sha256sum kyoubeai.dump > SHA256SUMS)
 echo "backup written to $MARKS/backup-dir"
 EOF
-  printf '#!/bin/sh\necho "$1" >> "$MARKS/restores"\n' > "$SEED/scripts/restore.sh"
+  cat > "$SEED/scripts/restore.sh" <<'EOF'
+#!/bin/sh
+if [ -n "${STUB_FAIL_RESTORE:-}" ] && [ ! -e "$MARKS/restore-failed" ]; then touch "$MARKS/restore-failed"; exit 1; fi
+echo "$1" >> "$MARKS/restores"
+EOF
   printf 'KYOUBE_CORE_VERSION=2026.916.1\nKYOUBE_VERSION=dev\n' > "$SEED/.env.example"
   git -C "$SEED" init -q
   git -C "$SEED" symbolic-ref HEAD refs/heads/main
@@ -73,6 +80,8 @@ write_unfinished() {
   printf 'mode=%s\nfrom=%s\nto=%s\nref=%s\nbackup=%s\ndone=0\n' "${MODE:-release}" "${FROM:-v1.1.0}" "$1" "$2" "$MARKS/backup-dir" > "$INST/.kyoube/update-state"
   cp "$INST/.env" "$INST/.kyoube/env.before-update"
   mkdir -p "$MARKS/backup-dir"
+  echo dump > "$MARKS/backup-dir/kyoubeai.dump"
+  (cd "$MARKS/backup-dir" && sha256sum kyoubeai.dump > SHA256SUMS)
 }
 
 @test "an untagged commit that is part of the release's history moves forward" {
@@ -119,7 +128,7 @@ write_unfinished() {
   [[ "$output" == *"an update to v1.2.0 did not finish"* ]]
   [ ! -e "$MARKS/backups" ]
   cmp "$INST/.kyoube/update-state" "$BATS_TEST_TMPDIR/state-before"
-  ! grep -E '^(pull|compose (up|build|stop|exec))' "$STUB_LOG"
+  ! grep -E '^(pull|compose (up|build|stop|exec))' "$STUB_LOG" || false
 }
 
 @test "an unfinished edge update is resumed with --edge, and plain update.sh points there" {
@@ -265,7 +274,7 @@ write_unfinished() {
   [ "$status" -ne 0 ]
   [[ "$output" == *"could not download ghcr.io/jknigel/kyoubeai:1.2.0"* ]]
   [[ "$output" == *"nothing was changed"* ]]
-  ! grep -E '^compose (up|build|stop)' "$STUB_LOG"
+  ! grep -E '^compose (up|build|stop)' "$STUB_LOG" || false
   [ "$(git -C "$INST" rev-parse HEAD)" = "$head_before" ]
   [ -e "$INST/.kyoube/update-state" ]
 }
@@ -295,7 +304,7 @@ came_from() {
   grep -Fx "KYOUBE_VERSION=1.1.0" "$INST/.kyoube/env.before-update"
   grep -F "compose up -d --no-build --wait" "$STUB_LOG"
   [ "$(git -C "$INST" rev-parse HEAD)" = "$head_before" ]
-  ! git -C "$INST" reflog | grep -q 'checkout:'
+  ! git -C "$INST" reflog | grep -q 'checkout:' || false
 }
 
 @test "rolling back the first update from 1.0 returns to the old release's commit and .env" {
@@ -395,7 +404,7 @@ came_from() {
   [ "$(sed -n 's/^KYOUBE_IMAGE=//p' "$INST/.env")" = kyoubeai ]
   [ "$(sed -n 's/^KYOUBE_VERSION=//p' "$INST/.env")" = dev ]
   [ ! -e "$STUB_LOG.builds" ]
-  ! grep '^pull' "$STUB_LOG"
+  ! grep '^pull' "$STUB_LOG" || false
   [ ! -e "$INST/.kyoube/update-state" ]
 }
 
@@ -454,7 +463,7 @@ local_commit() {
   [[ "$output" == *"To follow it again: git checkout main"* ]]
   # the branch is where it was before the update, with its commit; the code the image was built from is checked out beside it
   [ "$(git -C "$INST" rev-parse main)" = "$tip" ]
-  ! git -C "$INST" symbolic-ref -q HEAD
+  ! git -C "$INST" symbolic-ref -q HEAD || false
   [ "$(git -C "$INST" rev-parse HEAD)" = "$previous" ]
   [ "$(cat "$STUB_LOG.builds")" = "$(printf 'kyoubeai:dev\nkyoubeai:dev')" ]
   [ "$(sed -n 's/^commit=//p' "$INST/.kyoube/built-commit")" = "$previous" ]
@@ -705,7 +714,7 @@ recorded_source_build() {
 stayed_put() {
   [ "$(backups_taken)" = 1 ]
   [ "$(grep -c '^compose build' "$STUB_LOG")" = 1 ]
-  ! grep '^pull' "$STUB_LOG"
+  ! grep '^pull' "$STUB_LOG" || false
   cmp "$INST/.kyoube/update-state" "$BATS_TEST_TMPDIR/state-before"
   cmp "$INST/.env" "$BATS_TEST_TMPDIR/env-before"
 }
@@ -829,7 +838,7 @@ stayed_put() {
   [[ "$output" == *"this checkout is at v1.2.0, not on a branch; main keeps its own commits. To follow it again: git checkout main"* ]]
   [ "$(git -C "$INST" rev-parse main)" = "$tip" ]
   git -C "$INST" merge-base --is-ancestor "$tip" main
-  ! git -C "$INST" symbolic-ref -q HEAD
+  ! git -C "$INST" symbolic-ref -q HEAD || false
   [ "$(git -C "$INST" describe --tags --exact-match HEAD)" = v1.2.0 ]
   [ "$(sed -n 's/^KYOUBE_IMAGE=//p' "$INST/.env")" = ghcr.io/jknigel/kyoubeai ]
   [ "$(sed -n 's/^KYOUBE_VERSION=//p' "$INST/.env")" = 1.2.0 ]
@@ -856,6 +865,146 @@ stayed_put() {
   [ "$status" -eq 0 ]
   [ "$(git -C "$INST" rev-parse main)" = "$up1" ]
   [ "$(git -C "$INST" describe --tags --exact-match HEAD)" = v1.2.0 ]
+}
+
+# A rollback in progress: until it finishes, nothing but --rollback may run, or a plain run would back up and boot the
+# half-restored data and replace the rollback point.
+
+@test "a rollback that stopped in restore.sh blocks every other run until ./update.sh --rollback finishes it" {
+  run_update --yes
+  [ "$status" -eq 0 ]
+  STUB_FAIL_RESTORE=1 run_update --rollback --yes
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"the restore failed"* ]]
+  [ "$(grep '^rollback=' "$INST/.kyoube/update-state")" = "rollback=1" ]
+  : > "$STUB_LOG"
+  for args in "--yes" "--edge --yes" "--version 1.2.0 --yes"; do
+    # shellcheck disable=SC2086
+    run_update $args
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"a rollback did not finish: run ./update.sh --rollback"* ]]
+  done
+  [ "$(backups_taken)" = 1 ]
+  ! grep -E '^(pull|compose (up|build|stop|exec))' "$STUB_LOG" || false
+  STUB_FAIL_RESTORE=1 run_update --rollback --yes
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"rolled back to v1.1.0"* ]]
+  [ "$(cat "$MARKS/restores")" = "$MARKS/backup-dir" ]
+  [ ! -e "$INST/.kyoube/update-state" ]
+  grep -Fx "KYOUBE_VERSION=1.1.0" "$INST/.env"
+  # the .env the rollback replaced is kept, and the user is told where
+  grep -Fx "KYOUBE_VERSION=1.2.0" "$INST/.kyoube/env.before-rollback"
+  [[ "$output" == *"the .env this rollback replaced is kept as .kyoube/env.before-rollback"* ]]
+  run_update --yes
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Update KyoubeAI v1.1.0 -> v1.2.0"* ]]
+  [ "$(backups_taken)" = 2 ]
+}
+
+@test "a rollback whose backup does not match its SHA256SUMS is refused before anything stops" {
+  run_update --yes
+  [ "$status" -eq 0 ]
+  echo damaged >> "$MARKS/backup-dir/kyoubeai.dump"
+  cp "$INST/.env" "$BATS_TEST_TMPDIR/env-before"
+  head_before="$(git -C "$INST" rev-parse HEAD)"
+  : > "$STUB_LOG"
+  run_update --rollback --yes
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"does not match its SHA256SUMS"* ]]
+  [[ "$output" == *"nothing was changed"* ]]
+  ! grep -E '^(pull|compose (up|build|stop|exec))' "$STUB_LOG" || false
+  [ ! -e "$MARKS/restores" ]
+  cmp "$INST/.env" "$BATS_TEST_TMPDIR/env-before"
+  [ "$(git -C "$INST" rev-parse HEAD)" = "$head_before" ]
+  ! grep -q '^rollback=' "$INST/.kyoube/update-state" || false
+}
+
+@test "--rollback without a terminal needs --yes, and is refused before anything stops" {
+  run_update --yes
+  [ "$status" -eq 0 ]
+  : > "$STUB_LOG"
+  run_update --rollback </dev/null
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"./update.sh --rollback --yes"* ]]
+  ! grep -E '^(pull|compose (up|build|stop|exec))' "$STUB_LOG" || false
+  [ -e "$INST/.kyoube/update-state" ]
+  grep -Fx "KYOUBE_VERSION=1.2.0" "$INST/.env"
+}
+
+@test "a commit made on the branch after an --edge update survives --rollback, and the message says where everything is" {
+  git -C "$SEED" commit -q --allow-empty -m newer
+  printf 'KYOUBE_VERSION=dev\nKYOUBE_IMAGE=kyoubeai\nCOMPOSE_PROJECT_NAME=inst\n' > "$INST/.env"
+  before="$(git -C "$INST" rev-parse HEAD)"
+  run_update --edge --yes
+  [ "$status" -eq 0 ]
+  [ "$(grep '^after=' "$INST/.kyoube/update-state")" = "after=$(git -C "$SEED" rev-parse HEAD)" ]
+  git -C "$INST" commit -q --allow-empty -m mine-after-the-update
+  mine="$(git -C "$INST" rev-parse HEAD)"
+  run_update --rollback --yes
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$INST" rev-parse main)" = "$mine" ]
+  ! git -C "$INST" symbolic-ref -q HEAD || false
+  [ "$(git -C "$INST" rev-parse HEAD)" = "$before" ]
+  [[ "$output" == *"main has commits made after the update; left it at $(git -C "$INST" rev-parse --short "$mine"); this checkout is at $(git -C "$INST" rev-parse --short "$before"), not on a branch"* ]]
+  [[ "$output" != *"keeps its own commits"* ]]
+}
+
+@test "a rollback that failed after its detached checkout is finished by running it again, which keeps the branch" {
+  git -C "$SEED" commit -q --allow-empty -m up-1
+  git -C "$INST" pull -q
+  git -C "$SEED" commit -q --allow-empty -m up-2
+  up1="$(git -C "$INST" rev-parse HEAD)"
+  printf 'KYOUBE_VERSION=1.2.0\nKYOUBE_IMAGE=ghcr.io/jknigel/kyoubeai\nCOMPOSE_PROJECT_NAME=inst\n' > "$INST/.env"
+  run_update --edge --yes
+  [ "$status" -eq 0 ]
+  STUB_FAIL_RESTORE=1 run_update --rollback --yes
+  [ "$status" -ne 0 ]
+  ! git -C "$INST" symbolic-ref -q HEAD || false
+  [ "$(git -C "$INST" rev-parse main)" = "$up1" ]
+  STUB_FAIL_RESTORE=1 run_update --rollback --yes
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$INST" rev-parse main)" = "$up1" ]
+  [ "$(git -C "$INST" describe --tags --exact-match HEAD)" = v1.2.0 ]
+  [[ "$output" == *"this checkout is at v1.2.0, not on a branch; main keeps its own commits. To follow it again: git checkout main"* ]]
+  [ ! -e "$INST/.kyoube/update-state" ]
+}
+
+@test "after a rollback leaves the checkout detached, --edge names the branch the update followed" {
+  git -C "$SEED" commit -q --allow-empty -m newer
+  git -C "$INST" checkout -q -b work --track origin/main
+  printf 'KYOUBE_VERSION=1.1.0\nKYOUBE_IMAGE=ghcr.io/jknigel/kyoubeai\nCOMPOSE_PROJECT_NAME=inst\n' > "$INST/.env"
+  run_update --edge --yes
+  [ "$status" -eq 0 ]
+  run_update --rollback --yes
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$INST" rev-parse HEAD)" = "$(git -C "$INST" rev-parse v1.1.0)" ]
+  run_update --edge --yes
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"git checkout work first (the branch the last --edge update followed)"* ]]
+}
+
+@test "a release update checks out the release's tag, not a local branch of the same name" {
+  git -C "$INST" branch v1.2.0 v1.1.0 2>/dev/null
+  git -C "$INST" -c advice.detachedHead=false checkout -q --detach v1.1.0^0
+  run_update --yes
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$INST" rev-parse HEAD)" = "$(git -C "$INST" rev-parse refs/tags/v1.2.0)" ]
+  ! git -C "$INST" symbolic-ref -q HEAD || false
+}
+
+@test "an unfinished --edge update is not resumed from a checkout moved back past where it started" {
+  git -C "$SEED" commit -q --allow-empty -m newer
+  printf 'KYOUBE_VERSION=dev\nKYOUBE_IMAGE=kyoubeai\nCOMPOSE_PROJECT_NAME=inst\n' > "$INST/.env"
+  started="$(git -C "$INST" rev-parse HEAD)"
+  STUB_FAIL_BUILD=1 run_update --edge --yes
+  [ "$status" -ne 0 ]
+  git -C "$INST" reset -q --hard v1.1.0
+  run_update --edge --yes
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"does not contain $(git -C "$INST" rev-parse --short "$started"), where the unfinished update started"* ]]
+  [[ "$output" == *"./update.sh --rollback"* ]]
+  [ "$(grep -c '^compose build' "$STUB_LOG")" = 1 ]
+  [ "$(git -C "$INST" rev-parse HEAD)" = "$(git -C "$INST" rev-parse v1.1.0)" ]
 }
 
 @test "update.sh runs every kyoube command in the container as node" {
