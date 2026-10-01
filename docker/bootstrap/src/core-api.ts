@@ -100,11 +100,14 @@ export interface CoreClient {
 export class CoreApiError extends Error {
   readonly status: number;
   readonly body: unknown;
-  constructor(status: number, body: unknown, message: string) {
+  /** `METHOD /path` of the refused request, so a message can say which call a core update broke. */
+  readonly route: string;
+  constructor(status: number, body: unknown, message: string, route = "") {
     super(message);
     this.name = "CoreApiError";
     this.status = status;
     this.body = body;
+    this.route = route;
   }
 }
 
@@ -117,6 +120,39 @@ export interface CoreClientOptions {
 }
 
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+export type JsonRequest = <T>(path: string, init?: { method?: string; body?: unknown; token?: string }) => Promise<T>;
+
+/**
+ * The one HTTP helper every `kyoube` client shares: JSON in and out, the board
+ * key as a bearer token, and a `CoreApiError` naming the route for any non-2xx.
+ */
+export function createJsonRequest(opts: Pick<CoreClientOptions, "apiBase" | "apiKey" | "fetchImpl">): JsonRequest {
+  const apiBase = opts.apiBase.trim().replace(/\/+$/, "");
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  return async <T>(path: string, init: { method?: string; body?: unknown; token?: string } = {}): Promise<T> => {
+    const method = init.method ?? "GET";
+    const headers: Record<string, string> = { accept: "application/json" };
+    const token = init.token ?? opts.apiKey;
+    if (token) headers.authorization = `Bearer ${token}`;
+    if (init.body !== undefined) headers["content-type"] = "application/json";
+    const response = await fetchImpl(`${apiBase}${path}`, {
+      method,
+      headers,
+      body: init.body === undefined ? undefined : JSON.stringify(init.body),
+    });
+    const text = await response.text();
+    const body: unknown = text ? safeJson(text) : null;
+    if (!response.ok) {
+      const message =
+        body && typeof body === "object" && typeof (body as { error?: unknown }).error === "string"
+          ? (body as { error: string }).error
+          : `KyoubeAI API request failed: ${response.status} ${method} ${path}`;
+      throw new CoreApiError(response.status, body, message, `${method} ${path}`);
+    }
+    return body as T;
+  };
+}
 
 function toInstalledPlugin(raw: unknown): InstalledPlugin {
   const record = (raw ?? {}) as Record<string, unknown>;
@@ -131,31 +167,10 @@ function toInstalledPlugin(raw: unknown): InstalledPlugin {
 
 export function createCoreClient(opts: CoreClientOptions): CoreClient {
   const apiBase = opts.apiBase.trim().replace(/\/+$/, "");
-  const fetchImpl = opts.fetchImpl ?? fetch;
   const sleep = opts.sleep ?? defaultSleep;
   const now = opts.now ?? (() => Date.now());
 
-  async function request<T>(path: string, init: { method?: string; body?: unknown; token?: string } = {}): Promise<T> {
-    const headers: Record<string, string> = { accept: "application/json" };
-    const token = init.token ?? opts.apiKey;
-    if (token) headers.authorization = `Bearer ${token}`;
-    if (init.body !== undefined) headers["content-type"] = "application/json";
-    const response = await fetchImpl(`${apiBase}${path}`, {
-      method: init.method ?? "GET",
-      headers,
-      body: init.body === undefined ? undefined : JSON.stringify(init.body),
-    });
-    const text = await response.text();
-    const body: unknown = text ? safeJson(text) : null;
-    if (!response.ok) {
-      const message =
-        body && typeof body === "object" && typeof (body as { error?: unknown }).error === "string"
-          ? (body as { error: string }).error
-          : `KyoubeAI API request failed: ${response.status} ${init.method ?? "GET"} ${path}`;
-      throw new CoreApiError(response.status, body, message);
-    }
-    return body as T;
-  }
+  const request = createJsonRequest(opts);
 
   return {
     apiBase,
