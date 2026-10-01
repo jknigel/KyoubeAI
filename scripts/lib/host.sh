@@ -9,7 +9,7 @@ KYOUBE_IMAGE_DEFAULT="ghcr.io/jknigel/kyoubeai"
 # The first release that ships install.sh and update.sh; older tags are never
 # installed or updated to by them.
 KYOUBE_MIN_RELEASE="1.1.0"
-# Which commit the source image (kyoubeai:dev) was last built from, and its image id; see record_source_build.
+# Which commit this checkout's source image was last built from, and its image id; see record_source_build.
 KYOUBE_BUILT=".kyoube/built-commit"
 YES="${YES:-0}"
 
@@ -177,6 +177,48 @@ docker_preflight() {
   case "$arch" in x86_64|amd64|aarch64|arm64) ;; *) die "KyoubeAI's images are built for amd64 and arm64, not '$arch'" ;; esac
   mem="$(docker info --format '{{.MemTotal}}' 2>/dev/null || echo 0)"
   [ "${mem:-0}" -ge 3900000000 ] 2>/dev/null || warn "Docker has less than 4 GB of memory; KyoubeAI may run slowly or be stopped under load"
+}
+
+# image_ref [FILE]: the image FILE (default .env) selects, as compose reads it (empty values mean kyoubeai:dev).
+image_ref() {
+  local image version
+  image="$(env_get "${1:-.env}" KYOUBE_IMAGE)"; version="$(env_get "${1:-.env}" KYOUBE_VERSION)"
+  printf '%s:%s\n' "${image:-kyoubeai}" "${version:-dev}"
+}
+
+# runs_source_build [FILE]: true when FILE (default .env) selects an image that `docker compose build` makes here:
+# KYOUBE_VERSION=dev (or unset) with a local KYOUBE_IMAGE, one with no registry or namespace (no '/'; unset means
+# kyoubeai). Compose tags a build with whatever `image:` resolves to, so two source installs on one machine can each
+# use their own tag (docs/operations.md).
+runs_source_build() {
+  local image version
+  image="$(env_get "${1:-.env}" KYOUBE_IMAGE)"; version="$(env_get "${1:-.env}" KYOUBE_VERSION)"
+  [ "${version:-dev}" = dev ] || return 1
+  case "${image:-kyoubeai}" in */*) return 1 ;; esac
+}
+
+# stack_image_id: the id of the image the stack's app container was created from, running or stopped; when there is
+# no app container, of the image .env selects; empty when neither exists. The container is what the stack runs: its
+# tag can have been rebuilt since, by another source install on this machine that uses the same tag, or by hand.
+stack_image_id() {
+  local cid
+  cid="$(docker compose ps -aq app 2>/dev/null </dev/null | tr -d '\r' | head -1 || true)"
+  if [ -n "$cid" ]; then
+    docker inspect -f '{{.Image}}' "$cid" 2>/dev/null </dev/null || true
+  else
+    docker image inspect -f '{{.Id}}' "$(image_ref)" 2>/dev/null </dev/null || true
+  fi
+}
+
+# build_record: prints the commit .kyoube/built-commit says the stack's image was built from, when the record
+# describes that very image (the same id as stack_image_id) and the commit is still in this repository; status 1
+# otherwise.
+build_record() {
+  local id commit
+  id="$(stack_image_id)"
+  commit="$(env_get "$KYOUBE_BUILT" commit)"
+  [ -n "$id" ] && [ -n "$commit" ] && [ "$(env_get "$KYOUBE_BUILT" image)" = "$id" ] && git cat-file -e "$commit^{commit}" 2>/dev/null || return 1
+  printf '%s\n' "$commit"
 }
 
 # record_source_build IMAGE_REF: after a successful `docker compose build`, note in .kyoube/built-commit the commit

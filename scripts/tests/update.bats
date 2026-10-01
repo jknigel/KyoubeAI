@@ -9,8 +9,9 @@ setup() {
   mkdir -p "$MARKS" "$STUB_BIN"
   # Answers the preflight questions, logs everything (and the image .env names at each build), and (when asked) fails
   # the first `compose up` or `compose build`, reports images as missing, or fails `pull`. An image that is there has the id
-  # $STUB_IMAGE_ID and was created at $STUB_IMAGE_CREATED (empty: no time to compare). The database lists the agents'
-  # harnesses as $STUB_AGENTS, and `kyoube harness missing` answers $STUB_MISSING.
+  # $STUB_IMAGE_ID and was created at $STUB_IMAGE_CREATED (empty: no time to compare). The app container ($STUB_APP_CID,
+  # none by default) runs the image $STUB_CONTAINER_IMAGE. The database lists the agents' harnesses as $STUB_AGENTS, and
+  # `kyoube harness missing` answers $STUB_MISSING.
   cat > "$STUB_BIN/docker" <<'EOF'
 #!/bin/sh
 echo "$*" >> "$STUB_LOG"
@@ -18,6 +19,8 @@ case "$*" in
   "info --format {{.Architecture}}") echo x86_64 ;;
   "info --format {{.MemTotal}}") echo 8000000000 ;;
   "version --format {{.Server.Version}}") echo 27.0.0 ;;
+  "compose ps -aq app") [ -z "${STUB_APP_CID:-}" ] || echo "$STUB_APP_CID" ;;
+  "inspect -f {{.Image}} "*) echo "${STUB_CONTAINER_IMAGE:-sha256:stub}" ;;
   "compose exec -T db psql "*) [ -z "${STUB_AGENTS:-}" ] || echo "$STUB_AGENTS" ;;
   "compose exec -T -u node app kyoube harness missing "*) [ -z "${STUB_MISSING:-}" ] || echo "$STUB_MISSING" ;;
   "compose up "*) if [ -n "${STUB_FAIL_UP:-}" ] && [ ! -e "$STUB_LOG.up" ]; then touch "$STUB_LOG.up"; exit 1; fi ;;
@@ -688,7 +691,8 @@ hotfix_upstream() {
     run_update --yes
     [ "$status" -ne 0 ]
     [[ "$output" == *"KYOUBE_VERSION=$value and KYOUBE_IMAGE=ghcr.io/jknigel/kyoubeai in .env are neither a release (x.y.z) nor the source build"* ]]
-    [[ "$output" == *"./install.sh"* ]]
+    [[ "$output" == *"Set KYOUBE_VERSION in .env to the release the stack runs"* ]]
+    [[ "$output" != *"./install.sh"* ]]
     [[ "$output" != *"already on"* ]]
     nothing_happened
   done
@@ -1005,6 +1009,55 @@ stayed_put() {
   [[ "$output" == *"./update.sh --rollback"* ]]
   [ "$(grep -c '^compose build' "$STUB_LOG")" = 1 ]
   [ "$(git -C "$INST" rev-parse HEAD)" = "$(git -C "$INST" rev-parse v1.1.0)" ]
+}
+
+# Two source installs on one machine that share a tag: what a stack runs is its app container's image, not the tag.
+
+@test "update.sh --edge rebuilds a stack whose app container runs an older build than its tag now names" {
+  printf 'KYOUBE_VERSION=dev\nKYOUBE_IMAGE=kyoubeai\nCOMPOSE_PROJECT_NAME=inst\n' > "$INST/.env"
+  # the tag was built after this checkout's commit (by another install), so its clock alone says up to date
+  STUB_APP_CID=app1 STUB_CONTAINER_IMAGE=sha256:mine STUB_IMAGE_CREATED=2999-01-01T00:00:00Z run_update --edge --yes
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"has been rebuilt since this stack's app container was created"* ]]
+  [[ "$output" != *"already up to date"* ]]
+  [ "$(backups_taken)" = 1 ]
+  [ "$(grep -c '^compose build' "$STUB_LOG")" = 1 ]
+}
+
+@test "update.sh --edge rebuilds a recorded build of this checkout when another install has rebuilt the shared tag since" {
+  printf 'KYOUBE_VERSION=dev\nKYOUBE_IMAGE=kyoubeai\nCOMPOSE_PROJECT_NAME=inst\n' > "$INST/.env"
+  STUB_APP_CID=app1 STUB_IMAGE_CREATED=2000-01-01T00:00:00Z run_update --edge --yes
+  [ "$status" -eq 0 ]
+  [ "$(sed -n 's/^commit=//p' "$INST/.kyoube/built-commit")" = "$(git -C "$INST" rev-parse HEAD)" ]
+  # the container still runs this stack's build (sha256:stub); the tag now names another install's build
+  STUB_APP_CID=app1 STUB_CONTAINER_IMAGE=sha256:stub STUB_IMAGE_ID=sha256:theirs STUB_IMAGE_CREATED=2999-01-01T00:00:00Z run_update --edge --yes
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"has been rebuilt since this stack's app container was created"* ]]
+  [ "$(backups_taken)" = 2 ]
+  # with the container and the tag in step again, there is nothing to do
+  STUB_APP_CID=app1 STUB_CONTAINER_IMAGE=sha256:theirs STUB_IMAGE_ID=sha256:theirs STUB_IMAGE_CREATED=2999-01-01T00:00:00Z run_update --edge --yes
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"already up to date"* ]]
+}
+
+@test "a local KYOUBE_IMAGE of its own counts as a source build, and --edge builds that tag" {
+  git -C "$SEED" commit -q --allow-empty -m newer
+  printf 'KYOUBE_VERSION=dev\nKYOUBE_IMAGE=kyoubeai-mystack\nCOMPOSE_PROJECT_NAME=inst\n' > "$INST/.env"
+  run_update --edge --yes
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"switching this install from the published image"* ]]
+  [ "$(cat "$STUB_LOG.builds")" = "kyoubeai-mystack:dev" ]
+  [ "$(sed -n 's/^KYOUBE_IMAGE=//p' "$INST/.env")" = kyoubeai-mystack ]
+}
+
+@test "a release update moves a local KYOUBE_IMAGE of its own to the published image" {
+  came_from v1.1.0
+  printf 'KYOUBE_VERSION=dev\nKYOUBE_IMAGE=kyoubeai-mystack\nCOMPOSE_PROJECT_NAME=inst\n' > "$INST/.env"
+  run_update --yes
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Update KyoubeAI source build -> v1.2.0"* ]]
+  [[ "$output" == *"this install built its own image"* ]]
+  [ "$(sed -n 's/^KYOUBE_IMAGE=//p' "$INST/.env")" = ghcr.io/jknigel/kyoubeai ]
 }
 
 @test "update.sh runs every kyoube command in the container as node" {
