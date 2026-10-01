@@ -1,8 +1,9 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { GuardReport, RulesApi } from "../src/agent-rules/api.js";
+import { EMPTY_STATE, writeState } from "../src/agent-rules/state.js";
 import { agentRulesEnabled, PASS_INTERVAL_MS, PLUGIN_POLL_MS, PLUGIN_WAIT_MS, runAgentRules } from "../src/commands/agent-rules.js";
 import { NO_KEY_EXIT_CODE } from "../src/commands/ensure-plugins.js";
 import type { KyoubeConfig } from "../src/config.js";
@@ -126,5 +127,62 @@ describe("runAgentRules", () => {
     expect(await runAgentRules([], { once: true }, ENV, deps)).toBe(1);
     expect(fake.calls).toEqual([]);
     expect(lines.some((line) => line.includes("agent rules pass failed"))).toBe(true);
+  });
+
+  it.skipIf(process.getuid?.() === 0)("--once aborts before any remote write when the state directory is read-only", async () => {
+    const { deps, lines, home, fake } = await setup();
+    const stateDir = path.join(home, ".kyoube");
+    await mkdir(stateDir);
+    await chmod(stateDir, 0o555);
+    try {
+      expect(await runAgentRules([], { once: true }, ENV, deps)).toBe(1);
+      expect(fake.calls).toEqual([]);
+      expect(lines.some((line) => line.includes("agent rules pass failed"))).toBe(true);
+    } finally {
+      await chmod(stateDir, 0o755);
+    }
+  });
+
+  it("keeps the governance another pass saved while this one ran", async () => {
+    let statePath = "";
+    // This pass finds the five kinds already people-only, so it records nothing for c1; the other
+    // pass, which set them, recorded what was there before.
+    const { deps, home } = await setup(api({
+      reconcileGuard: async () => {
+        await writeState(statePath, { ...EMPTY_STATE, governancePrevious: { c1: { request_confirmation: null } } });
+        return QUIET_GUARD;
+      },
+    }));
+    statePath = path.join(home, ".kyoube", "agent-rules.json");
+    expect(await runAgentRules([], { once: true }, ENV, deps)).toBe(0);
+    const saved = JSON.parse(await readFile(statePath, "utf8"));
+    expect(saved.governancePrevious).toEqual({ c1: { request_confirmation: null } });
+    expect(saved.lastPass.mode).toBe("apply");
+  });
+
+  it.skipIf(process.getuid?.() === 0)("saves its own record when it cannot re-read the file, and says so", async () => {
+    let statePath = "";
+    const { deps, lines, home } = await setup(api({
+      reconcileGuard: async () => {
+        await writeState(statePath, EMPTY_STATE);
+        await chmod(statePath, 0o000);
+        return QUIET_GUARD;
+      },
+    }));
+    statePath = path.join(home, ".kyoube", "agent-rules.json");
+    expect(await runAgentRules([], { once: true }, ENV, deps)).toBe(1);
+    expect(lines.some((line) => line.startsWith(`kyoube: agent rules: could not save ${statePath}: EACCES`))).toBe(true);
+    const saved = JSON.parse(await readFile(statePath, "utf8"));
+    expect(saved.governancePrevious).toEqual({ c1: {} });
+    expect(saved.lastPass.mode).toBe("apply");
+  });
+
+  it("off saves its record as it is, so the governance it put back is forgotten", async () => {
+    const { deps, home } = await setup(api({ getGovernance: async () => ({ request_confirmation: { cap: "anyone" } }) }));
+    const statePath = path.join(home, ".kyoube", "agent-rules.json");
+    expect(await runAgentRules([], { once: true }, ENV, deps)).toBe(0);
+    expect(JSON.parse(await readFile(statePath, "utf8")).governancePrevious.c1.request_confirmation).toEqual({ cap: "anyone" });
+    expect(await runAgentRules(["off"], {}, ENV, deps)).toBe(0);
+    expect(JSON.parse(await readFile(statePath, "utf8")).governancePrevious).toEqual({});
   });
 });
