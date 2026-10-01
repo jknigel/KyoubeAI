@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { GuardReport, RulesApi } from "../src/agent-rules/api.js";
-import { agentRulesEnabled, PASS_INTERVAL_MS, runAgentRules } from "../src/commands/agent-rules.js";
+import { agentRulesEnabled, PASS_INTERVAL_MS, PLUGIN_POLL_MS, PLUGIN_WAIT_MS, runAgentRules } from "../src/commands/agent-rules.js";
 import { NO_KEY_EXIT_CODE } from "../src/commands/ensure-plugins.js";
 import type { KyoubeConfig } from "../src/config.js";
 
@@ -22,6 +22,7 @@ function api(overrides: Partial<RulesApi> = {}): RulesApi & { calls: string[] } 
     writeInstructionsFile: async () => {},
     reconcileGuard: async () => { calls.push("guard"); return QUIET_GUARD; },
     revertGuard: async () => { calls.push("unguard"); return { reverted: [], failures: [] }; },
+    pluginReady: async () => true,
     ...overrides,
   };
 }
@@ -92,6 +93,22 @@ describe("runAgentRules", () => {
     expect(fake.calls).toEqual(["guard", "guard", "guard"]);
     expect(sleeps).toEqual([PASS_INTERVAL_MS, PASS_INTERVAL_MS]);
     expect(lines).toHaveLength(1);
+  });
+
+  it("waits for the plugin worker before a pass", async () => {
+    let probes = 0;
+    const { deps, lines, sleeps, fake } = await setup(api({ pluginReady: async () => ++probes > 2 }));
+    expect(await runAgentRules([], { watch: true }, ENV, { ...deps, maxPasses: 1 })).toBe(0);
+    expect(sleeps).toEqual([PLUGIN_POLL_MS, PLUGIN_POLL_MS]);
+    expect(fake.calls).toEqual(["guard"]);
+    expect(lines).toEqual(["kyoube: agent rules: 1 company, 0 changes, 0 skipped, 0 failures; self-test not applicable"]);
+  });
+
+  it("runs the pass anyway once the plugin has had its time, so a plugin that never comes up is reported", async () => {
+    const { deps, sleeps, fake } = await setup(api({ pluginReady: async () => false }));
+    expect(await runAgentRules([], { once: true }, ENV, deps)).toBe(0);
+    expect(sleeps).toHaveLength(PLUGIN_WAIT_MS / PLUGIN_POLL_MS);
+    expect(fake.calls).toEqual(["guard"]);
   });
 
   it("off reverts even while the switch is off", async () => {

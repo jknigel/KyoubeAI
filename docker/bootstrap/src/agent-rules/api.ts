@@ -1,4 +1,4 @@
-import { createCoreClient, createJsonRequest, type CompanySummary, type CoreClientOptions } from "../core-api.js";
+import { CoreApiError, createCoreClient, createJsonRequest, type CompanySummary, type CoreClientOptions } from "../core-api.js";
 import type { Governance } from "./governance.js";
 
 export interface AgentRef {
@@ -47,6 +47,8 @@ export interface RulesApi {
   writeInstructionsFile(agentId: string, path: string, content: string): Promise<void>;
   reconcileGuard(companyId: string): Promise<GuardReport>;
   revertGuard(companyId: string): Promise<GuardRevertReport>;
+  /** False while the core answers the plugin's routes 503: right after a start, before its worker runs. */
+  pluginReady(): Promise<boolean>;
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -135,6 +137,18 @@ export function createRulesApi(opts: CoreClientOptions): RulesApi {
     },
     async revertGuard(companyId) {
       return parseRevertReport(await request<unknown>(GUARD_PLUGIN_ROUTES.revert, { method: "POST", body: { companyId } }));
+    },
+    async pluginReady() {
+      // The route takes POST only. The core checks the plugin's status and
+      // worker before it matches a route, so a GET answers 503 until the worker
+      // runs and 404 after, and never reaches the worker. Anything but a 503 is
+      // left for the pass to report.
+      try {
+        await request<unknown>(GUARD_PLUGIN_ROUTES.reconcile);
+        return true;
+      } catch (error) {
+        return !(error instanceof CoreApiError && error.status === 503);
+      }
     },
   };
 }
