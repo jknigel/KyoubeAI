@@ -4,6 +4,7 @@ import { runEnsurePlugins } from "./commands/ensure-plugins.js";
 import { runHarness } from "./commands/harness.js";
 import { runSetup } from "./commands/setup.js";
 import { runWriteConfig } from "./commands/write-config.js";
+import { AS_NODE_ENV, findGosu, planNodeUser, reexec } from "./run-as-node.js";
 
 export interface ParsedArgs {
   command: string | null;
@@ -59,6 +60,22 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
     console.log(USAGE);
     return parsed.command === null && parsed.flags.help !== true ? 1 : 0;
   }
+  // `docker compose exec app kyoube ...` runs as root; what an install or a sign-in writes must belong to node.
+  const plan = planNodeUser({
+    command: parsed.command,
+    positionals: parsed.positionals,
+    uid: process.getuid?.(),
+    gosu: findGosu(),
+    execPath: process.execPath,
+    script: process.argv[1],
+    argv,
+    reexeced: Boolean(env[AS_NODE_ENV]),
+  });
+  if (plan.kind === "refuse") {
+    console.log(plan.message);
+    return 1;
+  }
+  if (plan.kind === "reexec") return reexec(plan.file, plan.args, env);
   switch (parsed.command) {
     case "setup":
       return runSetup(parsed.flags, env);

@@ -132,7 +132,7 @@ restart_and_check() { # TARGET_LABEL
   fi
   offer_harnesses
   log="$(mktemp)"
-  dc_exec app kyoube doctor | tee "$log" || true
+  dc_exec_node app kyoube doctor | tee "$log" || true
   bad="$(grep '^FAIL' "$log" | grep -v '^FAIL harnesses in use' || true)"
   rm -f "$log"
   [ -z "$bad" ] || warn "kyoube doctor reports a problem after the update. If it does not clear up, ./update.sh --rollback returns to the version and data from before it."
@@ -144,12 +144,12 @@ offer_harnesses() {
   types="$(printf '%s\n' "${USED:-}" | awk 'NF { print $1 }')"
   [ -n "$types" ] || return 0
   # shellcheck disable=SC2086  # $types is one adapter type per line; splitting makes them arguments
-  missing="$(dc_exec app kyoube harness missing $types </dev/null | tr -d '\r')" \
+  missing="$(dc_exec_node app kyoube harness missing $types </dev/null | tr -d '\r')" \
     || { warn "could not check which harnesses the agents here need; run kyoube doctor in the Terminal to see them"; return 0; }
   # shellcheck disable=SC2086
   for name in $missing; do
     if confirm "Agents here use $name, which is not installed. Install it now?"; then
-      dc_exec app kyoube harness install "$name" || warn "installing $name failed; later, from the Terminal: kyoube harness install $name"
+      dc_exec_node app kyoube harness install "$name" || warn "installing $name failed; later, from the Terminal: kyoube harness install $name"
     else
       say "    later, from the Terminal: kyoube harness install $name"
     fi

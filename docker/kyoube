@@ -1,7 +1,10 @@
 #!/bin/sh
 # `kyoube` wrapper: always runs the bootstrap program as the `node` user so files
 # it writes under /kyoubeai stay readable by the core server and the watcher.
-if [ "$(id -u)" -eq 0 ] && command -v gosu >/dev/null 2>&1; then
-  exec gosu node node /opt/kyoube/bootstrap/dist/kyoube.mjs "$@"
+# The image's own node and gosu by absolute path: /kyoubeai/.local/bin comes
+# first on PATH, and a node or gosu someone installed there must not run here.
+NODE=/usr/local/bin/node
+if [ "$(id -u)" -eq 0 ] && [ -x /usr/sbin/gosu ]; then
+  exec /usr/sbin/gosu node "$NODE" /opt/kyoube/bootstrap/dist/kyoube.mjs "$@"
 fi
-exec node /opt/kyoube/bootstrap/dist/kyoube.mjs "$@"
+exec "$NODE" /opt/kyoube/bootstrap/dist/kyoube.mjs "$@"

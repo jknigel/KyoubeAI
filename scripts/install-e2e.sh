@@ -119,6 +119,9 @@ grep -qx 'KYOUBE_E2E_MARKER=merged' .env || fail "the new setting was not merged
 grep -qx 'KYOUBE_VERSION=9.9.1' .env || fail "KYOUBE_VERSION was not moved to 9.9.1"
 grep -q 'agents use: pi_local 1' "$WORK/update.log" || { cat "$WORK/update.log" >&2; fail "update.sh did not find the pi agent in the database"; }
 [ "$(docker compose exec -T -u node app sh -c 'command -v pi' | tr -d '\r')" = /kyoubeai/.local/bin/pi ] || fail "update.sh did not install pi for the pi agent"
+# Installed as node, or the Terminal and the agents could not write there until the next restart.
+PI_OWNERS="$(docker compose exec -T app stat -c %U /kyoubeai/.local/bin/pi /kyoubeai/.local/lib/node_modules | tr -d '\r' | sort -u)"
+[ "$PI_OWNERS" = node ] || fail "pi and /kyoubeai/.local/lib/node_modules belong to '$PI_OWNERS', not node: update.sh installed it as another user"
 [ -f .kyoube/update-state ] || fail "no rollback state was saved"
 # Written after the backup, so only a real restore can take it away again.
 AFTER_ID="$(curl -fsS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -X POST "$BASE_URL/api/companies" --data '{"name":"E2E After Update"}' | jq -r .id)"
