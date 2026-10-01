@@ -181,12 +181,31 @@ wait_core_ready() { # poll until /api/health reports status ok and bootstrapStat
   return 1
 }
 
+now_utc() { date -u +%Y-%m-%dT%H:%M:%S.%3NZ; }
+
+wait_agent_rules_pass() { # since (now_utc) — poll until the agent-rules loop records a pass after it
+  # doctor's `agent rules` line reads the loop's last pass from its state file.
+  # After a restart that pass may still be the one before it, and a restore
+  # brings back the backup's, so doctor waits for the loop's first new pass.
+  # Any pass will do: doctor itself asserts that it was clean.
+  local since="$1" i
+  for i in $(seq 1 90); do
+    compose exec -T app cat /kyoubeai/.kyoube/agent-rules.json >"$TMP/agent-rules-state.json" 2>/dev/null || true
+    jq -e --arg s "$since" '.lastPass.at > $s' "$TMP/agent-rules-state.json" >/dev/null 2>&1 && return 0
+    sleep 2
+  done
+  echo "the agent-rules loop recorded no pass after $since (last: $(jq -r '.lastPass.at' "$TMP/agent-rules-state.json" 2>/dev/null))" >&2
+  return 1
+}
+
 APPS_SHIPPED="$(jq -r .version "$ROOT/plugins/kyoube-apps/package.json")"
 [[ "$APPS_SHIPPED" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected kyoube.apps version '$APPS_SHIPPED' in package.json" >&2; exit 1; }
 FILES_SHIPPED="$(jq -r .version "$ROOT/plugins/kyoube-files/package.json")"
 [[ "$FILES_SHIPPED" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected kyoube.files version '$FILES_SHIPPED' in package.json" >&2; exit 1; }
 STUDIO_SHIPPED="$(jq -r .version "$ROOT/plugins/kyoube-studio/package.json")"
 [[ "$STUDIO_SHIPPED" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected kyoube.studio version '$STUDIO_SHIPPED' in package.json" >&2; exit 1; }
+AGENT_RULES_SHIPPED="$(jq -r .version "$ROOT/plugins/kyoube-agent-rules/package.json")"
+[[ "$AGENT_RULES_SHIPPED" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected kyoube.agent-rules version '$AGENT_RULES_SHIPPED' in package.json" >&2; exit 1; }
 
 echo "==> install plugins via kyoube ensure-plugins"
 # Five plugins ship in the image (/opt/kyoube/plugins/{terminal,apps,files,studio,agent-rules}),
@@ -200,7 +219,8 @@ curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/plugins" \
 wait_for_plugin kyoube.apps "$APPS_SHIPPED"
 wait_for_plugin kyoube.files "$FILES_SHIPPED"
 wait_for_plugin kyoube.studio "$STUDIO_SHIPPED"
-echo "    kyoube.terminal, kyoube.apps ${APPS_SHIPPED}, kyoube.files ${FILES_SHIPPED} and kyoube.studio ${STUDIO_SHIPPED} are installed and ready"
+wait_for_plugin kyoube.agent-rules "$AGENT_RULES_SHIPPED"
+echo "    kyoube.terminal, kyoube.apps ${APPS_SHIPPED}, kyoube.files ${FILES_SHIPPED}, kyoube.studio ${STUDIO_SHIPPED} and kyoube.agent-rules ${AGENT_RULES_SHIPPED} are installed and ready"
 
 echo "==> kyoube setup (real browser-approval onboarding)"
 # Run setup detached inside the container; it prints an approval URL and then
@@ -253,6 +273,8 @@ grep -q 'kyoube.files skip' "$TMP/ensure-stored.log" \
   || { echo "expected kyoube.files to be skipped:" >&2; cat "$TMP/ensure-stored.log" >&2; exit 1; }
 grep -q 'kyoube.studio skip' "$TMP/ensure-stored.log" \
   || { echo "expected kyoube.studio to be skipped:" >&2; cat "$TMP/ensure-stored.log" >&2; exit 1; }
+grep -q 'kyoube.agent-rules skip' "$TMP/ensure-stored.log" \
+  || { echo "expected kyoube.agent-rules to be skipped:" >&2; cat "$TMP/ensure-stored.log" >&2; exit 1; }
 # All bundled plugins are already at the on-disk version by now, so the whole
 # run is a no-op: five skips, nothing installed or upgraded.
 grep -q 'installed 0, upgraded 0, skipped 5' "$TMP/ensure-stored.log" \
@@ -666,6 +688,142 @@ jq -e 'tostring | contains("smoke plan") | not' "$TMP/files-activity.json" >/dev
   || { echo "the activity log leaked file content ('smoke plan')" >&2; exit 1; }
 echo "    files round-trip ok at $FILES_ROOT"
 
+echo "==> agent rules: the rules block, protected managers, people-only cards and escalation"
+# The entrypoint starts `kyoube agent-rules --watch`; it must be running.
+# shellcheck disable=SC2016  # expanded by the shell inside the container
+RULES_WATCH="$(compose exec -T app sh -c 'for p in /proc/[0-9]*; do tr "\0" " " < "$p/cmdline" 2>/dev/null | grep -q "agent-rules --w[a]tch" && echo running; done' | tr -d '\r\n ' || true)"
+[[ "$RULES_WATCH" == running* ]] || { echo "kyoube agent-rules --watch is not running" >&2; exit 1; }
+
+OWNER_ID="$(curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/companies/$COMPANY_ID/members" \
+  | jq -r '[(.members // .)[] | select(.principalType == "user" and .membershipRole == "owner")][0].principalId')"
+[[ -n "$OWNER_ID" && "$OWNER_ID" != "null" ]] || { echo "could not find the company owner" >&2; exit 1; }
+
+make_agent() { # name adapterType reportsTo(may be empty) adapterConfigJson -> agent id
+  local body
+  body="$(jq -nc --arg n "$1" --arg t "$2" --arg r "$3" --argjson c "$4" \
+    '{name: $n, adapterType: $t, adapterConfig: $c} + (if $r == "" then {} else {reportsTo: $r} end)')"
+  curl -fsS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+    -X POST "$BASE_URL/api/companies/$COMPANY_ID/agents" --data "$body" | jq -r '.id'
+}
+agent_key() { curl -fsS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -X POST "$BASE_URL/api/agents/$1/keys" --data '{"name":"smoke"}' | jq -r '.token'; }
+as_agent() { # key method path [body] [run-id] -> HTTP_STATUS, body in $TMP/resp.json
+  local args=(-sS -o "$TMP/resp.json" -w '%{http_code}' -H "Authorization: Bearer $1" -H 'Content-Type: application/json' -X "$2" "$BASE_URL$3")
+  if [[ -n "${4:-}" ]]; then args+=(--data "$4"); fi
+  if [[ -n "${5:-}" ]]; then args+=(-H "X-Paperclip-Run-Id: $5"); fi
+  HTTP_STATUS="$(curl "${args[@]}")"
+}
+
+# M manages R; P has neither manager nor reports. R and P run the core's
+# `process` adapter, so no model is needed: R's script stands in for an agent.
+M_ID="$(make_agent smoke-manager claude_local "" '{"cwd":"/kyoubeai/workspaces/smoke"}')"
+P_ID="$(make_agent smoke-peer process "" '{"cwd":"/kyoubeai/workspaces/smoke","command":"node","args":["-e",""]}')"
+R_ID="$(make_agent smoke-report process "$M_ID" '{"cwd":"/kyoubeai/workspaces/smoke","command":"node","args":["/kyoubeai/workspaces/smoke/escalate.mjs"]}')"
+for ID in "$M_ID" "$P_ID" "$R_ID"; do [[ -n "$ID" && "$ID" != "null" ]] || { echo "agent create failed" >&2; exit 1; }; done
+
+compose exec -T app kyoube agent-rules --once | tee "$TMP/rules-once.log"
+grep -q 'self-test pass' "$TMP/rules-once.log" || { echo "the guard self-test did not pass on this core:" >&2; cat "$TMP/rules-once.log" >&2; exit 1; }
+curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/agents/$M_ID/instructions-bundle/file?path=AGENTS.md" | jq -r '.content' >"$TMP/agents-md.txt"
+head -1 "$TMP/agents-md.txt" | grep -q '^<!-- kyoube:working-rules v1' || { echo "the manager's AGENTS.md does not start with the rules block:" >&2; head -5 "$TMP/agents-md.txt" >&2; exit 1; }
+[[ "$(grep -c '^## Handoffs' "$TMP/agents-md.txt")" == 1 ]] || { echo "expected exactly one Handoffs section" >&2; exit 1; }
+if grep -q 'If you need QA to review it, ask them' "$TMP/agents-md.txt"; then echo "the core's handoff sentences are still there" >&2; exit 1; fi
+echo "    rules block in place, self-test passed"
+
+M_KEY="$(agent_key "$M_ID")"; R_KEY="$(agent_key "$R_ID")"
+as_agent "$R_KEY" POST "/api/companies/$COMPANY_ID/issues" "{\"title\":\"smoke: up to the manager\",\"assigneeAgentId\":\"$M_ID\"}"
+if [[ "$HTTP_STATUS" != 403 ]] || ! grep -qi 'protected' "$TMP/resp.json"; then echo "a report could create a task for its manager: $HTTP_STATUS $(cat "$TMP/resp.json")" >&2; exit 1; fi
+as_agent "$R_KEY" POST "/api/companies/$COMPANY_ID/issues" '{"title":"smoke: will try to move up"}'
+[[ "$HTTP_STATUS" =~ ^2 ]] || { echo "a report could not create its own task: $HTTP_STATUS $(cat "$TMP/resp.json")" >&2; exit 1; }
+UP_ID="$(jq -r '.id' "$TMP/resp.json")"
+as_agent "$R_KEY" POST "/api/companies/$COMPANY_ID/issues" "{\"title\":\"smoke: to a peer\",\"assigneeAgentId\":\"$P_ID\"}"
+[[ "$HTTP_STATUS" =~ ^2 ]] || { echo "a handoff to an agent without reports was refused: $HTTP_STATUS $(cat "$TMP/resp.json")" >&2; exit 1; }
+
+# Escalation: R's script creates a confirmation card and the escalation
+# decision, then hands the task to the person, as rule 3 says.
+TASK_ID="$(curl -fsS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -X POST "$BASE_URL/api/companies/$COMPANY_ID/issues" \
+  --data '{"title":"smoke: needs the manager","status":"todo"}' | jq -r '.id')"
+compose exec -T -u node app sh -c 'mkdir -p /kyoubeai/workspaces/smoke && cat > /kyoubeai/workspaces/smoke/escalate.mjs' <<'JS'
+const base = String(process.env.PAPERCLIP_API_URL || "").replace(/\/+$/, "").replace(/\/api$/, "");
+const headers = { authorization: "Bearer " + process.env.PAPERCLIP_API_KEY, "content-type": "application/json", "x-paperclip-run-id": String(process.env.PAPERCLIP_RUN_ID || "") };
+const me = process.env.PAPERCLIP_AGENT_ID;
+const company = process.env.PAPERCLIP_COMPANY_ID;
+const task = "TASK_ID_VALUE";
+async function call(method, path, body) {
+  const response = await fetch(base + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+  const text = await response.text();
+  console.log(method + " " + path + " -> " + response.status + " " + text.slice(0, 300));
+  if (!response.ok) throw new Error(method + " " + path + " failed with " + response.status);
+  return text ? JSON.parse(text) : null;
+}
+const current = await call("GET", "/api/issues/" + task);
+if (current.assigneeAgentId !== me) { console.log("not my task any more; nothing to do"); process.exit(0); }
+await call("POST", "/api/issues/" + task + "/checkout", { agentId: me, expectedStatuses: ["todo", "backlog", "in_progress"] });
+await call("POST", "/api/issues/" + task + "/interactions", { kind: "request_confirmation", idempotencyKey: "smoke:" + task + ":confirm", title: "Smoke confirmation", continuationPolicy: "none", payload: { version: 1, prompt: "Smoke: is this fine?" } });
+await call("POST", "/api/companies/" + company + "/decisions", {
+  title: "Escalate the smoke task?",
+  body: "smoke-report cannot do this task.",
+  idempotencyKey: "smoke:" + task + ":escalate",
+  continuationPolicy: "none",
+  options: [
+    { id: "escalate", label: "Escalate to smoke-manager", effects: [{ type: "assign_issue", targetIssueId: task, staleness: "lenient", assigneeAgentId: "MANAGER_ID_VALUE" }] },
+    { id: "keep", label: "Keep it with smoke-report", effects: [{ type: "assign_issue", targetIssueId: task, staleness: "lenient", assigneeAgentId: me }] },
+  ],
+});
+await call("PATCH", "/api/issues/" + task, { assigneeAgentId: null, assigneeUserId: "OWNER_ID_VALUE", status: "in_review", comment: "This needs smoke-manager; I posted an escalation decision." });
+JS
+compose exec -T -u node app sed -i "s/TASK_ID_VALUE/$TASK_ID/; s/MANAGER_ID_VALUE/$M_ID/; s/OWNER_ID_VALUE/$OWNER_ID/" /kyoubeai/workspaces/smoke/escalate.mjs
+curl -fsS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -X PATCH "$BASE_URL/api/issues/$TASK_ID" --data "{\"assigneeAgentId\":\"$R_ID\"}" >/dev/null
+for i in $(seq 1 90); do
+  curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/issues/$TASK_ID" >"$TMP/task.json"
+  if jq -e --arg o "$OWNER_ID" '.assigneeUserId == $o and .status == "in_review"' "$TMP/task.json" >/dev/null; then break; fi
+  sleep 2
+  [[ $i -eq 90 ]] && { echo "smoke-report never handed the task back to the person:" >&2; jq -c '{status, assigneeAgentId, assigneeUserId}' "$TMP/task.json" >&2; compose logs --no-color --tail 80 app >&2; exit 1; }
+done
+
+# An agent's update to another task, and its answer to a card, count only
+# inside one of its own runs: without X-Paperclip-Run-Id the core refuses them
+# before it looks at the assignee or the card's resolver policy
+# (cross_issue_influence_run_context_required, interaction_run_attribution_required).
+# So R reassigns with the run it just had on its task, and M answers the card
+# with a run that a board wakeup starts (it fails at once: no model signed in).
+R_RUN_ID="$(curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/companies/$COMPANY_ID/heartbeat-runs?agentId=$R_ID" \
+  | jq -r --arg t "$TASK_ID" '[.[] | select(.contextSnapshot.issueId == $t)][0].id')"
+[[ -n "$R_RUN_ID" && "$R_RUN_ID" != "null" ]] || { echo "smoke-report has no run on its task" >&2; exit 1; }
+as_agent "$R_KEY" PATCH "/api/issues/$UP_ID" "{\"assigneeAgentId\":\"$M_ID\"}" "$R_RUN_ID"
+if [[ "$HTTP_STATUS" != 403 ]] || ! grep -qi 'protected' "$TMP/resp.json"; then echo "a report could hand a task to its manager: $HTTP_STATUS $(cat "$TMP/resp.json")" >&2; exit 1; fi
+echo "    nothing moves up to a manager; a handoff to an agent without reports still works"
+
+CARD_ID="$(curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/issues/$TASK_ID/interactions" | jq -r '[(.interactions? // .)[] | select(.kind == "request_confirmation")][0].id')"
+M_RUN_ID="$(curl -fsS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -X POST "$BASE_URL/api/agents/$M_ID/wakeup" --data '{"reason":"smoke: a run to answer the card from"}' | jq -r '.id')"
+[[ -n "$M_RUN_ID" && "$M_RUN_ID" != "null" ]] || { echo "a board wakeup started no run for smoke-manager" >&2; exit 1; }
+as_agent "$M_KEY" POST "/api/issues/$TASK_ID/interactions/$CARD_ID/accept" '{}' "$M_RUN_ID"
+if [[ "$HTTP_STATUS" != 403 ]] || ! jq -e '.code == "interaction_human_only"' "$TMP/resp.json" >/dev/null; then echo "an agent could answer a people-only card: $HTTP_STATUS $(cat "$TMP/resp.json")" >&2; exit 1; fi
+DECISION_ID="$(curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/companies/$COMPANY_ID/decisions" | jq -r '[(.decisions? // .items? // .)[] | select(.title == "Escalate the smoke task?")][0].id')"
+curl -fsS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -X POST "$BASE_URL/api/decisions/$DECISION_ID/decide" --data '{"optionId":"escalate"}' >/dev/null
+for i in $(seq 1 30); do
+  curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/issues/$TASK_ID" >"$TMP/task.json"
+  if jq -e --arg m "$M_ID" '.assigneeAgentId == $m' "$TMP/task.json" >/dev/null; then break; fi
+  sleep 1
+  [[ $i -eq 30 ]] && { echo "the escalation decision did not move the task to the manager:" >&2; jq -c '{status, assigneeAgentId, assigneeUserId}' "$TMP/task.json" >&2; exit 1; }
+done
+as_agent "$M_KEY" POST "/api/companies/$COMPANY_ID/issues" "{\"title\":\"smoke: down to the report\",\"assigneeAgentId\":\"$R_ID\"}"
+[[ "$HTTP_STATUS" =~ ^2 ]] || { echo "a manager could not assign to its own report: $HTTP_STATUS $(cat "$TMP/resp.json")" >&2; exit 1; }
+echo "    only a person answers the card; the person's decision moves the task up; the manager still assigns down"
+
+compose exec -T app kyoube agent-rules --once | tee "$TMP/rules-again.log"
+grep -q ' 0 changes,' "$TMP/rules-again.log" || { echo "a second pass made changes:" >&2; cat "$TMP/rules-again.log" >&2; exit 1; }
+
+# `off` does not stop a running loop, so stop it first, as the docs say.
+# shellcheck disable=SC2016  # expanded by the shell inside the container
+compose exec -T app sh -c 'for p in /proc/[0-9]*; do if tr "\0" " " < "$p/cmdline" 2>/dev/null | grep -q "agent-rules --w[a]tch"; then kill "${p#/proc/}"; fi; done'
+compose exec -T app kyoube agent-rules off | tee "$TMP/rules-off.log"
+as_agent "$R_KEY" POST "/api/companies/$COMPANY_ID/issues" "{\"title\":\"smoke: up after off\",\"assigneeAgentId\":\"$M_ID\"}"
+[[ "$HTTP_STATUS" =~ ^2 ]] || { echo "off did not lift the manager's protection: $HTTP_STATUS $(cat "$TMP/resp.json")" >&2; exit 1; }
+curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/agents/$M_ID/instructions-bundle/file?path=AGENTS.md" | jq -r '.content' >"$TMP/agents-md-off.txt"
+if grep -q 'kyoube:working-rules' "$TMP/agents-md-off.txt"; then echo "off left the rules block in place" >&2; exit 1; fi
+# Back on, so the restore and doctor below see the rules in force.
+compose exec -T app kyoube agent-rules --once >/dev/null
+echo "    off takes the rules back out; a pass puts them back"
+
 echo "==> installs land on the home volume: stand-in harnesses, npm -g, sudo apt"
 # The image ships no pi or Hermes. Stand-ins in ~/.local/bin let the agents
 # created above resolve their harness (doctor checks that below), and the
@@ -776,6 +934,7 @@ echo "    stack rebuilt from empty volumes; the pre-disaster board token now get
 edit_manifest "sed -i 's/${SHIPPED_RE}/${BUMP2}/; s/\"ui\.page\.register\",/\"plugin.state.read\", \"ui.page.register\",/' $MANIFEST && grep -q '${BUMP2_RE}' $MANIFEST && grep -q 'plugin.state.read' $MANIFEST"
 
 echo "==> restore"
+RESTORE_AT="$(now_utc)"
 COMPOSE_PROJECT_NAME="$PROJECT" COMPOSE_ENV_FILES="$ENV_FILE" \
   bash "$ROOT/scripts/restore.sh" "$BACKUP_PATH"
 
@@ -894,6 +1053,8 @@ echo "    data, apps, terminal and audit restored; c_$COMPANY_HEX is owned by $S
 echo "backup/restore round-trip ok"
 
 echo "==> kyoube doctor"
+# The restored stack's own loop must have made a pass before doctor reads its state.
+wait_agent_rules_pass "$RESTORE_AT"
 # No KYOUBE_BOARD_API_KEY override: `kyoube setup` stored a real key above, so
 # doctor's board-key and plugins checks must pass from the stored file alone.
 compose exec -T app kyoube doctor | tee "$TMP/doctor.log"
@@ -905,6 +1066,9 @@ grep -q "kyoube.terminal@${BUMP2}=ready" "$TMP/doctor.log" \
   || { echo "kyoube doctor did not report kyoube.terminal@${BUMP2}=ready:" >&2; cat "$TMP/doctor.log" >&2; exit 1; }
 grep -q "kyoube.files@${FILES_SHIPPED}=ready" "$TMP/doctor.log" \
   || { echo "kyoube doctor did not report kyoube.files@${FILES_SHIPPED}=ready:" >&2; cat "$TMP/doctor.log" >&2; exit 1; }
+grep -q "kyoube.agent-rules@${AGENT_RULES_SHIPPED}=ready" "$TMP/doctor.log" \
+  || { echo "kyoube doctor did not report kyoube.agent-rules@${AGENT_RULES_SHIPPED}=ready:" >&2; cat "$TMP/doctor.log" >&2; exit 1; }
+grep -Eq '^ok +agent rules +in force in ' "$TMP/doctor.log" || { echo "doctor did not report the agent rules in force:" >&2; cat "$TMP/doctor.log" >&2; exit 1; }
 grep -Eq '^ok +harnesses in use .*pi_local \(1\)' "$TMP/doctor.log" || { echo "doctor did not pass 'harnesses in use':" >&2; cat "$TMP/doctor.log" >&2; exit 1; }
 grep -Eq '^ok +pi cli +pi 0\.0\.0-smoke — yours \(/kyoubeai/\.local/bin/pi\)' "$TMP/doctor.log" || { echo "doctor did not list the stand-in pi as yours" >&2; cat "$TMP/doctor.log" >&2; exit 1; }
 grep -Eq '^ok +claude cli .*core image \(/usr/local/bin/claude\)' "$TMP/doctor.log" || { echo "doctor did not list the core image's claude" >&2; cat "$TMP/doctor.log" >&2; exit 1; }
@@ -935,6 +1099,7 @@ LEGACY_ENV="$TMP/legacy.env"
 sed -e 's/^KYOUBE_PUBLIC_URL=/PAPERCLIP_PUBLIC_URL=/' -e 's/^KYOUBE_DEPLOYMENT_EXPOSURE=/PAPERCLIP_DEPLOYMENT_EXPOSURE=/' -e 's/^KYOUBE_CORE_VERSION=/PAPERCLIP_VERSION=/' "$ENV_FILE" > "$LEGACY_ENV"
 grep -q '^PAPERCLIP_PUBLIC_URL=' "$LEGACY_ENV" || { echo "could not derive a legacy env file" >&2; exit 1; }
 compose stop app
+MIGRATE_AT="$(now_utc)"
 # One agent gets a 0.1.x-style absolute workspace path for --check to find.
 compose exec -T db psql -U kyoubeai -d kyoubeai -v ON_ERROR_STOP=1 -Atqc \
   "update agents set adapter_config = adapter_config || '{\"cwd\":\"/paperclip/workspaces/legacy\"}'::jsonb where name = 'smoke-claude_local'" >/dev/null
@@ -959,6 +1124,7 @@ STATUS="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOK
 compose exec -T app sh -c 'test -f /kyoubeai/kyoube/board-key.json && test -f /kyoubeai/.migrated-from-paperclip-home && test -L /paperclip && test -f /paperclip/kyoube/board-key.json' \
   || { echo "home volume, marker or compatibility link missing after the migration" >&2; exit 1; }
 wait_core_ready || { echo "the migrated app is not ready" >&2; exit 1; }
+wait_agent_rules_pass "$MIGRATE_AT"
 compose exec -T app kyoube doctor | tee "$TMP/doctor-migrated.log"
 grep -Eq '^ok +legacy home link .*compatibility link active' "$TMP/doctor-migrated.log" || { echo "doctor did not report the compatibility link" >&2; exit 1; }
 grep -Eq '^ok +legacy env +none' "$TMP/doctor-migrated.log" || { echo "doctor still sees legacy env keys" >&2; exit 1; }
@@ -1000,6 +1166,7 @@ cp -a "$BACKUP_PATH" "$LEGACY_BACKUP"
 mv "$LEGACY_BACKUP/kyoubeai.dump" "$LEGACY_BACKUP/paperclip.dump"
 mv "$LEGACY_BACKUP/kyoubeai-home.tgz" "$LEGACY_BACKUP/paperclip-home.tgz"
 (cd "$LEGACY_BACKUP" && sha256sum paperclip.dump kyoube.dump roles.sql paperclip-home.tgz > SHA256SUMS)
+LEGACY_RESTORE_AT="$(now_utc)"
 COMPOSE_PROJECT_NAME="$PROJECT" COMPOSE_ENV_FILES="$ENV_FILE" \
   bash "$ROOT/scripts/restore.sh" "$LEGACY_BACKUP" | tee "$TMP/restore-legacy.log"
 grep -q '0.1.x backup — leaving the migration marker' "$TMP/restore-legacy.log" \
@@ -1010,6 +1177,7 @@ compose exec -T app sh -c 'test -f /kyoubeai/.migrated-from-paperclip-home && te
 STATUS="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/plugins")"
 [[ "$STATUS" == "200" ]] || { echo "the board token did not work after the legacy-named restore: $STATUS" >&2; exit 1; }
 wait_for_plugin_api
+wait_agent_rules_pass "$LEGACY_RESTORE_AT"
 compose exec -T app kyoube doctor | tee "$TMP/doctor-legacy-restore.log"
 grep -Eq '^ok +legacy home link .*compatibility link active' "$TMP/doctor-legacy-restore.log" \
   || { echo "doctor did not report the compatibility link after the legacy-named restore" >&2; exit 1; }
