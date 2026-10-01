@@ -69,4 +69,24 @@ describe("createRulesApi", () => {
     expect(error).toBeInstanceOf(CoreApiError);
     expect(error).toMatchObject({ status: 404, route: `POST ${GUARD_PLUGIN_ROUTES.reconcile}` });
   });
+
+  it("rejects getGovernance when the response body is an array", async () => {
+    const { impl } = fakeFetch(() => ({ status: 200, body: [] }));
+    await expect(api(impl).getGovernance("c1")).rejects.toThrow(/no company/);
+  });
+
+  it("rejects getGovernance when the response body is an object without an id", async () => {
+    const { impl } = fakeFetch(() => ({ status: 200, body: {} }));
+    await expect(api(impl).getGovernance("c1")).rejects.toThrow(/no company/);
+  });
+
+  it("rejects getGovernance when interactionResolverGovernance is not a plain object", async () => {
+    const { impl } = fakeFetch(() => ({ status: 200, body: { id: "c1", interactionResolverGovernance: "x" } }));
+    await expect(api(impl).getGovernance("c1")).rejects.toThrow(/unreadable interactionResolverGovernance/);
+  });
+
+  it("returns empty object when interactionResolverGovernance is null", async () => {
+    const { impl } = fakeFetch(() => ({ status: 200, body: { id: "c1", interactionResolverGovernance: null } }));
+    expect(await api(impl).getGovernance("c1")).toEqual({});
+  });
 });

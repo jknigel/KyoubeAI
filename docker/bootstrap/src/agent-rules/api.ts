@@ -96,7 +96,15 @@ export function createRulesApi(opts: CoreClientOptions): RulesApi {
     },
     async getGovernance(companyId) {
       const company = record(await request<unknown>(`/api/companies/${id(companyId)}`));
-      return record(company.interactionResolverGovernance) as Governance;
+      if (typeof company.id !== "string") throw new Error(`the core returned no company for ${companyId}`);
+      const governance = company.interactionResolverGovernance;
+      if (governance !== null && governance !== undefined && typeof governance !== "object") {
+        throw new Error(`the core returned an unreadable interactionResolverGovernance for ${companyId}`);
+      }
+      if (governance !== null && governance !== undefined && Array.isArray(governance)) {
+        throw new Error(`the core returned an unreadable interactionResolverGovernance for ${companyId}`);
+      }
+      return governance === null || governance === undefined ? {} : (record(governance) as Governance);
     },
     async setGovernance(companyId, governance) {
       await request<unknown>(`/api/companies/${id(companyId)}`, { method: "PATCH", body: { interactionResolverGovernance: governance } });
