@@ -153,7 +153,13 @@ export const AGENT_RULES_STALE_MS = 5 * 60_000;
  * ok: they are left alone on purpose, but someone should know.
  */
 export function agentRulesChecks(env: NodeJS.ProcessEnv, state: AgentRulesState, now: number): Check[] {
-  if (!agentRulesEnabled(env)) return [{ name: "agent rules", ok: true, detail: "off (KYOUBE_AGENT_RULES=off)" }];
+  if (!agentRulesEnabled(env)) {
+    // Switched off without `kyoube agent-rules off`: the last pass's changes are all still in place.
+    if (state.lastPass?.mode === "apply") {
+      return [{ name: "agent rules", ok: false, detail: "off (KYOUBE_AGENT_RULES=off), but the rules are still applied: run kyoube agent-rules off" }];
+    }
+    return [{ name: "agent rules", ok: true, detail: "off (KYOUBE_AGENT_RULES=off)" }];
+  }
   const pass = state.lastPass;
   if (!pass) {
     return [{ name: "agent rules", ok: false, detail: "no pass yet — the container starts kyoube agent-rules --watch; run kyoube agent-rules --once to see what stops it" }];
@@ -181,7 +187,8 @@ export async function agentRulesDoctorChecks(
   now: number,
   read: (file: string) => Promise<AgentRulesState> = (file) => readState(file, () => {}),
 ): Promise<Check[]> {
-  if (!agentRulesEnabled(env)) return agentRulesChecks(env, EMPTY_STATE, now);
+  // Off, the file is read on a best-effort basis: an unreadable one gives the plain "off" line.
+  if (!agentRulesEnabled(env)) return agentRulesChecks(env, await read(statePath).catch(() => EMPTY_STATE), now);
   try {
     return agentRulesChecks(env, await read(statePath), now);
   } catch (error) {

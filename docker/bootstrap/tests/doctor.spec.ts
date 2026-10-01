@@ -245,6 +245,7 @@ describe("agentRulesChecks", () => {
 describe("agentRulesDoctorChecks", () => {
   const NOW = Date.parse("2026-10-01T10:00:00Z");
   const statePath = "/some/state/path.json";
+  const lastPass = (mode: PassReport["mode"]): PassReport => ({ at: "2026-10-01T09:59:00.000Z", mode, failures: [], companies: [] });
 
   it("with a read that rejects with EACCES, resolves to exactly one FAIL line", async () => {
     const read = async () => { throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" }); };
@@ -255,13 +256,22 @@ describe("agentRulesDoctorChecks", () => {
     expect(result[0]!.detail).toContain("EACCES");
   });
 
-  it("with KYOUBE_AGENT_RULES: off and a read that throws, returns the ok off line and never calls read", async () => {
-    let called = false;
-    const read = async () => { called = true; throw new Error("should not be called"); };
+  it("with KYOUBE_AGENT_RULES: off and a read that throws, returns the ok off line", async () => {
+    const read = async () => { throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" }); };
     const result = await agentRulesDoctorChecks({ KYOUBE_AGENT_RULES: "off" }, statePath, NOW, read);
-    expect(result).toHaveLength(1);
-    expect(result[0]).toEqual({ name: "agent rules", ok: true, detail: "off (KYOUBE_AGENT_RULES=off)" });
-    expect(called).toBe(false);
+    expect(result).toEqual([{ name: "agent rules", ok: true, detail: "off (KYOUBE_AGENT_RULES=off)" }]);
+  });
+
+  it("with KYOUBE_AGENT_RULES: off while the last pass applied the rules, fails and says how to take them out", async () => {
+    const read = async () => ({ ...EMPTY_STATE, lastPass: lastPass("apply") });
+    const result = await agentRulesDoctorChecks({ KYOUBE_AGENT_RULES: "off" }, statePath, NOW, read);
+    expect(result).toEqual([{ name: "agent rules", ok: false, detail: "off (KYOUBE_AGENT_RULES=off), but the rules are still applied: run kyoube agent-rules off" }]);
+  });
+
+  it("with KYOUBE_AGENT_RULES: off after kyoube agent-rules off, returns the ok off line", async () => {
+    const read = async () => ({ ...EMPTY_STATE, lastPass: lastPass("revert") });
+    const result = await agentRulesDoctorChecks({ KYOUBE_AGENT_RULES: "off" }, statePath, NOW, read);
+    expect(result).toEqual([{ name: "agent rules", ok: true, detail: "off (KYOUBE_AGENT_RULES=off)" }]);
   });
 
   it("with a read that resolves a state whose lastPass is {}, returns one FAIL line instead of throwing", async () => {
