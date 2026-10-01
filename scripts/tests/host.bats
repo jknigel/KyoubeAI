@@ -10,19 +10,19 @@ setup() {
   version_ge 1.1.0 1.1.0
   version_ge 1.10.0 1.9.9
   version_ge 2 1.99.99
-  ! version_ge 1.0.9 1.1.0
-  ! version_ge 1.1 1.1.1
+  ! version_ge 1.0.9 1.1.0 || false
+  ! version_ge 1.1 1.1.1 || false
 }
 
 @test "is_release_version accepts exactly three dot-separated numbers" {
   is_release_version 1.2.3
   is_release_version 10.0.1
-  ! is_release_version 1.2
-  ! is_release_version v1.2.3
-  ! is_release_version 1.2.3-rc1
-  ! is_release_version 1.2.3.4
-  ! is_release_version abc
-  ! is_release_version ""
+  ! is_release_version 1.2 || false
+  ! is_release_version v1.2.3 || false
+  ! is_release_version 1.2.3-rc1 || false
+  ! is_release_version 1.2.3.4 || false
+  ! is_release_version abc || false
+  ! is_release_version "" || false
 }
 
 @test "latest_release picks the newest vX.Y.Z at or above the minimum, ignoring pre-releases and junk" {
@@ -100,16 +100,63 @@ EXAMPLE
 
 @test "normalize_project_name follows compose's rules" {
   [ "$(normalize_project_name 'KyoubeAI')" = "kyoubeai" ]
-  [ "$(normalize_project_name 'BAP-AI-OS')" = "bap-ai-os" ]
+  [ "$(normalize_project_name 'My-AI-Stack')" = "my-ai-stack" ]
   [ "$(normalize_project_name '_My App.v2')" = "myappv2" ]
 }
 
-@test "resolve_project_name: shell variable, then .env, then the folder name" {
+# fake_docker SCRIPT: a docker on PATH that runs SCRIPT (sh) with its arguments.
+fake_docker() {
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  printf '#!/bin/sh\n%s\n' "$1" > "$BATS_TEST_TMPDIR/bin/docker"
+  chmod +x "$BATS_TEST_TMPDIR/bin/docker"
+  PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+}
+
+@test "resolve_project_name without a docker that answers: shell variable, then .env, then the folder name" {
+  fake_docker 'exit 1'
   mkdir -p "My-Stack"; printf 'X=1\n' > My-Stack/.env
   [ "$(COMPOSE_PROJECT_NAME= resolve_project_name "$PWD/My-Stack")" = "my-stack" ]
   printf 'COMPOSE_PROJECT_NAME=pinned\n' >> My-Stack/.env
   [ "$(COMPOSE_PROJECT_NAME= resolve_project_name "$PWD/My-Stack")" = "pinned" ]
   [ "$(COMPOSE_PROJECT_NAME=fromshell resolve_project_name "$PWD/My-Stack")" = "fromshell" ]
+}
+
+@test "resolve_project_name takes the name docker compose config resolves, a top-level name: included" {
+  # compose prints the resolved project first; a `name:` in an override file is part of what it resolves
+  fake_docker '[ "$*" = "compose config" ] || exit 1; printf "name: from-override\r\nservices:\n  app:\n    image: x\n"'
+  mkdir -p "My-Stack"; printf 'X=1\n' > My-Stack/.env
+  [ "$(COMPOSE_PROJECT_NAME= resolve_project_name "$PWD/My-Stack")" = "from-override" ]
+}
+
+@test "env helpers read and write export KEY=value lines, keeping the export" {
+  printf 'export KYOUBE_PORT=3200\nexport  A=1\n# export B=2\n' > .env
+  [ "$(env_get .env KYOUBE_PORT)" = "3200" ]
+  [ "$(env_get .env A)" = "1" ]
+  [ "$(env_get .env B)" = "" ]
+  [ "$(env_keys .env)" = "$(printf 'A\nB\nKYOUBE_PORT')" ]
+  env_set .env KYOUBE_PORT 3300
+  [ "$(cat .env)" = "$(printf 'export KYOUBE_PORT=3300\nexport  A=1\n# export B=2')" ]
+  # env_merge sees the exported key as present, so it never appends the example's default after it
+  printf 'KYOUBE_PORT=3100\nNEW=1\n' > example
+  run env_merge example .env 1.1.0
+  [ "$output" = "NEW" ]
+  [ "$(env_get .env KYOUBE_PORT)" = "3300" ]
+  [ -z "$(env_unused example .env | grep -x KYOUBE_PORT || true)" ]
+}
+
+@test "sha256_sums and sha256_check work with shasum alone, as on macOS" {
+  command -v shasum >/dev/null || skip "shasum needed"
+  mkdir -p only bk
+  for tool in shasum perl; do ln -s "$(command -v "$tool")" "only/$tool"; done
+  printf 'data\n' > bk/a.dump
+  (cd bk && PATH="$BATS_TEST_TMPDIR/only" sha256_sums a.dump > SHA256SUMS)
+  [ "$(cut -d' ' -f1 bk/SHA256SUMS)" = "$(sha256sum bk/a.dump | cut -d' ' -f1)" ]
+  PATH="$BATS_TEST_TMPDIR/only" sha256_check bk
+  # sha256sum checks what shasum wrote, and a changed file fails both
+  sha256_check bk
+  echo more >> bk/a.dump
+  ! PATH="$BATS_TEST_TMPDIR/only" sha256_check bk || false
+  ! sha256_check bk || false
 }
 
 @test "gen_secret is 64 lowercase hex characters" {
@@ -122,7 +169,7 @@ EXAMPLE
   [ "$(url_origin https://kyoube.example.com:8443/x/y)" = "https://kyoube.example.com:8443" ]
   is_loopback_url http://localhost:3100
   is_loopback_url http://127.0.0.1
-  ! is_loopback_url https://kyoube.example.com
+  ! is_loopback_url https://kyoube.example.com || false
 }
 
 @test "split_image_ref splits at the tag, not a registry port" {

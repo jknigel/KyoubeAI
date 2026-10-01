@@ -31,6 +31,9 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="$(cd "$SRC" && pwd)"
 TAR_IMAGE="${KYOUBE_BACKUP_IMAGE:-alpine:3.20}"
 cd "$ROOT"
+# sha256_check: sha256sum -c, or shasum -a 256 -c on a Mac, which has no sha256sum.
+# shellcheck source=scripts/lib/host.sh
+. "$ROOT/scripts/lib/host.sh"
 
 # Backups from 0.1.x carry the core dump and home archive under their old names;
 # both restore into the 0.2.x layout, and a legacy backup also gets the
@@ -86,7 +89,7 @@ docker image inspect "$TAR_IMAGE" >/dev/null 2>&1 || docker pull "$TAR_IMAGE" >&
 
 # 1. Verify, then stop the app so nothing writes while the state is replaced.
 echo "restore: verifying $SRC"
-(cd "$SRC" && sha256sum -c SHA256SUMS)
+sha256_check "$SRC"
 echo "restore: overwriting project '$PROJECT' from $SRC"
 docker compose stop app
 
