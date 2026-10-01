@@ -76,22 +76,36 @@ Terminal shell run as `node`, so agents have root in the container too. This is 
 trust that already existed: `node` owns the core's code in `/app` and can read the server's environment,
 including the database credentials and `BETTER_AUTH_SECRET`. The boundary is the container itself: it is
 not privileged, keeps Docker's default seccomp and AppArmor profiles and a `pids_limit`, and the compose
-file adds no capabilities. `/kyoubeai/.local/bin` is first on the `PATH` of the server, every agent and
-every Terminal shell, and agents can write there, so anything placed in it shadows any command of the same
-name, not only harnesses. That is the same trust as a harness's own settings files such as
-`~/.claude/settings.json`. Codex's sandbox bypass stays on, because its own sandbox cannot run in a
-container.
+file adds no capabilities beyond Docker's defaults. Root in the container (which `sudo` reaches) holds
+those defaults, `NET_RAW` among them, so it can open raw sockets, for example to spoof traffic on the
+Docker network. If you do not need that, drop it in an untracked `docker-compose.override.yml`; `sudo`
+and the Terminal work the same without it:
+
+```yaml
+services:
+  app:
+    cap_drop: [NET_RAW]
+```
+
+`/kyoubeai/.local/bin` is first on the `PATH` of the server, every agent and every Terminal shell, and
+agents can write there, so anything placed in it shadows any command of the same name, not only
+harnesses. That is the same trust as a harness's own settings files such as `~/.claude/settings.json`.
+The container's start-up and the server's own Node are the exception: they run the image's programs by
+absolute path, so a `node` or `chown` installed there cannot stop the container starting. Codex's sandbox
+bypass stays on, because its own sandbox cannot run in a container.
 
 **Trusted runtime host.** `KYOUBE_TRUSTED_RUNTIME_HOST` defaults to `auto`: the entrypoint
 (`docker/entrypoint.sh`) exports `PAPERCLIP_TRUSTED_MCP_RUNTIME_HOST` set to the container's hostname,
 which tells the core that this container is a host where local tools may run. The core only checks it on
 an authenticated, public instance (`KYOUBE_DEPLOYMENT_EXPOSURE=public`); on a private one, the default,
-nothing depends on it. On a public instance it allows two things. Company members who hold `tools:admin`
-can register local stdio MCP commands (`POST /api/companies/:id/tools/stdio-templates`, guarded by the
-core's `assertToolsAdmin`), which the server then runs inside the container as `node`. And the
-server-host sign-in for subscription connections (Claude, Codex, Grok) in Connections works, with its
-command run in the container's Terminal. By default only the owner and admin roles hold `tools:admin`
-(the core's `company-member-roles`). Because `node` has passwordless `sudo`, those commands run as a
+nothing depends on it. On a public instance it gates two things. The first is enabling and running local
+stdio MCP connections, which the server runs inside the container as `node`. Registering the commands
+they may run (`POST /api/companies/:id/tools/stdio-templates`) is not gated by it: that takes
+`tools:admin`, checked by the core's `assertToolsAdmin`, which an instance admin and the core's local
+implicit actor pass as well, with or without a trusted host. The second is the server-host sign-in for
+subscription connections (Claude, Codex, Grok) in Connections, with its command run in the container's
+Terminal. By default only the owner and admin roles hold `tools:admin` (the core's
+`company-member-roles`). Because `node` has passwordless `sudo`, those commands run as a
 user that can become root in the container. That is the same trust as the Terminal, whose `allowedRoles`
 default to owner and admin, and as `agents:configure`, which the same two roles hold and which can
 already set the command an agent runs.

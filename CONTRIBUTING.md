@@ -122,14 +122,15 @@ tools: agents already have the folder, and the plugin exists for people.
 ## Never patch the core
 
 Nothing in this repository is core source, and the image is built `FROM` the pinned upstream release,
-rebranded but otherwise unmodified. If something you need isn't possible through `@paperclipai/plugin-sdk` (a capability that
-doesn't exist, a route the plugin host doesn't expose), the answer is never to vendor or patch upstream
-code — propose it upstream (open an issue or PR on
+rebranded, themed and carrying a short list of build-time fixes (below). If something you need isn't
+possible through `@paperclipai/plugin-sdk` (a capability that doesn't exist, a route the plugin host
+doesn't expose), the answer is never to vendor or patch upstream code — propose it upstream (open an issue or PR on
 [`paperclipai/paperclip`](https://github.com/paperclipai/paperclip)) or find a way to build it as a
 plugin. `docs/architecture.md`'s "Isolation from upstream" material and `docs/upgrading.md` explain why
 this matters: it is what makes a core version bump a one-line change instead of a rebase. There are two
-standing exceptions, both build-time transforms re-applied to the pristine core on every build, both
-presentation only, and both failing the build when upstream moves what they rely on:
+standing exceptions that change presentation only, and one temporary list that changes behaviour; all
+three are build-time transforms re-applied to the pristine core on every build, and all three fail the
+build when upstream moves what they rely on. The two presentation exceptions:
 
 - `docker/rebrand/` changes the core's *user-facing text and artwork* to KyoubeAI; `docs/branding.md`
   lists what it leaves alone.
@@ -141,8 +142,10 @@ presentation only, and both failing the build when upstream moves what they rely
   the stock layout. It may not change behaviour: anything that needs data or logic goes in
   `plugins/kyoube-studio`, on the public SDK. `docs/theme.md` has the details.
 
-There is one narrow, temporary way to change behaviour: `docker/core-patches/patches.mjs`, a list that
-is meant to be empty. An entry is a fix to an upstream bug that had to ship here first, applied to the
+The one narrow, temporary way to change behaviour is `docker/core-patches/patches.mjs`, a list that
+is meant to be empty. In 1.1 it holds five fixes in the served UI and two in the compiled server
+(`server/dist`): the command the Claude subscription sign-in presents, and the agent Test route on an
+unsaved harness switch. An entry is a fix to an upstream bug that had to ship here first, applied to the
 pristine core layer at image build time (`docker/core-patches/apply.mjs`, the Dockerfile step right
 before the rebrand) **while the same fix is on its way upstream** — every entry names its upstream
 issue or pull request, and opening that PR is part of adding the entry, not an afterthought. The rules
@@ -152,7 +155,11 @@ number of times or the build fails with the patch's id; and the tests in `docker
 pin the patch to a fixture of the real minified code *and run the patched code* to prove the
 behaviour. A core bump that changes that code — or that already carries the upstream fix — therefore
 fails at the patch step, and the answer is to delete the entry (or, if upstream still has the bug in
-a new shape, redo it), never to loosen the pattern.
+a new shape, redo it), never to loosen the pattern. An entry may also declare the upstream fix's own
+shape (`upstreamFix`): on a core where its pattern matches nothing and that marker matches exactly once,
+the entry is skipped with `<id>: already fixed upstream` in the build log, so the weekly build against
+the core's pre-releases does not fail on a fix that has landed upstream. The marker must match only the
+upstream code, never the entry's own output, and the tests pin it to an excerpt of that code.
 
 ## How to add a tool
 
@@ -198,10 +205,12 @@ follows the same shape:
 4. Tag `vX.Y.Z` and push the tag. The release workflow publishes the multi-architecture image
    `ghcr.io/jknigel/kyoubeai:X.Y.Z` and `latest`. `install.sh` and `update.sh` only consider tags
    without a `-`, from 1.1.0 on, so a pre-release tag such as `v1.2.0-rc1` is never offered to users.
-5. Once the image is published, update a real install of the previous release on Linux and on macOS
-   (Docker Desktop), then run `./update.sh --rollback` on it. For 1.1.0 that is a 1.0.x install:
+5. Once the release workflow has finished, update a real install of the previous release on Linux and
+   on macOS (Docker Desktop), then run `./update.sh --rollback` on it. For 1.1.0 that is a 1.0.x install:
    `git fetch --tags`, `git checkout v1.1.0` and `./update.sh` ([`docs/upgrading.md`](docs/upgrading.md),
-   "Moving to 1.1"); for later releases, `./update.sh` alone. Run `./install.sh` once in WSL2.
+   "Moving to 1.1"); for later releases, `./update.sh` alone. Run `./install.sh` once in WSL2. If any
+   of this fails after the tag is pushed, fix it forward with the next patch release (X.Y.Z+1); never
+   delete or re-point a pushed tag, because installs may already have fetched it.
 
 ## Licensing and contributor agreement
 
