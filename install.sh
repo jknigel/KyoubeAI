@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Installs KyoubeAI from this checkout: settings, image, start, claim, plugins.
 # Safe to run again at any point: every step checks whether its work is done.
+# On an install that already has data it repairs the version that install runs
+# and never changes it; moving to another version is ./update.sh.
 set -euo pipefail
 
 usage() {
@@ -8,7 +10,9 @@ usage() {
 Usage: ./install.sh [options]
 
 Installs the newest KyoubeAI release from this checkout and walks you through
-claiming it. Safe to run again: it continues where it stopped.
+claiming it. Safe to run again: it continues where it stopped, and on an
+existing install it repairs the version you have. Moving to another version
+is ./update.sh.
 
   --url <address>     The address people will use (default http://localhost:3100)
   --port <n>          Host port (default 3100)
@@ -58,7 +62,23 @@ main() {
   say "==> checking Docker"
   docker_preflight
 
-  # 1. The release to install (a checkout switches tags, then this script re-runs from it).
+  # An install with data (a .env, plus its database volume or app container) keeps the code it runs: this script only
+  # repairs it. Without a .env, a database volume of the same project belongs to another install.
+  local existing=0 project
+  if [ -f .env ]; then
+    project="$(env_get .env COMPOSE_PROJECT_NAME)"; [ -n "$project" ] || project="$(resolve_project_name "$KYOUBE_DIR")"
+    if docker volume inspect "${project}_pgdata" >/dev/null 2>&1 \
+      || [ -n "$(docker compose ps -aq app 2>/dev/null </dev/null | tr -d '\r' || true)" ]; then
+      existing=1
+    fi
+  else
+    project="${name:-kyoubeai}"
+    if docker volume inspect "${project}_pgdata" >/dev/null 2>&1; then
+      die "a KyoubeAI database volume '${project}_pgdata' already exists on this machine, from another install whose secrets a new .env would not match. Run ./update.sh in that install's folder, copy its .env here, or install a separate instance with --name <other> --port <other port>."
+    fi
+  fi
+
+  # 1. The release to install (a fresh install switches the checkout to its tag, then this script re-runs from it).
   local release current tag
   if [ "$edge" = 1 ]; then
     release="edge-$(git rev-parse --short HEAD)"
@@ -79,32 +99,33 @@ main() {
       [ -n "$tag" ] || die "no KyoubeAI release ($KYOUBE_MIN_RELEASE or later) found. To run the current code instead: ./install.sh --edge"
     fi
     if [ "$current" != "$tag" ]; then
+      [ "$existing" = 0 ] || keep_version "$tag"
       [ "$reexeced" = 0 ] || die "could not switch this checkout to $tag"
       if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
         git fetch --tags --quiet origin 2>/dev/null || warn "could not fetch releases from origin; using the tags this checkout has"
         git rev-parse -q --verify "refs/tags/$tag" >/dev/null || die "release $tag does not exist"
       fi
       say "==> switching this checkout to $tag"
-      git -c advice.detachedHead=false checkout --quiet "$tag"
+      git -c advice.detachedHead=false checkout --quiet --detach "refs/tags/$tag"
       exec "$KYOUBE_DIR/install.sh" --reexeced ${original[@]+"${original[@]}"}
     fi
     release="${tag#v}"
   fi
 
   # 2. Settings.
-  local repo version_tag project added ignored=""
+  local repo version_tag added ignored=""
   if [ -n "$image" ]; then
     read -r repo version_tag <<<"$(split_image_ref "$image")"
   elif [ "$edge" = 1 ]; then
+    # A source build keeps a local image name the .env already has (two source installs on one machine each use
+    # their own, docs/operations.md).
     repo=kyoubeai; version_tag=dev
+    if [ -f .env ] && runs_source_build; then repo="$(env_get .env KYOUBE_IMAGE)"; repo="${repo:-kyoubeai}"; fi
   else
     repo="$KYOUBE_IMAGE_DEFAULT"; version_tag="$release"
   fi
+  [ "$existing" = 0 ] || keep_version
   if [ ! -f .env ]; then
-    project="${name:-kyoubeai}"
-    if docker volume inspect "${project}_pgdata" >/dev/null 2>&1; then
-      die "a KyoubeAI database volume '${project}_pgdata' already exists on this machine, from another install whose secrets a new .env would not match. Run ./update.sh in that install's folder, copy its .env here, or install a separate instance with --name <other> --port <other port>."
-    fi
     cp .env.example .env.tmp
     local key
     for key in BETTER_AUTH_SECRET POSTGRES_PASSWORD KYOUBE_DB_PASSWORD; do env_set .env.tmp "$key" "$(gen_secret)"; done
@@ -118,18 +139,28 @@ main() {
     [ -z "$port" ] || ignored="${ignored:+$ignored, }--port (KYOUBE_PORT)"
     [ -z "$url" ] || ignored="${ignored:+$ignored, }--url (KYOUBE_PUBLIC_URL)"
     [ -z "$name" ] || ignored="${ignored:+$ignored, }--name (COMPOSE_PROJECT_NAME)"
-    [ -z "$ignored" ] || warn "$ignored ignored because the existing .env is kept; edit those keys in .env, or remove .env and run ./install.sh again to start over"
-    [ -n "$(env_get .env COMPOSE_PROJECT_NAME)" ] || env_set .env COMPOSE_PROJECT_NAME "$(resolve_project_name "$KYOUBE_DIR")"
+    if [ -n "$port$url" ]; then
+      warn "$ignored ignored because the existing .env is kept. To change the address, edit KYOUBE_PUBLIC_URL and KYOUBE_PORT (and BETTER_AUTH_TRUSTED_ORIGINS, if .env has it) in .env, then run docker compose up -d"
+    elif [ -n "$name" ]; then
+      warn "$ignored ignored because the existing .env is kept"
+    fi
+    [ -z "$name" ] || [ "$name" = "$project" ] || warn "this install's Compose project is $project. Do not change COMPOSE_PROJECT_NAME in .env on an existing install: it names the volumes that hold the data, so another name starts an empty instance. For a second instance, clone KyoubeAI into another folder and run ./install.sh --name <other> --port <other port> there"
+    [ -n "$(env_get .env COMPOSE_PROJECT_NAME)" ] || env_set .env COMPOSE_PROJECT_NAME "$project"
     added="$(env_merge .env.example .env "$release")"
     # shellcheck disable=SC2086  # word splitting turns the newline-separated keys into one line
     [ -z "$added" ] || say "    added to .env: $(printf '%s ' $added)"
   fi
-  env_set .env KYOUBE_IMAGE "$repo"
-  env_set .env KYOUBE_VERSION "$version_tag"
-  env_set .env KYOUBE_CORE_VERSION "$(env_get .env.example KYOUBE_CORE_VERSION)"
+  # What the stack runs is left alone on an install with data, the core pin included (a source build is rebuilt on
+  # the core it was built on; ./update.sh moves all three).
+  if [ "$existing" = 0 ]; then
+    env_set .env KYOUBE_IMAGE "$repo"
+    env_set .env KYOUBE_VERSION "$version_tag"
+    env_set .env KYOUBE_CORE_VERSION "$(env_get .env.example KYOUBE_CORE_VERSION)"
+  fi
 
-  # 3. The image.
-  local ref="$repo:$version_tag" attempt
+  # 3. The image: the one .env selects (on an existing install it keeps its own KYOUBE_IMAGE, a mirror for one).
+  local ref attempt
+  ref="$(image_ref)"
   if [ -n "$image" ]; then
     docker image inspect "$image" >/dev/null 2>&1 || die "image $image is not on this machine"
   elif [ "$edge" = 1 ]; then
@@ -184,6 +215,54 @@ main() {
   say "  Folder:  $KYOUBE_DIR"
   say "  Update:  ./update.sh    Back up: bash scripts/backup.sh    Logs: docker compose logs -f app"
   say "Next: open Workspace -> Terminal and install a harness (README, 'Harnesses'), e.g.  kyoube harness install claude"
+  say "  With only a subscription, choose 'Skip for now' under the first-run wizard's Connect step error to get there (README, 'Install')."
+}
+
+# keep_version [TAG]: on an install that already has data, refuses (before anything is changed) when this run would put
+# other code on it than the code it runs: another release, a published image in place of a source build or the other
+# way round, or a build of other code than the commit the source build's record names. With TAG (the release this run
+# installs, which the checkout is not on) it always refuses: a fresh install switches the checkout to the tag, an
+# existing one never does. Reads edge, image, repo and version_tag from main's scope.
+keep_version() {
+  local tag="${1:-}" here commit why=""
+  if [ -n "$tag" ]; then
+    here="$(git tag --points-at HEAD 2>/dev/null | latest_release || true)"; here="${here:-$(git rev-parse --short HEAD)}"
+    [ "$(env_get .env KYOUBE_VERSION)" != "${tag#v}" ] \
+      || die "this install runs $tag (KYOUBE_VERSION in .env), but this checkout is at $here, and ./install.sh never switches the checkout of an install that has data; nothing was changed. To repair it: git checkout $tag, then ./install.sh. Moving to another version is ./update.sh"
+    keep_refusal "$tag"
+  fi
+  if [ -n "$image" ]; then
+    [ "$(image_ref)" = "$repo:$version_tag" ] || keep_refusal "the image $repo:$version_tag"
+  elif [ "$edge" = 1 ]; then
+    runs_source_build || keep_refusal "a build of this checkout" "To switch it to a build from source: ./update.sh --edge (it backs up first)"
+    commit="$(build_record || true)"
+    if [ -z "$commit" ]; then
+      why="nothing records which commit its image was built from"
+    elif [ "$commit" != "$(git rev-parse HEAD)" ]; then
+      why="its image was built from $(git rev-parse --short "$commit"), and this checkout is at $(git rev-parse --short HEAD)"
+    fi
+    [ -z "$why" ] \
+      || die "this install runs a source build ($(image_ref)), and $why, so ./install.sh --edge could build other code onto its data; nothing was changed. To move it to this checkout's code: ./update.sh --edge (it backs up first)"
+  else
+    [ "$(env_get .env KYOUBE_VERSION)" = "$version_tag" ] || keep_refusal "v$version_tag"
+  fi
+}
+
+# keep_refusal WHAT [FIX]: keep_version's refusal when the stack runs other code than WHAT; FIX replaces the usual advice.
+keep_refusal() {
+  local runs fix
+  if runs_source_build; then
+    runs="a source build ($(image_ref))"
+    fix="To update it: ./update.sh --edge (it backs up first). Re-running ./install.sh --edge on the commit it was built from repairs it"
+  else
+    if is_release_version "$(env_get .env KYOUBE_VERSION)"; then
+      runs="v$(env_get .env KYOUBE_VERSION) (KYOUBE_VERSION in .env)"
+    else
+      runs="$(image_ref) (KYOUBE_IMAGE and KYOUBE_VERSION in .env)"
+    fi
+    fix="Re-running ./install.sh repairs the version you have; moving to another version is ./update.sh (it backs up first)"
+  fi
+  die "this install runs $runs, and ./install.sh would put $1 on its data; nothing was changed. ${2:-$fix}"
 }
 
 # valid_port N: an integer from 1 to 65535.

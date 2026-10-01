@@ -2,8 +2,9 @@
 # End to end for install.sh and update.sh: a throwaway clone of this checkout,
 # two local releases (v9.9.0, v9.9.1) pointing at the image scripts/smoke.sh
 # built, an install with the claim and plugin approval done through the API,
-# an update that merges a new setting and installs a harness agents use, a
-# rollback, and the volume-collision refusal. Needs docker, git, curl and jq.
+# an update that merges a new setting and installs a harness agents use (as
+# node), a rollback, install.sh refusing to change the version of an install
+# that has data, and the volume-collision refusal. Needs docker, git, curl and jq.
 set -euo pipefail
 IMAGE="${KYOUBE_E2E_IMAGE:-kyoubeai:smoke}"
 PROJECT=kyoube-e2e
@@ -140,6 +141,17 @@ companies_have "$COMPANY_ID" || fail "the data from before the update is not the
 ! docker compose exec -T -u node app sh -c 'command -v pi' >/dev/null 2>&1 || fail "pi, installed after the backup, is still there after the rollback, so the home volume was not restored"
 [ ! -e .kyoube/update-state ] || fail "rollback state was not cleared"
 show "$WORK/rollback.log" '^(Roll back to|rolled back|restored from)'
+
+echo "==> install.sh on this install refuses another version and changes nothing"
+cp .env "$WORK/env-before"
+if ./install.sh --version 9.9.1 --yes >"$WORK/install3.log" 2>&1; then
+  fail "install.sh --version 9.9.1 ran on an install that runs 9.9.0"
+fi
+grep -q 'this install runs v9.9.0 (KYOUBE_VERSION in .env), and ./install.sh would put v9.9.1 on its data; nothing was changed' "$WORK/install3.log" \
+  || { cat "$WORK/install3.log" >&2; fail "the refusal did not explain itself"; }
+cmp -s .env "$WORK/env-before" || fail "the refused install.sh changed .env"
+[ "$(git describe --tags --exact-match HEAD)" = v9.9.0 ] || fail "the refused install.sh moved the checkout"
+show "$WORK/install3.log" '^error:'
 
 echo "==> a second install onto the same project is refused"
 git -c advice.detachedHead=false clone --quiet "$CLONE" "$WORK/second"
