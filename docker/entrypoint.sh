@@ -68,12 +68,14 @@ if [ "${KYOUBE_BOOTSTRAP_DISABLED:-0}" != "1" ]; then
   # shell, whose PID the `exec` below hands to the core server — leaving a
   # long-lived node process the server never waits on.
   ( run_as_node "$NODE" "$BOOTSTRAP" ensure-plugins --watch & )
-  # Keeps the agent working rules in force (docs/agent-rules.md): one pass a
-  # minute for the life of the container, as node. It does nothing when
-  # KYOUBE_AGENT_RULES=off, and waits for a board key like the watcher above.
-  # Double-forked for the same reason.
-  ( run_as_node "$NODE" "$BOOTSTRAP" agent-rules --watch & )
 fi
+
+# Keeps the agent working rules in force (docs/agent-rules.md): one pass a
+# minute for the life of the container, as node, whatever
+# KYOUBE_BOOTSTRAP_DISABLED is set to (that stops only the plugin watcher). It
+# does nothing when KYOUBE_AGENT_RULES=off, and waits for a board key.
+# Double-forked for the same reason as the watcher above.
+( run_as_node "$NODE" "$BOOTSTRAP" agent-rules --watch & )
 
 # The core's entrypoint (root: remaps and chowns, then gosu to node) runs on the
 # image's PATH like everything above; `env` hands the server the full one.
