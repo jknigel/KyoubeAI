@@ -3,16 +3,24 @@
 # the packages apt-record kept. It never fails the start. A package that cannot
 # be installed (offline with no cached copy, or gone from a newer Debian after a
 # core bump) is logged, and `kyoube doctor` reports it.
+#
+# The whole restore has a time budget (KYOUBE_APT_RESTORE_BUDGET, 180 seconds),
+# well inside the 300 seconds update.sh and install.sh wait for a healthy start,
+# so a hung network delays the start by at most that. What is not installed
+# when the budget runs out stays pending for the next start.
 set -u
 state="${KYOUBE_STATE_DIR:-/kyoubeai/.kyoube}"
 cache="${KYOUBE_APT_CACHE:-/kyoubeai/.cache/apt}"
-limit="${KYOUBE_APT_RESTORE_TIMEOUT:-300}"
+budget="${KYOUBE_APT_RESTORE_BUDGET:-180}"
 list="$state/apt-packages.txt"
 log="$state/apt-restore.log"
 status="$state/apt-restore.status"
 pending="$state/apt-pending.txt"
 now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 finish() { chown -R node:node "$state" 2>/dev/null || true; exit 0; }
+deadline=$(( $(date +%s) + budget ))
+# left: whole seconds of the budget that remain, 0 once it is spent.
+left() { l=$(( deadline - $(date +%s) )); [ "$l" -gt 0 ] || l=0; echo "$l"; }
 
 mkdir -p "$state" "$cache/archives/partial" "$cache/lists/partial"
 if [ ! -s "$list" ]; then rm -f "$status"; finish; fi
@@ -31,12 +39,21 @@ done < "$list"
 if [ -z "$missing" ]; then echo "ok 0" > "$status"; rm -f "$pending"; finish; fi
 echo "$(now) reinstalling:$missing" >> "$log"
 # The index lives on the volume too (90kyoube), so an offline start can still
-# install from the cached .debs.
-timeout "$limit" apt-get update -q >> "$log" 2>&1 \
-  || echo "$(now) apt-get update failed; using the cached package index" >> "$log"
-# shellcheck disable=SC2086 # one word per package, each validated above
-DEBIAN_FRONTEND=noninteractive timeout "$limit" apt-get install -y --no-install-recommends $missing >> "$log" 2>&1
-rc=$?
+# install from the cached .debs. The update gets at most half of what is left,
+# so a hung network still leaves time to install from that cache.
+t=$(( $(left) / 2 ))
+if [ "$t" -gt 0 ]; then
+  timeout "$t" apt-get update -q >> "$log" 2>&1 \
+    || echo "$(now) apt-get update failed; using the cached package index" >> "$log"
+fi
+t=$(left)
+if [ "$t" -gt 0 ]; then
+  # shellcheck disable=SC2086 # one word per package, each validated above
+  DEBIAN_FRONTEND=noninteractive timeout "$t" apt-get install -y --no-install-recommends $missing >> "$log" 2>&1
+  rc=$?
+else
+  rc=124
+fi
 if [ "$rc" -eq 0 ]; then
   # shellcheck disable=SC2086
   apt-mark manual $missing >> "$log" 2>&1 || true
@@ -53,9 +70,10 @@ else
   chmod 0644 "$pending"
   chown node:node "$pending" 2>/dev/null || true
 
-  # If timeout (124), don't retry: the network is stuck. Keep everything pending.
+  # If timeout (124), don't retry: the network is stuck, or the budget is spent.
+  # Keep everything pending.
   if [ "$rc" -eq 124 ]; then
-    echo "$(now) bulk install timed out; skipping per-package retries" >> "$log"
+    echo "$(now) bulk install timed out (the restore's time budget is ${budget}s); skipping per-package retries, the packages stay pending for the next start" >> "$log"
     echo "failed 124" > "$status"
   else
     # Retry each package individually to avoid losing all due to one failure
@@ -63,7 +81,12 @@ else
     installed=0
     # shellcheck disable=SC2086
     for pkg in $missing; do
-      DEBIAN_FRONTEND=noninteractive timeout "$limit" apt-get install -y --no-install-recommends "$pkg" >> "$log" 2>&1
+      t=$(left)
+      if [ "$t" -eq 0 ]; then
+        echo "$(now) the restore's time budget (${budget}s) is spent; the rest stay pending for the next start" >> "$log"
+        break
+      fi
+      DEBIAN_FRONTEND=noninteractive timeout "$t" apt-get install -y --no-install-recommends "$pkg" >> "$log" 2>&1
       pkg_rc=$?
       if [ "$pkg_rc" -eq 0 ]; then
         apt-mark manual "$pkg" >> "$log" 2>&1 || true
