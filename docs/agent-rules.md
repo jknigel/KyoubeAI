@@ -58,6 +58,12 @@ manager: the manager is protected.
 - A manager can still assign work to an agent with no reports in another team.
 - Agents can still create board approvals (`request_board_approval`). They go to every board member,
   because the core's approvals have no addressee. The rules limit them to spending and hiring.
+- A CEO-role agent may change another agent's permissions, which can give back the broad assign
+  grant. An agent may also change its own `reportsTo`. Either change lasts only until the next pass,
+  at most a minute, and the task's history shows it.
+- KyoubeAI owns two settings and puts them back on the next pass if someone changes them in the UI:
+  an agent's "can assign tasks" permission, and the resolver policy of the five card kinds. To change
+  either for good, turn the rules off.
 
 ## Check it
 

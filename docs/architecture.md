@@ -40,6 +40,7 @@ docker compose
 │   │
 │   ├─ CLIs on PATH: yours in /kyoubeai/.local/bin, then the core image's claude, codex, gemini, kimi, opencode
 │   ├─ kyoube-entrypoint.sh → background: `kyoube ensure-plugins --watch`
+│   │                                     `kyoube agent-rules --watch` (docs/agent-rules.md)
 │   ├─ DATABASE_URL         ───────────▶ db: `kyoubeai` database
 │   ├─ KYOUBE_DATABASE_URL  ───────────▶ db: `kyoube` database
 │   └─ volume kyoubeai-home:/kyoubeai (board key, ~/.claude ~/.codex ~/.pi ~/.hermes, ~/.local, ~/.kyoube, project folders)
@@ -266,6 +267,10 @@ in the core against the versions on disk in the running image: a plain version b
 (upstream requires board approval for a capability escalation), so for Kyoube's own bundled plugins the
 bootstrap instead soft-uninstalls (`DELETE`, no `purge`, so plugin-scoped data survives) and re-installs
 the same path, which reactivates the same row under the new manifest.
+
+The entrypoint also starts `kyoube agent-rules --watch` in the background
+(`docker/bootstrap/src/commands/agent-rules.ts`), which keeps the agent working rules in force
+(`docs/agent-rules.md`).
 
 ### SDK `apiVersion` and the stable-contract rule
 
