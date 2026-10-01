@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { applyPatches, applyToText, coreVersionHint, expandGlob } from "../lib.mjs";
+import { applyPatches, applyToText, countMatches, coreVersionHint, expandGlob } from "../lib.mjs";
 import { CORE_VERSION, PATCHES, SKIP_HARNESS_LABEL } from "../patches.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -55,6 +55,22 @@ const TEST_GUARD_2026_916_1 =
   '            }\n' +
   '            await assertCanUpdateAgent(req, savedAgent);\n' +
   '            adapterConfigForTest = restoreRedactedAgentEnv(inputAdapterConfig, savedAgent.adapterConfig);\n';
+
+// The same route in core 2026.921.0-beta.1 (server/dist/routes/agents.js), which carries upstream 9335b7d: the
+// fix the adapter-test-unsaved-harness-switch patch makes, in upstream's own words.
+const UPSTREAM_FIX_2026_921_0_BETA_1 =
+  '            const canRestoreEnv = savedAgent.adapterType === type || providerAdapter === type;\n' +
+  '            // Permit testing a prospective adapter switch, but do not transfer\n' +
+  '            // hidden values from the saved adapter into an unrelated harness.\n' +
+  '            if (!canRestoreEnv && Object.values(parseObject(inputAdapterConfig.env)).some(value => {\n' +
+  '                const binding = asRecord(value);\n' +
+  '                return binding?.type === "plain" && binding.value === REDACTED_EVENT_VALUE;\n' +
+  '            })) {\n' +
+  '                throw unprocessable("Re-enter environment values when testing a different adapter");\n' +
+  '            }\n' +
+  '            adapterConfigForTest = canRestoreEnv\n' +
+  '                ? restoreRedactedAgentEnv(inputAdapterConfig, savedAgent.adapterConfig)\n' +
+  '                : inputAdapterConfig;\n';
 
 const CLAUDE_VERIFY_2026_916_1 =
   '            if (!token)\n' +
@@ -406,6 +422,69 @@ describe("adapter-test-unsaved-harness-switch", () => {
     expect(config.env.KEY).toEqual({ type: "plain", value: "saved-secret" });
     const viaRunner = await runGuard(patched, { savedType: "paperclip_runner", type: "claude_local", providerAdapter: "claude_local", env: {} });
     expect(viaRunner.config.env.KEY).toEqual({ type: "plain", value: "saved-secret" });
+  });
+});
+
+describe("an upstream-fix marker", () => {
+  // A patch with a marker for the upstream fix, and one file per test case.
+  const marked = {
+    id: "marked",
+    upstream: "https://github.com/paperclipai/paperclip/commit/0000000",
+    files: ["server/dist/x.js"],
+    pattern: /buggy\(\)/g,
+    replacement: "fixed()",
+    expect: 1,
+    upstreamFix: /upstreamFixed\(\)/g,
+  };
+  let root;
+  const write = async (text) => {
+    await mkdir(path.join(root, "server", "dist"), { recursive: true });
+    await writeFile(path.join(root, "server/dist/x.js"), text);
+  };
+  beforeEach(async () => { root = await mkdtemp(path.join(tmpdir(), "core-patches-marker-")); });
+  afterEach(async () => { await rm(root, { recursive: true, force: true }); });
+
+  it("skips the patch when the pattern matches nothing and the marker matches exactly once", async () => {
+    await write("a(); upstreamFixed(); b();");
+    const report = await applyPatches(root, [marked]);
+    expect(report).toEqual([{ id: "marked", matched: 0, expect: 1, files: [], skipped: "already fixed upstream" }]);
+    expect(await readFile(path.join(root, "server/dist/x.js"), "utf8")).toBe("a(); upstreamFixed(); b();");
+  });
+
+  it("fails when neither the pattern nor the marker matches", async () => {
+    await write("a(); b();");
+    await expect(applyPatches(root, [marked])).rejects.toThrow(/"marked" matched 0 time\(s\).*its upstream fix matched 0 time\(s\)/);
+  });
+
+  it("fails when the marker matches more than once", async () => {
+    await write("upstreamFixed(); upstreamFixed();");
+    await expect(applyPatches(root, [marked])).rejects.toThrow(/"marked" matched 0 time\(s\).*its upstream fix matched 2 time\(s\)/);
+  });
+
+  it("still applies the patch where the pattern matches, whatever the marker says", async () => {
+    await write("buggy(); upstreamFixed();");
+    const report = await applyPatches(root, [marked]);
+    expect(report).toEqual([{ id: "marked", matched: 1, expect: 1, files: ["server/dist/x.js"] }]);
+    expect(await readFile(path.join(root, "server/dist/x.js"), "utf8")).toBe("fixed(); upstreamFixed();");
+  });
+
+  it("adapter-test-unsaved-harness-switch recognises upstream 9335b7d in 2026.921.0-beta.1, and nothing else", () => {
+    expect(applyToText(UPSTREAM_FIX_2026_921_0_BETA_1, guardPatch).count).toBe(0);
+    expect(countMatches(UPSTREAM_FIX_2026_921_0_BETA_1, guardPatch.upstreamFix)).toBe(1);
+    // neither the stable core's guard nor this patch's own output is mistaken for the upstream fix
+    expect(countMatches(TEST_GUARD_2026_916_1, guardPatch.upstreamFix)).toBe(0);
+    expect(countMatches(applyToText(TEST_GUARD_2026_916_1, guardPatch).text, guardPatch.upstreamFix)).toBe(0);
+  });
+
+  it("a beta core that carries 9335b7d builds: that patch is skipped and logged, the rest still apply", async () => {
+    await writeFullCore(root);
+    await writeFile(path.join(root, "server/dist/routes/agents.js"), UPSTREAM_FIX_2026_921_0_BETA_1);
+    const { stdout } = await promisify(execFile)(process.execPath, [APPLY, "--root", root, "--report", "--dry-run"]);
+    expect(stdout).toContain("core-patches: adapter-test-unsaved-harness-switch: already fixed upstream");
+    const report = await applyPatches(root, PATCHES);
+    expect(report.find((entry) => entry.id === guardPatch.id)).toMatchObject({ skipped: "already fixed upstream" });
+    expect(report.filter((entry) => !entry.skipped).map((entry) => entry.matched)).toEqual(PATCHES.filter((entry) => entry !== guardPatch).map(() => 1));
+    expect(await readFile(path.join(root, "server/dist/routes/agents.js"), "utf8")).toBe(UPSTREAM_FIX_2026_921_0_BETA_1);
   });
 });
 

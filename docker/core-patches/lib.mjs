@@ -38,32 +38,50 @@ export function applyToText(text, patch) {
   return { text: out, count };
 }
 
+/** How many times `pattern` matches `text` (counted globally, whatever the pattern's own flags). */
+export function countMatches(text, pattern) {
+  const global = new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`);
+  return [...text.matchAll(global)].length;
+}
+
 /**
  * Applies every patch under `root`. Returns a report; throws when a patch did
  * not match exactly `expect` times — the build must stop, not ship a core
  * with a fix silently missing (0) or applied somewhere it was not meant for (>expect).
+ * The one exception: a patch whose pattern matches nothing while its
+ * `upstreamFix` pattern matches exactly once is skipped (`skipped:
+ * "already fixed upstream"` in the report), because the core carries the fix.
  */
 export async function applyPatches(root, patches, { dryRun = false } = {}) {
   const report = [];
   for (const patch of patches) {
     const files = (await Promise.all(patch.files.map((glob) => expandGlob(root, glob)))).flat();
     let total = 0;
+    let fixed = 0;
     const touched = [];
+    const pending = [];
     for (const file of files) {
       const before = await readFile(file, "utf8");
       const { text, count } = applyToText(before, patch);
+      if (patch.upstreamFix) fixed += countMatches(before, patch.upstreamFix);
       if (count === 0) continue;
       total += count;
       touched.push(path.relative(root, file));
-      if (!dryRun) await writeFile(file, text);
+      pending.push({ file, text });
+    }
+    if (total === 0 && patch.upstreamFix && fixed === 1) {
+      report.push({ id: patch.id, matched: 0, expect: patch.expect, files: [], skipped: "already fixed upstream" });
+      continue;
     }
     report.push({ id: patch.id, matched: total, expect: patch.expect, files: touched });
     if (total !== patch.expect) {
       throw new Error(
-        `core patch "${patch.id}" matched ${total} time(s) in ${files.length} candidate file(s), expected ${patch.expect}. ` +
-          `Either the core release changed this code (redo the patch) or it now carries the upstream fix (delete the patch): ${patch.upstream}`,
+        `core patch "${patch.id}" matched ${total} time(s) in ${files.length} candidate file(s), expected ${patch.expect}` +
+          (patch.upstreamFix ? ` (its upstream fix matched ${fixed} time(s), and only exactly 1 skips it)` : "") +
+          `. Either the core release changed this code (redo the patch) or it now carries the upstream fix (delete the patch): ${patch.upstream}`,
       );
     }
+    if (!dryRun) for (const { file, text } of pending) await writeFile(file, text);
   }
   return report;
 }

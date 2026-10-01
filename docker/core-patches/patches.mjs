@@ -9,6 +9,14 @@
  * that no longer has the bug — or that changed the code's shape — fails the
  * build with the patch's id, which is the cue to remove (or redo) it.
  *
+ * One exception keeps the weekly build against the core's pre-releases
+ * useful: a patch may declare `upstreamFix`, a pattern for the upstream fix
+ * itself in the compiled code. When the patch's own pattern matches nothing
+ * and `upstreamFix` matches exactly once, the core already carries the fix:
+ * the patch is skipped, and the build log says "<id>: already fixed upstream".
+ * Any other count still fails the build. The entry is still deleted at the
+ * first stable core that carries the fix.
+ *
  * Patterns are written against the compiled, minified bundle the image ships
  * (`ui/dist`), so they anchor on string literals and code shape, never on
  * minifier-chosen identifier names. The server's `server/dist` is compiled but
@@ -137,7 +145,10 @@ export const PATCHES = [
   // adapter being tested". Same change as upstream 9335b7d: test the submitted
   // config, and restore the saved agent's hidden env values only for the same
   // harness. Delete at the first stable core that carries 9335b7d (it is in
-  // 2026.921.0-beta.1).
+  // 2026.921.0-beta.1, which `upstreamFix` recognises: upstream's own
+  // `canRestoreEnv` guard, followed by its "Re-enter environment values"
+  // refusal; this patch names its variable kyoubeCanRestoreEnv, so the marker
+  // never matches the patched code).
   {
     id: "adapter-test-unsaved-harness-switch",
     title: "agents: Test works on a harness switch that is not saved yet",
@@ -152,5 +163,6 @@ export const PATCHES = [
       "await assertCanUpdateAgent(req, savedAgent);$1" +
       "adapterConfigForTest = kyoubeCanRestoreEnv ? restoreRedactedAgentEnv(inputAdapterConfig, savedAgent.adapterConfig) : inputAdapterConfig;",
     expect: 1,
+    upstreamFix: /\bconst canRestoreEnv = savedAgent\.adapterType === type \|\| providerAdapter === type;[\s\S]{0,600}?throw unprocessable\("Re-enter environment values when testing a different adapter"\);/g,
   },
 ];
