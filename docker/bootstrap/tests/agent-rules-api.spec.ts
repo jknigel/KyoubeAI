@@ -70,6 +70,19 @@ describe("createRulesApi", () => {
     expect(error).toMatchObject({ status: 404, route: `POST ${GUARD_PLUGIN_ROUTES.reconcile}` });
   });
 
+  it("reports the plugin not ready while the core answers its routes 503", async () => {
+    const statuses = [503, 404];
+    const { impl, seen } = fakeFetch(() => ({ status: statuses.shift() ?? 404, body: { error: "x" } }));
+    const client = api(impl);
+    expect(await client.pluginReady()).toBe(false);
+    expect(await client.pluginReady()).toBe(true);
+    // A GET to the POST-only route: the core refuses it before the worker sees it.
+    expect(seen.map((req) => `${req.method} ${req.url}`)).toEqual([
+      `GET http://app:3100${GUARD_PLUGIN_ROUTES.reconcile}`,
+      `GET http://app:3100${GUARD_PLUGIN_ROUTES.reconcile}`,
+    ]);
+  });
+
   it("rejects getGovernance when the response body is an array", async () => {
     const { impl } = fakeFetch(() => ({ status: 200, body: [] }));
     await expect(api(impl).getGovernance("c1")).rejects.toThrow(/no company/);

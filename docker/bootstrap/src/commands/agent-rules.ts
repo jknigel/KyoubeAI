@@ -8,6 +8,13 @@ import { readState, resolveStatePath, writeState } from "../agent-rules/state.js
 import { NO_KEY_EXIT_CODE } from "./ensure-plugins.js";
 
 export const PASS_INTERVAL_MS = 60_000;
+/**
+ * How often, and for how long, a pass waits for the plugin worker before it
+ * runs anyway and records what it meets. A worker starts within seconds; a
+ * disabled or broken plugin answers 503 too, and must not hold a pass for long.
+ */
+export const PLUGIN_POLL_MS = 2_000;
+export const PLUGIN_WAIT_MS = 30_000;
 
 /** `KYOUBE_AGENT_RULES=off` turns the loop off; anything else, unset included, leaves it on. */
 export function agentRulesEnabled(env: NodeJS.ProcessEnv): boolean {
@@ -37,6 +44,19 @@ const defaultDeps: RunAgentRulesDeps = {
 };
 
 const USAGE = "usage: kyoube agent-rules --once | --watch | off";
+
+/**
+ * The core reports healthy before its plugin loader has started the workers,
+ * and the entrypoint starts this loop at the same moment, so a first pass can
+ * meet a 503 that a few seconds would have cleared. That pass would then be
+ * what `kyoube doctor` shows until the next one, a minute later.
+ */
+async function waitForPlugin(api: RulesApi, sleep: (ms: number) => Promise<void>): Promise<void> {
+  for (let waited = 0; waited < PLUGIN_WAIT_MS; waited += PLUGIN_POLL_MS) {
+    if (await api.pluginReady()) return;
+    await sleep(PLUGIN_POLL_MS);
+  }
+}
 
 /**
  * Keeps the agent working rules (docs/agent-rules.md) in force: `--once` runs
@@ -87,6 +107,7 @@ export async function runAgentRules(
         // Pre-flight: verify the state file is writable before running the pass, so unwritable
         // state aborts before any remote write happens.
         await writeState(statePath, state);
+        await waitForPlugin(api, deps.sleep);
         const result = mode === "off" ? await revertPass(passDeps, state) : await applyPass(passDeps, state);
         let writeErrorLine = "";
         try {

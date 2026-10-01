@@ -37,6 +37,7 @@ class FakeApi implements RulesApi {
     return this.guard;
   }
   async revertGuard(companyId: string): Promise<GuardRevertReport> { this.calls.push(`unguard ${companyId}`); return { reverted: [], failures: [] }; }
+  async pluginReady() { return true; }
 }
 
 const deps = (api: RulesApi) => ({ api, now: () => NOW });
