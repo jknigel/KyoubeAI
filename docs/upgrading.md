@@ -285,7 +285,9 @@ tracked, so `bump-core.sh` cannot touch it) and `docker compose up -d --build`.
   The core changed a call the agent working rules rely on: resolver governance, agent authorization
   policies and grants, instructions bundles or decisions. The failure names the call. See
   [`agent-rules.md`](agent-rules.md), "After a core update". Never loosen the smoke's assertions to
-  make the bump pass.
+  make the bump pass. If the post-restart doctors in the smoke show `agent rules` failing with a 503
+  from `kyoube.agent-rules`, the core changed how it answers a plugin route before the worker runs;
+  see `pluginReady` in `docker/bootstrap/src/agent-rules/api.ts`.
 - **The core's own migrations run on first start** against the `kyoubeai` database, before the app
   serves anything. Give it time — the compose healthcheck allows a 180-second start period for
   exactly this — and read `docker compose logs -f app` rather than restarting into a half-migrated
