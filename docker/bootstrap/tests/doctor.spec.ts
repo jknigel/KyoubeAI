@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
-  LEGACY_ENV_KEYS, claudeCredentialDetail, exposureWarning, harnessChecks, harnessesInUseCheck, legacyEnvCheck, legacyHomeLinkCheck, skillsCheck, systemPackagesCheck,
+  LEGACY_ENV_KEYS, agentRulesChecks, claudeCredentialDetail, exposureWarning, harnessChecks, harnessesInUseCheck, legacyEnvCheck, legacyHomeLinkCheck, skillsCheck, systemPackagesCheck,
 } from "../src/commands/doctor.js";
 import { HARNESSES, type HarnessStatus } from "../src/harnesses.js";
+import { EMPTY_STATE, type AgentRulesState } from "../src/agent-rules/state.js";
+import type { PassReport } from "../src/agent-rules/report.js";
 
 const both = [{ slug: "kyoube-data", key: "plugin/kyoube-apps/kyoube-data", name: "Kyoube Data" }, { slug: "kyoube-apps", key: "plugin/kyoube-apps/kyoube-apps", name: "Kyoube Apps" }];
 
@@ -190,5 +192,49 @@ describe("claudeCredentialDetail", () => {
   it("says what the file is for when it is missing, and survives a broken file", () => {
     expect(claudeCredentialDetail(null, "/f")).toBe("not found (/f) — only agents without an AI connection use it");
     expect(claudeCredentialDetail("{", "/f")).toBe("present but unreadable (/f)");
+  });
+});
+
+describe("agentRulesChecks", () => {
+  const NOW = Date.parse("2026-10-01T10:00:00Z");
+  const pass = (overrides: Partial<PassReport> = {}): PassReport => ({
+    at: "2026-10-01T09:59:00.000Z",
+    mode: "apply",
+    failures: [],
+    companies: [{
+      companyId: "c1", name: "Acme", governance: "already", rulesUpdated: [], writes: 0, failures: [],
+      skipped: [{ agent: "Bot", reason: "it still uses the legacy prompt template" }],
+      guard: { managers: ["m"], updated: [], skipped: [], failures: [], selfTest: { status: "pass", detail: "ok" } },
+    }],
+    ...overrides,
+  });
+  const state = (lastPass: PassReport | null): AgentRulesState => ({ ...EMPTY_STATE, lastPass });
+
+  it("is ok and quiet when switched off", () => {
+    expect(agentRulesChecks({ KYOUBE_AGENT_RULES: "off" }, state(null), NOW)).toEqual([{ name: "agent rules", ok: true, detail: "off (KYOUBE_AGENT_RULES=off)" }]);
+  });
+
+  it("fails before the first pass", () => {
+    expect(agentRulesChecks({}, state(null), NOW)[0]).toMatchObject({ name: "agent rules", ok: false });
+  });
+
+  it("is ok for a fresh, clean pass and lists skipped agents on their own line", () => {
+    const [main, skipped] = agentRulesChecks({}, state(pass()), NOW);
+    expect(main).toEqual({ name: "agent rules", ok: true, detail: "in force in 1 company (self-test passed in 1) as of 2026-10-01T09:59:00.000Z" });
+    expect(skipped).toEqual({ name: "agent rules skipped", ok: true, detail: "Acme / Bot: it still uses the legacy prompt template" });
+  });
+
+  it("fails on a stale pass", () => {
+    expect(agentRulesChecks({}, state(pass({ at: "2026-10-01T09:50:00.000Z" })), NOW)[0]?.detail).toContain("more than 5 minutes ago");
+  });
+
+  it("fails on a recorded failure and names the first", () => {
+    const failing = pass();
+    failing.companies[0]!.failures = [{ step: "guard", error: "the core no longer accepts POST /x (404): gone" }, { step: "rules", agent: "Coder", error: "nope" }];
+    expect(agentRulesChecks({}, state(failing), NOW)[0]).toEqual({ name: "agent rules", ok: false, detail: "Acme: guard failed: the core no longer accepts POST /x (404): gone (and 1 more)" });
+  });
+
+  it("fails after off while the switch is still on", () => {
+    expect(agentRulesChecks({}, state(pass({ mode: "revert" })), NOW)[0]?.detail).toContain("removed at");
   });
 });
