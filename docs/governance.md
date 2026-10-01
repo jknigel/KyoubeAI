@@ -3,6 +3,9 @@
 Two independent gates decide whether an agent's call to a Kyoube tool actually does anything. Get
 both right before you hand an agent broad tool access:
 
+This page is about what an agent's tools may touch. How agents hand work to each other, and who
+approves what, is set by the agent working rules: [`agent-rules.md`](agent-rules.md).
+
 1. **Kyoube's own grant levels** (`none < read < write < schema`) decide whether the *plugin worker*
    accepts the call at all, for that company. This is enforced inside `kyoube.apps` on every request —
    there is no way around it from inside a tool call, and it is the same check whether the caller is a

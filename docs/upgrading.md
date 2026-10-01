@@ -242,7 +242,7 @@ and the `@paperclipai/plugin-sdk` dependency of every plugin — then reinstalls
 Then, in order:
 
 ```bash
-pnpm test           # unit suites for the bootstrap CLI and both plugins
+pnpm test           # unit suites for the bootstrap CLI and every plugin
 pnpm build          # every package builds against the new SDK
 bash scripts/smoke.sh   # the full docker end-to-end, 12-25 minutes
 ```
@@ -281,6 +281,11 @@ tracked, so `bump-core.sh` cannot touch it) and `docker compose up -d --build`.
   manifest in `plugins/*/src/manifest.ts`.
 - **The plugin host changed a bridge or route shape.** Usually surfaces as a plugin that installs
   but never reaches `ready`; the plugin's own log names the throw.
+- **The smoke's `agent rules` section fails, or `kyoube doctor` fails `agent rules` after the bump.**
+  The core changed a call the agent working rules rely on: resolver governance, agent authorization
+  policies and grants, instructions bundles or decisions. The failure names the call. See
+  [`agent-rules.md`](agent-rules.md), "After a core update". Never loosen the smoke's assertions to
+  make the bump pass.
 - **The core's own migrations run on first start** against the `kyoubeai` database, before the app
   serves anything. Give it time — the compose healthcheck allows a 180-second start period for
   exactly this — and read `docker compose logs -f app` rather than restarting into a half-migrated
