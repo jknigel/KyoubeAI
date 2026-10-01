@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { GovernancePrevious } from "./governance.js";
 import type { PassReport } from "./report.js";
@@ -51,4 +51,31 @@ export async function writeState(file: string, state: AgentRulesState): Promise<
   const temporary = `${file}.${process.pid}.tmp`;
   await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
   await rename(temporary, file);
+}
+
+/**
+ * Fails when the state file's directory cannot be written, without touching the file itself: a
+ * pass checks this before any remote write, and rewriting the file here could undo another pass's save.
+ */
+export async function assertStateWritable(file: string): Promise<void> {
+  await mkdir(path.dirname(file), { recursive: true });
+  const probe = `${file}.${process.pid}.probe`;
+  await writeFile(probe, "", { mode: 0o600 });
+  await rm(probe, { force: true });
+}
+
+/**
+ * Merges the governance values recorded on disk into this pass's, per company and per kind, with
+ * the value already on disk winning: the first value ever recorded for a kind is the one `off`
+ * must restore, whichever of two overlapping passes recorded it.
+ */
+export function mergeGovernancePrevious(
+  onDisk: AgentRulesState["governancePrevious"],
+  mine: AgentRulesState["governancePrevious"],
+): AgentRulesState["governancePrevious"] {
+  const merged: AgentRulesState["governancePrevious"] = {};
+  for (const companyId of new Set([...Object.keys(mine), ...Object.keys(onDisk)])) {
+    merged[companyId] = { ...(mine[companyId] ?? {}), ...(onDisk[companyId] ?? {}) };
+  }
+  return merged;
 }

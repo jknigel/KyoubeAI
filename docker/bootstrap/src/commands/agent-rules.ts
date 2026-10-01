@@ -4,7 +4,7 @@ import { resolveBoardApiKey, resolveBoardKeyPath } from "../key-store.js";
 import { createRulesApi, type RulesApi } from "../agent-rules/api.js";
 import { applyPass, revertPass } from "../agent-rules/pass.js";
 import { failureLines, summarize } from "../agent-rules/report.js";
-import { readState, resolveStatePath, writeState } from "../agent-rules/state.js";
+import { assertStateWritable, mergeGovernancePrevious, readState, resolveStatePath, writeState } from "../agent-rules/state.js";
 import { NO_KEY_EXIT_CODE } from "./ensure-plugins.js";
 
 export const PASS_INTERVAL_MS = 60_000;
@@ -104,16 +104,31 @@ export async function runAgentRules(
         const api = deps.createApi({ apiBase: config.paperclipApiUrl, apiKey });
         const passDeps = { api, now: deps.now };
         const state = await readState(statePath, deps.log);
-        // Pre-flight: verify the state file is writable before running the pass, so unwritable
-        // state aborts before any remote write happens.
-        await writeState(statePath, state);
+        // Pre-flight: unwritable state aborts the pass before any remote write happens. A probe
+        // rather than a rewrite of the file, which could undo a save another pass made since the read.
+        await assertStateWritable(statePath);
         await waitForPlugin(api, deps.sleep);
         const result = mode === "off" ? await revertPass(passDeps, state) : await applyPass(passDeps, state);
         let writeErrorLine = "";
+        const couldNotSave = (error: unknown) => {
+          writeErrorLine = `kyoube: agent rules: could not save ${statePath}: ${error instanceof Error ? error.message : String(error)}`;
+        };
+        let next = result.state;
+        if (mode !== "off") {
+          // After a restart the loop's first pass and install.sh/update.sh's --once overlap: keep the
+          // governance values the other one saved meanwhile. `off` saves its record as it is, so its
+          // deletions stick. A malformed file was already reported by the read above.
+          try {
+            const fresh = await readState(statePath, () => {});
+            next = { ...result.state, governancePrevious: mergeGovernancePrevious(fresh.governancePrevious, result.state.governancePrevious) };
+          } catch (readError) {
+            couldNotSave(readError);
+          }
+        }
         try {
-          await writeState(statePath, result.state);
+          await writeState(statePath, next);
         } catch (writeError) {
-          writeErrorLine = `kyoube: agent rules: could not save ${statePath}: ${writeError instanceof Error ? writeError.message : String(writeError)}`;
+          couldNotSave(writeError);
         }
         const summary = summarize(result.report);
         const failures = failureLines(result.report).join("\n");
