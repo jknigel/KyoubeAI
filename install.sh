@@ -174,11 +174,11 @@ main() {
     say "    the Kyoube plugins are already set up"
   else
     say "==> installing the Kyoube plugins: open the link below in the browser where you are signed in, and approve it"
-    dc_exec app kyoube setup || die "kyoube setup did not finish; run ./install.sh again to retry"
+    dc_exec_node app kyoube setup || die "kyoube setup did not finish; run ./install.sh again to retry"
   fi
 
   # 7. Check and finish.
-  dc_exec app kyoube doctor || warn "kyoube doctor reported a problem (above); ./install.sh is safe to run again"
+  dc_exec_node app kyoube doctor || warn "kyoube doctor reported a problem (above); ./install.sh is safe to run again"
   say ""
   say "KyoubeAI is running at $public"
   say "  Folder:  $KYOUBE_DIR"

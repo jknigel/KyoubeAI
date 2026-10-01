@@ -9,7 +9,8 @@ setup() {
   mkdir -p "$MARKS" "$STUB_BIN"
   # Answers the preflight questions, logs everything (and the image .env names at each build), and (when asked) fails
   # the first `compose up` or `compose build`, reports images as missing, or fails `pull`. An image that is there has the id
-  # $STUB_IMAGE_ID and was created at $STUB_IMAGE_CREATED (empty: no time to compare).
+  # $STUB_IMAGE_ID and was created at $STUB_IMAGE_CREATED (empty: no time to compare). The database lists the agents'
+  # harnesses as $STUB_AGENTS, and `kyoube harness missing` answers $STUB_MISSING.
   cat > "$STUB_BIN/docker" <<'EOF'
 #!/bin/sh
 echo "$*" >> "$STUB_LOG"
@@ -17,6 +18,8 @@ case "$*" in
   "info --format {{.Architecture}}") echo x86_64 ;;
   "info --format {{.MemTotal}}") echo 8000000000 ;;
   "version --format {{.Server.Version}}") echo 27.0.0 ;;
+  "compose exec -T db psql "*) [ -z "${STUB_AGENTS:-}" ] || echo "$STUB_AGENTS" ;;
+  "compose exec -T -u node app kyoube harness missing "*) [ -z "${STUB_MISSING:-}" ] || echo "$STUB_MISSING" ;;
   "compose up "*) if [ -n "${STUB_FAIL_UP:-}" ] && [ ! -e "$STUB_LOG.up" ]; then touch "$STUB_LOG.up"; exit 1; fi ;;
   "compose build "*)
     echo "$(sed -n 's/^KYOUBE_IMAGE=//p' .env):$(sed -n 's/^KYOUBE_VERSION=//p' .env)" >> "$STUB_LOG.builds"
@@ -853,4 +856,14 @@ stayed_put() {
   [ "$status" -eq 0 ]
   [ "$(git -C "$INST" rev-parse main)" = "$up1" ]
   [ "$(git -C "$INST" describe --tags --exact-match HEAD)" = v1.2.0 ]
+}
+
+@test "update.sh runs every kyoube command in the container as node" {
+  STUB_AGENTS='pi_local 1' STUB_MISSING=pi run_update --yes
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"agents use: pi_local 1"* ]]
+  grep -Fx "compose exec -T -u node app kyoube harness missing pi_local" "$STUB_LOG"
+  grep -Fx "compose exec -T -u node app kyoube harness install pi" "$STUB_LOG"
+  grep -Fx "compose exec -T -u node app kyoube doctor" "$STUB_LOG"
+  [ -z "$(grep 'kyoube ' "$STUB_LOG" | grep -v '^compose exec -T -u node app kyoube ' || true)" ]
 }

@@ -206,6 +206,11 @@ dc_exec() {
   if [ -t 0 ] && [ -t 1 ]; then docker compose exec "$@"; else docker compose exec -T "$@"; fi
 }
 
+# dc_exec_node SERVICE ARGS...: dc_exec as the `node` user, which the server and its agents run as. Every `kyoube`
+# command goes through it: an install as root would leave root-owned files in /kyoubeai/.local and ~/.npm that the
+# Terminal and the agents then cannot write.
+dc_exec_node() { dc_exec -u node "$@"; }
+
 # health_field NAME: one string field of the running app's /api/health, read from inside the container.
 health_field() {
   docker compose exec -T app curl -fsS http://127.0.0.1:3100/api/health 2>/dev/null \
