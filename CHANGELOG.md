@@ -4,7 +4,7 @@ All notable changes to KyoubeAI are recorded here, in terms of what changed for 
 building on it. The format is loosely [Keep a Changelog](https://keepachangelog.com/); versioning is
 [SemVer](https://semver.org/).
 
-## 1.1.0 - Unreleased
+## 1.1.0 - 2026-10-01
 
 ### Install and update
 
