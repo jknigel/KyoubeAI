@@ -346,6 +346,28 @@ for ADAPTER in claude_local pi_local hermes_local; do
   echo "    created agent for $ADAPTER"
 done
 
+echo "==> the patched Test route still refuses an agent of another company"
+# docker/core-patches changes the agent Test route (adapter-test-unsaved-harness-switch)
+# only after the route has found the agent: an agent of another company is still
+# refused, as the unpatched core refuses it (404 "Agent not found" from the
+# company check, or 403 from the access check). The second company is made here,
+# before the backup, so the restore and doctor's company counts include it.
+OTHER_COMPANY_ID="$(curl -fsS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -X POST "$BASE_URL/api/companies" --data '{"name":"Smoke Other Co"}' | jq -r '.id')"
+[[ -n "$OTHER_COMPANY_ID" && "$OTHER_COMPANY_ID" != "null" ]] || { echo "could not create the second company" >&2; exit 1; }
+OTHER_AGENT_ID="$(curl -fsS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -X POST "$BASE_URL/api/companies/$OTHER_COMPANY_ID/agents" \
+  --data '{"name":"smoke-other-claude","adapterType":"claude_local","adapterConfig":{"cwd":"/kyoubeai/workspaces/smoke-other"}}' | jq -r '.id')"
+[[ -n "$OTHER_AGENT_ID" && "$OTHER_AGENT_ID" != "null" ]] || { echo "could not create the second company's agent" >&2; exit 1; }
+for TEST_TYPE in claude_local codex_local; do
+  STATUS="$(curl -sS -o "$TMP/cross-company-test.json" -w '%{http_code}' -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -X POST \
+    "$BASE_URL/api/companies/$COMPANY_ID/adapters/$TEST_TYPE/test-environment" \
+    --data "{\"agentId\":\"$OTHER_AGENT_ID\",\"adapterConfig\":{\"cwd\":\"/kyoubeai/workspaces/smoke\"}}")"
+  [[ "$STATUS" == "403" || "$STATUS" == "404" ]] \
+    || { echo "Test on $TEST_TYPE in one company with another company's agent answered $STATUS, expected 403 or 404: $(cat "$TMP/cross-company-test.json")" >&2; exit 1; }
+done
+echo "    an agent of another company is still refused ($STATUS)"
+
 echo "==> the Studio design renders, signed in, and falls back without its plugin"
 # docker/theme proved its hooks exist in the bundle at build time; this asks a
 # real browser whether the design lands on this core: dark by default, the
