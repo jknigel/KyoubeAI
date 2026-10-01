@@ -182,23 +182,14 @@ offer_harnesses() {
   done
 }
 
-# release_image_repo: the image repository a release install runs; an install that built its own image moves to the published one.
+# release_image_repo: the image repository a release install runs; an install that built its own image (a local
+# repository, with no '/') moves to the published one.
 release_image_repo() {
   local repo
   repo="$(env_get .env KYOUBE_IMAGE)"
-  case "$repo" in ""|kyoubeai) repo="$KYOUBE_IMAGE_DEFAULT" ;; esac
+  case "$repo" in */*) ;; *) repo="$KYOUBE_IMAGE_DEFAULT" ;; esac
   printf '%s\n' "$repo"
 }
-
-# image_ref [FILE]: the image FILE (default .env) selects, as compose reads it (empty values mean kyoubeai:dev).
-image_ref() {
-  local image version
-  image="$(env_get "${1:-.env}" KYOUBE_IMAGE)"; version="$(env_get "${1:-.env}" KYOUBE_VERSION)"
-  printf '%s:%s\n' "${image:-kyoubeai}" "${version:-dev}"
-}
-
-# runs_source_build [FILE]: true when FILE (default .env) selects the image `docker compose build` makes, kyoubeai:dev.
-runs_source_build() { [ "$(image_ref "${1:-.env}")" = kyoubeai:dev ]; }
 
 # is_ancestor A B: true when commit A is part of B's history (or is B). The code a stack runs has to be, or the
 # "update" would put older or unrelated code on data a newer release migrated.
@@ -210,16 +201,6 @@ earlier_commit() {
   ref="$(git rev-parse -q --verify 'HEAD@{1}^{commit}' 2>/dev/null || true)"
   [ -n "$ref" ] && [ "$ref" != "$(git rev-parse HEAD)" ] && is_ancestor "$ref" HEAD || return 1
   printf '%s\n' "$ref"
-}
-
-# build_record: prints the commit .kyoube/built-commit says the image here was built from, when the record describes
-# this very image (same id) and the commit is still in this repository; status 1 otherwise.
-build_record() {
-  local id commit
-  id="$(docker image inspect -f '{{.Id}}' "$(image_ref)" 2>/dev/null </dev/null || true)"
-  commit="$(env_get "$KYOUBE_BUILT" commit)"
-  [ -n "$id" ] && [ -n "$commit" ] && [ "$(env_get "$KYOUBE_BUILT" image)" = "$id" ] && git cat-file -e "$commit^{commit}" 2>/dev/null || return 1
-  printf '%s\n' "$commit"
 }
 
 # iso_epoch TIMESTAMP: seconds since the epoch of an RFC 3339 time (2026-09-30T12:34:56.789Z, 2026-09-30T14:34:56+02:00);
@@ -248,10 +229,25 @@ iso_epoch() {
     }'
 }
 
-# source_image_behind: status 0 when the source image (kyoubeai:dev) is missing or was built before this checkout's
-# commit, with BEHIND_WHY set to the reason; status 1 when it is as new, or when the two times cannot be compared.
+# tag_replaced: status 0, with BEHIND_WHY set, when the source image's tag is missing or names a different image than
+# the stack's app container runs (another source install on this machine that uses the same tag rebuilt it, or a
+# build by hand): the next `docker compose up` would start that image on this stack's data. Status 1 otherwise.
+tag_replaced() {
+  local ref tag_id stack_id
+  ref="$(image_ref)"
+  tag_id="$(docker image inspect -f '{{.Id}}' "$ref" 2>/dev/null </dev/null)" \
+    || { BEHIND_WHY="the image $ref is not on this machine; rebuilding"; return 0; }
+  stack_id="$(stack_image_id)"
+  [ -n "$stack_id" ] && [ "$stack_id" != "$tag_id" ] || return 1
+  BEHIND_WHY="the image $ref has been rebuilt since this stack's app container was created (by another source install on this machine that uses the same tag, or by hand; give each install its own KYOUBE_IMAGE, docs/operations.md); rebuilding"
+}
+
+# source_image_behind: status 0 when the source image is missing, is not the one the app container runs (tag_replaced),
+# or was built before this checkout's commit, with BEHIND_WHY set to the reason; status 1 when it is as new, or when
+# the two times cannot be compared.
 source_image_behind() {
   local ref built committed
+  tag_replaced && return 0
   ref="$(image_ref)"
   built="$(docker image inspect -f '{{.Created}}' "$ref" 2>/dev/null </dev/null)" \
     || { BEHIND_WHY="the image $ref is not on this machine; rebuilding"; return 0; }
@@ -297,7 +293,7 @@ stack_position() {
       fi
     fi
   else
-    die "KYOUBE_VERSION=$stack and KYOUBE_IMAGE=$(env_get .env KYOUBE_IMAGE) in .env are neither a release (x.y.z) nor the source build (kyoubeai:dev), so update.sh cannot tell which code the stack runs; nothing was changed. Set KYOUBE_VERSION in .env to the release the stack runs (for example KYOUBE_VERSION=1.1.0 with KYOUBE_IMAGE=$KYOUBE_IMAGE_DEFAULT), then run ./update.sh again (./install.sh instead moves this install to the newest release, without a backup)"
+    die "KYOUBE_VERSION=$stack and KYOUBE_IMAGE=$(env_get .env KYOUBE_IMAGE) in .env are neither a release (x.y.z) nor the source build (KYOUBE_VERSION=dev with a local KYOUBE_IMAGE such as kyoubeai), so update.sh cannot tell which code the stack runs; nothing was changed. Set KYOUBE_VERSION in .env to the release the stack runs (for example KYOUBE_VERSION=1.1.0 with KYOUBE_IMAGE=$KYOUBE_IMAGE_DEFAULT; docker compose images shows it), then run ./update.sh again"
   fi
 }
 
@@ -415,10 +411,16 @@ update_edge() {
   stack_position edge
   case "$POS_KIND" in
     record)
-      # The image is exactly as new as the checkout when it was built from the commit the update moves to.
+      # The image is exactly as new as the checkout when it was built from the commit the update moves to, and is
+      # still the one its tag names (the next `docker compose up` starts whatever the tag names).
       if [ "$behind" = 0 ]; then
-        [ "$POS_COMMIT" != "$newcode" ] || { say "already up to date with $upstream"; return; }
-        why="the image was built from $(git rev-parse --short "$POS_COMMIT"), not from this checkout; rebuilding"
+        if [ "$POS_COMMIT" != "$newcode" ]; then
+          why="the image was built from $(short "$POS_COMMIT"), not from this checkout; rebuilding"
+        elif tag_replaced; then
+          why="$BEHIND_WHY"
+        else
+          say "already up to date with $upstream"; return
+        fi
       fi ;;
     guess)
       if [ "$behind" = 0 ]; then
