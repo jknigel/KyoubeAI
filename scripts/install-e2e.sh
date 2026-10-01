@@ -119,6 +119,8 @@ grep -q 'Update KyoubeAI v9.9.0 -> v9.9.1' "$WORK/update.log" || fail "update.sh
 grep -qx 'KYOUBE_E2E_MARKER=merged' .env || fail "the new setting was not merged into .env"
 grep -qx 'KYOUBE_VERSION=9.9.1' .env || fail "KYOUBE_VERSION was not moved to 9.9.1"
 grep -q 'agents use: pi_local 1' "$WORK/update.log" || { cat "$WORK/update.log" >&2; fail "update.sh did not find the pi agent in the database"; }
+# update.sh runs a fresh agent-rules pass just before its kyoube doctor, so the rules are in force.
+! grep -q '^FAIL agent rules' "$WORK/update.log" || { cat "$WORK/update.log" >&2; fail "kyoube doctor reported FAIL agent rules after the update"; }
 [ "$(docker compose exec -T -u node app sh -c 'command -v pi' | tr -d '\r')" = /kyoubeai/.local/bin/pi ] || fail "update.sh did not install pi for the pi agent"
 # Installed as node, or the Terminal and the agents could not write there until the next restart.
 PI_OWNERS="$(docker compose exec -T app stat -c %U /kyoubeai/.local/bin/pi /kyoubeai/.local/lib/node_modules | tr -d '\r' | sort -u)"
