@@ -7,6 +7,17 @@ BOOTSTRAP=/opt/kyoube/bootstrap/dist/kyoube.mjs
 home_dir="${PAPERCLIP_HOME:-/kyoubeai}"
 MARKER="$home_dir/.migrated-from-paperclip-home"
 
+# The image's PATH puts /kyoubeai/.local/bin, where people install their own
+# programs, first. Nothing before the server starts may run one of those: a
+# node, chown or gosu installed there would otherwise run here (as root, until
+# the core's entrypoint drops to node) and could stop the container starting.
+# This script and the core's entrypoint use the core image's own PATH; the
+# server gets the full one back, for its agents.
+SERVER_PATH="$PATH"
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+NODE=/usr/local/bin/node
+
 mkdir -p "$home_dir/kyoube" "$home_dir/.hermes"
 if [ "$(id -u)" -eq 0 ]; then
   chown node:node "$home_dir" "$home_dir/kyoube" "$home_dir/.hermes" 2>/dev/null || true
@@ -25,7 +36,7 @@ if [ "$(id -u)" -eq 0 ]; then
   elif [ -L /paperclip ]; then
     rm -f /paperclip
   fi
-  run_as_node() { gosu node "$@"; }
+  run_as_node() { /usr/sbin/gosu node "$@"; }
 else
   run_as_node() { "$@"; }
 fi
@@ -36,22 +47,29 @@ fi
 # trusts it under its own hostname, which the core already uses as the runtime
 # supervisor's host id, so nothing but the trust changes. Empty turns it off,
 # and a value set directly by an override wins.
+# The hostname is read from the environment Docker gives the container, as the
+# core reads it (process.env.HOSTNAME), not from a shell variable.
 if [ -z "${PAPERCLIP_TRUSTED_MCP_RUNTIME_HOST+set}" ]; then
   case "${KYOUBE_TRUSTED_RUNTIME_HOST-auto}" in
-    auto) export PAPERCLIP_TRUSTED_MCP_RUNTIME_HOST="${HOSTNAME:-local-host}" ;;
+    auto)
+      host_id="$(printenv HOSTNAME || true)"
+      export PAPERCLIP_TRUSTED_MCP_RUNTIME_HOST="${host_id:-local-host}"
+      ;;
     "") ;;
     *) export PAPERCLIP_TRUSTED_MCP_RUNTIME_HOST="$KYOUBE_TRUSTED_RUNTIME_HOST" ;;
   esac
 fi
 
-run_as_node node "$BOOTSTRAP" write-config
+run_as_node "$NODE" "$BOOTSTRAP" write-config
 
 if [ "${KYOUBE_BOOTSTRAP_DISABLED:-0}" != "1" ]; then
   # Double-fork through a subshell so the watcher is re-parented to PID 1 (tini)
   # and reaped there. Backgrounding it directly would make it a child of this
   # shell, whose PID the `exec` below hands to the core server — leaving a
   # long-lived node process the server never waits on.
-  ( run_as_node node "$BOOTSTRAP" ensure-plugins --watch & )
+  ( run_as_node "$NODE" "$BOOTSTRAP" ensure-plugins --watch & )
 fi
 
-exec docker-entrypoint.sh "$@"
+# The core's entrypoint (root: remaps and chowns, then gosu to node) runs on the
+# image's PATH like everything above; `env` hands the server the full one.
+exec /usr/local/bin/docker-entrypoint.sh /usr/bin/env PATH="$SERVER_PATH" "$@"
