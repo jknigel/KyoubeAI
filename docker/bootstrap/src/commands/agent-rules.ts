@@ -84,15 +84,24 @@ export async function runAgentRules(
         const api = deps.createApi({ apiBase: config.paperclipApiUrl, apiKey });
         const passDeps = { api, now: deps.now };
         const state = await readState(statePath, deps.log);
+        // Pre-flight: verify the state file is writable before running the pass, so unwritable
+        // state aborts before any remote write happens.
+        await writeState(statePath, state);
         const result = mode === "off" ? await revertPass(passDeps, state) : await applyPass(passDeps, state);
-        await writeState(statePath, result.state);
+        let writeErrorLine = "";
+        try {
+          await writeState(statePath, result.state);
+        } catch (writeError) {
+          writeErrorLine = `kyoube: agent rules: could not save ${statePath}: ${writeError instanceof Error ? writeError.message : String(writeError)}`;
+        }
         const summary = summarize(result.report);
         const failures = failureLines(result.report).join("\n");
+        const allFailures = failures + (writeErrorLine ? (failures ? "\n" : "") + writeErrorLine : "");
         if (mode !== "watch" || summary !== lastSummary) deps.log(summary);
-        if (failures && (mode !== "watch" || failures !== lastFailures)) deps.log(failures);
+        if (allFailures && (mode !== "watch" || allFailures !== lastFailures)) deps.log(allFailures);
         lastSummary = summary;
-        lastFailures = failures;
-        if (mode !== "watch") return failures ? 1 : 0;
+        lastFailures = allFailures;
+        if (mode !== "watch") return allFailures ? 1 : 0;
       }
     } catch (error) {
       const line = `kyoube: agent rules pass failed: ${error instanceof Error ? error.message : String(error)}`;

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -100,5 +100,14 @@ describe("runAgentRules", () => {
     // No recorded previous values, so the five people-only entries are removed: one governance write.
     expect(fake.calls).toEqual(["governance", "unguard"]);
     expect(lines[0]).toBe("kyoube: agent rules removed: 1 company, 1 change, 0 failures");
+  });
+
+  it("--once aborts before any pass if state file is unwritable", async () => {
+    const { deps, lines, home, fake } = await setup();
+    // Make .kyoube a regular file so mkdir fails
+    await writeFile(path.join(home, ".kyoube"), "blocked");
+    expect(await runAgentRules([], { once: true }, ENV, deps)).toBe(1);
+    expect(fake.calls).toEqual([]);
+    expect(lines.some((line) => line.includes("agent rules pass failed"))).toBe(true);
   });
 });
