@@ -15,12 +15,18 @@ Usage: ./update.sh [options]
   --yes               Answer yes to every question
 
 An update that stopped before it finished is continued by running the same
-command again (no second backup); --rollback undoes it instead.
+command again (no second backup); --rollback undoes it instead. A rollback
+that stopped part way is finished with ./update.sh --rollback. Without a
+terminal, --rollback needs --yes.
 EOF
 }
 
 STATE=.kyoube/update-state
 ENV_BEFORE=.kyoube/env.before-update
+# The .env a rollback replaced (settings changed after the update are in it).
+ENV_REPLACED=.kyoube/env.before-rollback
+# The branch an --edge update followed, kept after a rollback leaves the checkout detached.
+LAST_BRANCH=.kyoube/last-branch
 
 main() {
   KYOUBE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -50,8 +56,16 @@ main() {
   if [ "$mode" = edge ] && [ -n "$want" ]; then
     die "--edge follows the current branch and --version picks a release; use one of them"
   fi
-  [ -t 0 ] || YES=1
+  if [ ! -t 0 ]; then
+    # Nobody can be asked. An update is undone by --rollback; a rollback replaces data and is undone by nothing.
+    [ "$rollback" = 0 ] || [ "$YES" = 1 ] \
+      || die "--rollback replaces everything written since the update's backup, and there is no terminal to ask; run ./update.sh --rollback --yes to confirm"
+    YES=1
+  fi
   [ -f .env ] || die "no .env here; install first with ./install.sh"
+  if [ "$rollback" = 0 ] && [ "$(env_get "$STATE" rollback)" = 1 ]; then
+    die "a rollback did not finish: run ./update.sh --rollback"
+  fi
   docker_preflight
   pin_project_name
   if [ "$rollback" = 1 ]; then do_rollback; return; fi
@@ -89,24 +103,36 @@ run_backup() {
   [ -n "$BACKUP" ] || die "the backup did not say where it wrote; nothing was changed. Run bash scripts/backup.sh and check its output, then run ./update.sh again"
 }
 
-# save_state MODE FROM_LABEL TO_LABEL [REF]: the rollback point (REF, default the current commit); done=0 until the update has restarted on the new version.
+# save_state MODE FROM_LABEL TO_LABEL [REF]: the rollback point (REF, default the current commit); done=0 until the
+# update has restarted on the new version. STATE and its .env copy are written whole to temp files first; the old
+# STATE goes before either is renamed into place, so a run killed half way leaves no state that pairs one update's
+# rollback point with another's .env. Later changes to STATE go through env_set, which also renames a whole file.
 save_state() {
-  local ref="${4:-}"
+  local ref="${4:-}" state_tmp env_tmp
   [ -n "$ref" ] || ref="$(git rev-parse HEAD)"
   mkdir -p .kyoube
-  cp .env "$ENV_BEFORE"
-  : > "$STATE"
-  env_set "$STATE" mode "$1"
-  env_set "$STATE" from "$2"
-  env_set "$STATE" to "$3"
-  env_set "$STATE" "done" 0
-  env_set "$STATE" ref "$ref"
-  env_set "$STATE" head "$(git rev-parse HEAD)"
-  env_set "$STATE" branch "$(git symbolic-ref --quiet --short HEAD || true)"
-  env_set "$STATE" image "$(env_get .env KYOUBE_IMAGE)"
-  env_set "$STATE" version "$(env_get .env KYOUBE_VERSION)"
-  env_set "$STATE" backup "$BACKUP"
+  env_tmp="$(mktemp "$ENV_BEFORE.XXXXXX")"
+  state_tmp="$(mktemp "$STATE.XXXXXX")"
+  cp .env "$env_tmp"
+  {
+    printf 'mode=%s\n' "$1"
+    printf 'from=%s\n' "$2"
+    printf 'to=%s\n' "$3"
+    printf 'done=0\n'
+    printf 'ref=%s\n' "$ref"
+    printf 'head=%s\n' "$(git rev-parse HEAD)"
+    printf 'branch=%s\n' "$(git symbolic-ref --quiet --short HEAD || true)"
+    printf 'image=%s\n' "$(env_get .env KYOUBE_IMAGE)"
+    printf 'version=%s\n' "$(env_get .env KYOUBE_VERSION)"
+    printf 'backup=%s\n' "$BACKUP"
+  } > "$state_tmp"
+  rm -f "$STATE"
+  mv -f "$env_tmp" "$ENV_BEFORE"
+  mv -f "$state_tmp" "$STATE"
 }
+
+# short COMMIT: the abbreviated id git prints for COMMIT.
+short() { git rev-parse --short "$1" 2>/dev/null || printf '%s\n' "$1"; }
 
 merge_settings() { # LABEL
   local added unused example_core
@@ -331,7 +357,7 @@ update_release() {
   if [ "$POS_COMMIT" = "$newcode" ]; then
     # The stack already runs this code: nothing to back up or restart; only the checkout may need to match.
     if ! git tag --points-at HEAD 2>/dev/null | grep -Fx "$target" >/dev/null; then
-      git -c advice.detachedHead=false checkout --quiet "$target" \
+      git -c advice.detachedHead=false checkout --quiet --detach "refs/tags/$target" \
         || die "the stack already runs $target, but this checkout could not be switched to it; nothing else was changed. Fix what git reported (git status), then run ./update.sh again"
       say "    moved this checkout to $target"
     fi
@@ -362,8 +388,9 @@ update_release() {
 # release_apply TARGET FROM: everything after the backup; safe to run again (resume_update does).
 release_apply() {
   local target="$1" from="$2"
+  # refs/tags/: a local branch with the release's name never takes the checkout.
   if ! git tag --points-at HEAD 2>/dev/null | grep -Fx "$target" >/dev/null; then
-    git -c advice.detachedHead=false checkout --quiet "$target" \
+    git -c advice.detachedHead=false checkout --quiet --detach "refs/tags/$target" \
       || die "could not switch this checkout to $target; nothing else was changed. Fix what git reported and run ./update.sh again to continue, or ./update.sh --rollback to undo"
   fi
   merge_settings "${target#v}"
@@ -375,8 +402,11 @@ release_apply() {
 }
 
 update_edge() {
-  local branch upstream behind from to newcode newlabel why=""
-  branch="$(git symbolic-ref --quiet --short HEAD)" || die "--edge follows a branch, but this checkout is not on one (a release tag or a commit is checked out); git checkout main first"
+  local branch upstream behind from to newcode newlabel why="" recorded
+  if ! branch="$(git symbolic-ref --quiet --short HEAD)"; then
+    recorded="$(env_get "$STATE" branch)"; [ -n "$recorded" ] || recorded="$(env_get "$LAST_BRANCH" branch)"
+    die "--edge follows a branch, but this checkout is not on one (a release tag or a commit is checked out); git checkout ${recorded:-<your branch>} first${recorded:+ (the branch the last --edge update followed)}"
+  fi
   upstream="$(git rev-parse --abbrev-ref '@{u}' 2>/dev/null)" || die "branch $branch has no upstream to pull from; git branch --set-upstream-to origin/$branch"
   git fetch --quiet || die "could not fetch from origin; check the network and run ./update.sh --edge again"
   behind="$(git rev-list --count "HEAD..@{u}")" || die "could not compare $branch with $upstream; run git status"
@@ -426,9 +456,13 @@ update_edge() {
 
 # edge_apply FROM: everything after the backup; safe to run again (resume_update does).
 edge_apply() {
-  local from="$1" pending started
+  local from="$1" pending started branch
   # The fast-forward is still to do while the branch sits where the update started (ref is the rollback point, which can be earlier).
   started="$(env_get "$STATE" head)"; [ -n "$started" ] || started="$(env_get "$STATE" ref)"
+  branch="$(env_get "$STATE" branch)"
+  # A resume builds what is checked out, so the checkout must not have gone back past where the update started.
+  is_ancestor "$started" HEAD \
+    || die "this checkout ($(short HEAD)) does not contain $(short "$started"), where the unfinished update started, so resuming it would build older or different code; nothing was changed. Check out ${branch:-the branch} at $(short "$started") or later (git checkout ${branch:-<branch>}), then run ./update.sh --edge to resume, or ./update.sh --rollback to undo the update"
   if [ "$(git rev-parse HEAD)" = "$started" ]; then
     pending="$(git rev-list --count "HEAD..@{u}")" || die "could not compare this branch with its upstream; run git status"
     if [ "$pending" != 0 ]; then
@@ -436,6 +470,8 @@ edge_apply() {
         || die "git merge --ff-only failed; the code was not changed. Fix what git reported (git status), then run ./update.sh --edge again to continue, or ./update.sh --rollback to undo"
     fi
   fi
+  # Where the update left the branch: a rollback moves the branch back only while it is still here.
+  [ -n "$(env_get "$STATE" after)" ] || env_set "$STATE" after "$(git rev-parse HEAD)"
   if ! runs_source_build; then
     say "    switching this install from the published image to a source build"
     env_set .env KYOUBE_IMAGE kyoubeai
@@ -465,17 +501,23 @@ resume_update() {
 }
 
 do_rollback() {
-  local mode ref branch backup from again previous head where=""
+  local mode ref branch backup from again previous sums notes=""
   [ -f "$STATE" ] || die "there is no update to roll back. To restore any backup: bash scripts/restore.sh backups/<timestamp>"
   mode="$(env_get "$STATE" mode)"; ref="$(env_get "$STATE" ref)"; branch="$(env_get "$STATE" branch)"
   backup="$(env_get "$STATE" backup)"; from="$(env_get "$STATE" from)"
   [ -n "$ref" ] && [ -n "$backup" ] && [ -f "$ENV_BEFORE" ] \
     || die "$STATE is incomplete. To restore a backup by hand: bash scripts/restore.sh backups/<timestamp>"
   [ -d "$backup" ] || die "the backup taken before the update ($backup) is gone; restore another with bash scripts/restore.sh <backup dir>"
-  from="${from:-$ref}"
+  from="${from:-$(short "$ref")}"
   git diff --quiet HEAD -- || die "tracked files have local changes; stash them (git stash) and run again"
+  # Before anything stops: a backup that does not match its checksums would leave neither the update nor the data
+  # from before it.
+  sums="$(sha256_check "$backup" 2>&1)" || {
+    printf '%s\n' "$sums" >&2
+    die "the backup $backup does not match its SHA256SUMS (above), so it cannot be restored safely; nothing was changed. To restore another backup by hand: bash scripts/restore.sh <backup dir>"
+  }
   say "Roll back to $from and restore $backup."
-  say "Everything written since that backup (tasks, data, files) is replaced."
+  say "Everything written since that backup (tasks, data, files) is replaced, and .env goes back to its copy from before the update."
   confirm "Roll back?" || { say "Nothing was changed."; exit 1; }
   # A published image is never rebuilt here (a build would tag source code with the release's name);
   # make sure it is on this machine before anything is stopped.
@@ -486,40 +528,79 @@ do_rollback() {
       docker pull "$previous" || die "could not download $previous, the image this rollback returns to; nothing was changed. Check the network, then run ./update.sh --rollback again"
     fi
   fi
-  # A step that fails leaves $STATE in place, so the same command continues.
+  # A step that fails leaves $STATE in place, marked rollback=1: every run but --rollback then refuses, so nothing
+  # resumes the update or backs up and boots the half-restored data; ./update.sh --rollback continues.
   again="Fix what is reported above, then run ./update.sh --rollback again."
+  env_set "$STATE" rollback 1 || die "could not write $STATE; nothing was changed"
   docker compose stop app || die "could not stop the app. $again"
   if [ "$mode" = edge ] && [ -n "$branch" ]; then
-    # The branch only goes back to where it stood before the update (undoing the update's own fast-forward, which may be
-    # nothing); commits the update never touched stay on it. The code the stack ran is checked out detached.
-    head="$(env_get "$STATE" head)"; [ -n "$head" ] || head="$ref"
-    git checkout --quiet "$branch" || die "could not switch back to branch $branch. $again"
-    git reset --quiet --keep "$head" || die "could not move $branch back to ${head}. $again"
-    if [ "$ref" != "$head" ]; then
-      where="$ref"
-      if is_release_version "${from#v}" && [ "$(git rev-parse -q --verify "refs/tags/$from^{commit}" 2>/dev/null || true)" = "$ref" ]; then where="$from"; fi
-      git -c advice.detachedHead=false checkout --quiet "$where" || die "could not switch this checkout to ${where}. $again"
-    fi
+    rollback_branch "$branch" "$ref" "$from"
   else
-    git -c advice.detachedHead=false checkout --quiet "$ref" || die "could not switch this checkout back to ${ref}. $again"
+    git -c advice.detachedHead=false checkout --quiet --detach "$ref" || die "could not switch this checkout back to $(short "$ref"). $again"
+  fi
+  # .env goes back wholesale; the one it replaces keeps any setting changed after the update. A second run finds .env
+  # already restored and leaves that copy alone.
+  if ! cmp -s .env "$ENV_BEFORE"; then
+    cp .env "$ENV_REPLACED" || die "could not keep a copy of .env as $ENV_REPLACED. $again"
+    env_set "$STATE" env_replaced 1 || die "could not write $STATE. $again"
   fi
   cp "$ENV_BEFORE" .env || die "could not restore .env from $ENV_BEFORE. $again"
   if [ "$mode" = edge ] && runs_source_build; then
     docker compose build app || die "the build of the previous code failed. $again"
     record_source_build "$(image_ref)"
   fi
-  # Recreate the app container on the old image without starting it, so the
-  # new version never boots onto the restored data; restore.sh starts it.
-  docker compose up -d --no-build --no-start app || die "could not recreate the app on the previous image. $again"
+  # restore.sh needs the database running. Then the app container is recreated on the old image without starting it
+  # (and without touching other services), so the new version never boots onto the restored data; restore.sh starts it.
+  docker compose up -d --no-build --no-deps --wait --wait-timeout 120 db || die "could not start the database. $again"
+  docker compose up -d --no-build --no-deps --no-start app || die "could not recreate the app on the previous image. $again"
   bash scripts/restore.sh "$backup" || die "the restore failed, so the data may be half restored. $again"
   docker compose up -d --no-build --wait --wait-timeout 300 \
     || die "KyoubeAI did not come back healthy after the rollback; see docker compose logs app. $again"
-  dc_exec app kyoube doctor || true
+  dc_exec_node app kyoube doctor || true
+  if [ "$(env_get "$STATE" env_replaced)" = 1 ]; then
+    notes="${notes:+$notes
+}    the .env this rollback replaced is kept as $ENV_REPLACED; copy back any setting you changed after the update"
+  fi
   rm -f "$STATE" "$ENV_BEFORE"
   say "rolled back to $from"
-  if [ -n "$where" ]; then
-    say "    this checkout is at $where, not on a branch; $branch keeps its own commits. To follow it again: git checkout $branch"
+  [ -z "$notes" ] || say "$notes"
+}
+
+# rollback_branch BRANCH REF FROM: puts the checkout of an --edge update back on REF, the code the stack ran before it.
+# BRANCH goes back to where it stood before the update (head=) only while it is still where the update left it
+# (after=): that undoes the update's own fast-forward, which may be nothing, and keeps every commit it had before.
+# Commits made on it after the update are never dropped: then it is left alone. REF is checked out detached unless it
+# is the branch's own tip; a release's tag is only its label. Sets `notes` (do_rollback's) to what to tell the user, and
+# records BRANCH in LAST_BRANCH while the checkout is detached, so a later --edge refusal can name it.
+rollback_branch() {
+  local branch="$1" ref="$2" from="$3" head after tip label
+  head="$(env_get "$STATE" head)"; [ -n "$head" ] || head="$ref"
+  after="$(env_get "$STATE" after)"
+  tip="$(git rev-parse -q --verify "refs/heads/$branch^{commit}" 2>/dev/null || true)"
+  label="$(short "$ref")"
+  if is_release_version "${from#v}" && [ "$(git rev-parse -q --verify "refs/tags/$from^{commit}" 2>/dev/null || true)" = "$ref" ]; then label="$from"; fi
+  if [ -n "$tip" ] && { [ "$tip" = "$head" ] || [ "$tip" = "$after" ]; }; then
+    if [ "$tip" != "$head" ]; then
+      git checkout --quiet "$branch" || die "could not switch back to branch $branch. $again"
+      git reset --quiet --keep "$head" || die "could not move $branch back to $(short "$head"). $again"
+    fi
+    if [ "$ref" = "$head" ]; then
+      git checkout --quiet "$branch" || die "could not switch back to branch $branch. $again"
+      return 0
+    fi
+    git -c advice.detachedHead=false checkout --quiet --detach "$ref" || die "could not switch this checkout to ${label}. $again"
+    notes="    this checkout is at $label, not on a branch; $branch keeps its own commits. To follow it again: git checkout $branch"
+  else
+    git -c advice.detachedHead=false checkout --quiet --detach "$ref" || die "could not switch this checkout to ${label}. $again"
+    if [ -z "$tip" ]; then
+      notes="    branch $branch no longer exists; this checkout is at $label, not on a branch"
+    elif [ -n "$after" ] && is_ancestor "$after" "$tip"; then
+      notes="    $branch has commits made after the update; left it at $(short "$tip"); this checkout is at $label, not on a branch. To follow it again: git checkout $branch"
+    else
+      notes="    $branch has moved since the update; left it at $(short "$tip"); this checkout is at $label, not on a branch. To follow it again: git checkout $branch"
+    fi
   fi
+  [ -z "$tip" ] || printf 'branch=%s\n' "$branch" > "$LAST_BRANCH" || true
 }
 
 main "$@"
