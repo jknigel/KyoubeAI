@@ -1,0 +1,54 @@
+import type { PaperclipPluginManifestV1, PluginApiRouteDeclaration } from "@paperclipai/plugin-sdk";
+
+export const PLUGIN_ID = "kyoube.agent-rules";
+export const PLUGIN_VERSION = "0.1.0";
+
+function boardRoute(routeKey: string, path: string): PluginApiRouteDeclaration {
+  return {
+    routeKey,
+    method: "POST",
+    path,
+    auth: "board",
+    capability: "api.routes.register",
+    companyResolution: { from: "body", key: "companyId" },
+  };
+}
+
+/**
+ * Board-only. `kyoube agent-rules` calls reconcile for every company on each
+ * pass, and revert on `kyoube agent-rules off`. Each request runs inside a
+ * host-issued invocation scoped to the body's company, which the
+ * authorization and state host calls need; the worker's own start-up code has
+ * no such scope.
+ */
+export const API_ROUTES: PluginApiRouteDeclaration[] = [
+  boardRoute("guard.reconcile", "/reconcile"),
+  boardRoute("guard.revert", "/revert"),
+];
+
+// `minimumHostVersion` is deliberately absent, for the reason recorded in the
+// terminal plugin's manifest: core 2026.831.1 (still in 2026.916.1) compares it
+// against a host version it never sets, so any minimum would reject the install.
+const manifest: PaperclipPluginManifestV1 = {
+  id: PLUGIN_ID,
+  apiVersion: 1,
+  version: PLUGIN_VERSION,
+  displayName: "Kyoube Agent Rules",
+  description: "Keeps work from moving up to a manager agent without a person's decision: manager agents are protected, and each manager may assign only within its own team.",
+  author: "KyoubeAI",
+  categories: ["automation"],
+  capabilities: [
+    "api.routes.register",
+    "agents.read",
+    "authorization.policies.read",
+    "authorization.policies.write",
+    "authorization.grants.read",
+    "authorization.grants.write",
+    "plugin.state.read",
+    "plugin.state.write",
+  ],
+  entrypoints: { worker: "./dist/worker.js" },
+  apiRoutes: API_ROUTES,
+};
+
+export default manifest;
