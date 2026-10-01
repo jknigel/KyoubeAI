@@ -120,12 +120,12 @@ export async function reconcileGuard(port: GuardPort, companyId: string): Promis
 
     try {
       const grants = await port.listGrants(companyId, agent.id);
-      const next = desiredGrants(grants, agent.id, isManager);
+      const next = isManager ? desiredGrants(grants, agent.id, true) : desiredGrants(grants, agent.id, false).concat(grants.filter((grant) => !record.scoped.includes(agent.id) && isOwnTeamGrant(grant, agent.id)));
       let applied = true;
       if (!sameGrants(grants, next)) {
         const planned: GuardRecord = {
           ...record,
-          scoped: isManager ? sortedUnique([...record.scoped, agent.id]) : record.scoped,
+          scoped: isManager && !grants.some((grant) => isOwnTeamGrant(grant, agent.id)) ? sortedUnique([...record.scoped, agent.id]) : record.scoped,
           broadRemoved: grants.some(isBroadAssign) ? sortedUnique([...record.broadRemoved, agent.id]) : record.broadRemoved,
         };
         applied = await remember(agent, planned);
@@ -144,21 +144,23 @@ export async function reconcileGuard(port: GuardPort, companyId: string): Promis
     if (wrote) report.updated.push(agent.id);
   }
 
-  report.selfTest = await selfTest(port, companyId, agents);
+  const excluded = new Set([...report.skipped.map((note) => note.agentId), ...report.failures.map((failure) => failure.agentId)]);
+  report.selfTest = await selfTest(port, companyId, agents, excluded);
   return report;
 }
 
 /**
  * Asks the core's own assignment check whether the guardrail holds on the core
  * that is running: a report may not assign to its manager, and the manager may
- * still assign to the report.
+ * still assign to the report. Skips manager ids in the excluded set (e.g., managers
+ * the guardrail explicitly skipped).
  */
-export async function selfTest(port: GuardPort, companyId: string, agents: AgentRow[]): Promise<SelfTest> {
+export async function selfTest(port: GuardPort, companyId: string, agents: AgentRow[], excluded: ReadonlySet<string> = new Set()): Promise<SelfTest> {
   const byId = new Map(agents.map((row) => [row.id, row]));
   const pair = [...agents]
     .sort((a, b) => a.id.localeCompare(b.id))
     .map((report) => ({ report, manager: report.reportsTo ? byId.get(report.reportsTo) : undefined }))
-    .find(({ report, manager }) => manager !== undefined && SELF_TEST_STATUSES.has(report.status) && SELF_TEST_STATUSES.has(manager.status));
+    .find(({ report, manager }) => manager !== undefined && !excluded.has(manager.id) && SELF_TEST_STATUSES.has(report.status) && SELF_TEST_STATUSES.has(manager.status));
   const report = pair?.report;
   const manager = pair?.manager;
   if (!report || !manager) return { status: "not_applicable", detail: "no active manager with an active direct report" };
