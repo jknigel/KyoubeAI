@@ -76,6 +76,7 @@ services:
       # Set to 1 in .env to stop the entrypoint from starting the
       # `kyoube ensure-plugins --watch` background watcher (see .env.example).
       KYOUBE_BOOTSTRAP_DISABLED: ${KYOUBE_BOOTSTRAP_DISABLED:-}
+      KYOUBE_AGENT_RULES: ${KYOUBE_AGENT_RULES:-on}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
