@@ -231,7 +231,7 @@ each plugin's own dependency:
 
 ### Core patches
 
-The image is the pinned core, unmodified in behaviour — with one bounded exception.
+The image is the pinned core, rebranded and themed, with a short, bounded list of behaviour fixes.
 `docker/core-patches/patches.mjs` carries fixes to upstream bugs that had to ship here first. In 1.1 it
 has seven: five in the served UI (the first-run wizard's "Skip for now" and a pi transcript display fix)
 and two in the compiled server code: `anthropic-signin-setup-token` (the command Claude subscription
@@ -242,7 +242,10 @@ on its way upstream (each entry names its issue or PR). A
 pattern anchors on the compiled bundle's string literals and code shape (never a minifier's
 identifier names) and must match exactly the declared number of times, so a core bump that changes
 that code or already carries the fix fails the build with the patch's id — the cue to delete the
-entry. The list is meant to be empty; `CONTRIBUTING.md` ("Never patch the core") has the rules, and
+entry. The one exception: an entry may also declare the shape of the upstream fix (`upstreamFix`), and
+on a core that carries it exactly once the entry is skipped with `<id>: already fixed upstream` in the
+build log, so the weekly build against the core's pre-releases keeps working; the entry is still deleted
+at the first stable core that carries the fix. The list is meant to be empty; `CONTRIBUTING.md` ("Never patch the core") has the rules, and
 `docs/upgrading.md` what to do when the step fails at a bump.
 
 ### Plugin hot reload

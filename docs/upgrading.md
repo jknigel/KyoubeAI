@@ -77,8 +77,11 @@ that is not a failure, but `doctor` will not call it `ready` either.
 1.1 adds `./install.sh` and `./update.sh`, takes the agent harnesses out of the image, and gives the
 Terminal `sudo`. `./update.sh` takes the backup for you.
 
-- **Update with `./update.sh`, from the new checkout.** A 1.0 checkout has no `update.sh`, so check out the
-  release first. The script finds which release the stack still runs from `KYOUBE_VERSION` in `.env`:
+- **Update with `./update.sh`, from the new checkout.** A 1.0 checkout has no `update.sh`, so check out
+  the release first. The script finds which release the stack still runs from `KYOUBE_VERSION` in
+  `.env`.
+
+  An install on the published image (`KYOUBE_IMAGE=ghcr.io/jknigel/kyoubeai` in `.env`):
 
   ```bash
   git fetch --tags
@@ -96,17 +99,22 @@ Terminal `sudo`. `./update.sh` takes the backup for you.
   itself and checks out the next release when there is one. `./update.sh --edge` needs a branch, so run
   `git checkout main` (or your branch) first if you switch to it.
 
-  An install built from source (`docker compose up -d --build`) brings the new code with `git pull` and
-  then runs `./update.sh --edge`. It sees that the source image is older than the checkout, takes the same
-  backup and rebuilds. A 1.0 build left no record of the commit it was built from (1.1 keeps one in
-  `.kyoube/built-commit`), so the rollback point is where the branch stood before the pull; if no earlier
-  position is known, the script says that `--rollback` will return the data but not the older code.
+  An install built from source (`docker compose up -d --build`, `KYOUBE_VERSION=dev` in `.env`) brings
+  the new code with `git pull` and then runs `./update.sh --edge`. It sees that the source image is older
+  than the checkout, takes the same backup and rebuilds. A 1.0 build left no record of the commit it was
+  built from (1.1 keeps one in `.kyoube/built-commit`), so the rollback point is where the branch stood
+  before the pull; if no earlier position is known, the script says that `--rollback` will return the
+  data but not the older code.
 
   The script refuses, before it changes anything, when the code the stack runs is not part of the history
   of the code it would move to (a source build newer than the release, for one), or when `KYOUBE_VERSION`
   in `.env` is neither a release nor `dev`; its message says what to check out or set first.
-  `./install.sh` also works on an existing install and keeps the `.env`, the data and the plugins, but it
-  takes no backup and records no rollback point.
+  Re-running `./install.sh` repairs the version you have; moving to another version is `./update.sh`.
+  On an install that has data, `./install.sh` refuses, before it changes anything, to switch the
+  checkout, `KYOUBE_IMAGE` or `KYOUBE_VERSION`, or to build other code than the source build's.
+
+  Two source installs on one machine each need their own `KYOUBE_IMAGE` in `.env`
+  ([docs/operations.md](operations.md#two-source-installs-on-one-machine)).
 - **pi and Hermes Agent are no longer in the image**, and Claude Code is no longer pinned (the core
   image keeps its own copy as a fallback). `./update.sh` shows which harnesses your agents use, and right
   after the restart offers to install any the new image lacks (`kyoube harness install pi`, `hermes`,
@@ -120,6 +128,11 @@ Terminal `sudo`. `./update.sh` takes the backup for you.
   has local changes, so move edits you made to `docker-compose.yml` there first.
 - **`./update.sh` keeps `KYOUBE_CORE_VERSION` in `.env` in step with `.env.example`**, with or without
   `--edge`, so you no longer copy the core pin by hand. `--edge` also fast-forwards the branch.
+- **Public instances get the trusted runtime host.** `KYOUBE_TRUSTED_RUNTIME_HOST=auto`, the new default,
+  turns on server-host sign-in for subscription connections in Connections and local stdio MCP tools on
+  an instance with `KYOUBE_DEPLOYMENT_EXPOSURE=public`; a private instance is unaffected.
+  [SECURITY.md](../SECURITY.md) ("Trusted runtime host") says what that trusts. To turn it off, set
+  `KYOUBE_TRUSTED_RUNTIME_HOST=` (empty) in `.env` and run `docker compose up -d`.
 
 ## Moving an install from core 2026.831.1
 
@@ -255,7 +268,9 @@ tracked, so `bump-core.sh` cannot touch it) and `docker compose up -d --build`.
   is a fix to an upstream bug that shipped here first; the new core either carries the upstream fix
   (delete the entry — that is the intended outcome) or changed the code's shape (check the upstream
   file the entry names; redo the pattern only if the bug is still there). Never loosen a pattern to
-  make the build pass.
+  make the build pass. An entry that declares its upstream fix (`upstreamFix`) does not stop the build
+  on a core that carries that fix: the log says `<id>: already fixed upstream`, and the entry is
+  deleted at the bump all the same.
 - **The image build stops at the `theme` step** with a line naming a text rule, an anchor, a sidebar
   section or a token (for example `text rule "home-sidebar-label" matched 0 time(s)` or
   `sidebar section "organization" changed: added [/reports]`). The core moved something the Studio
@@ -275,12 +290,21 @@ tracked, so `bump-core.sh` cannot touch it) and `docker compose up -d --build`.
 
 Reverting the code is easy; reverting a database is not.
 
-After `./update.sh`, `./update.sh --rollback` does it for you: it stops the app, puts the checkout and
-`.env` back as they were before that update, restores the backup the update took, starts the stack and
-runs `kyoube doctor`. After an `--edge` update a branch only goes back to where it stood, keeping its own
-commits. If the stack ran older code than the branch's tip, that code is checked out detached, and the
-command says how to return to the branch. It undoes the last update only, and everything written since
-that backup is replaced. The steps below are for everything else.
+After `./update.sh`, `./update.sh --rollback` does it for you. It checks the update's backup against its
+`SHA256SUMS` before anything stops, then stops the app, puts the checkout and `.env` back as they were
+before that update, restores the backup, starts the stack and runs `kyoube doctor`. It undoes the last
+update only, and everything written since that backup is replaced. The `.env` it replaces is kept as
+`.kyoube/env.before-rollback`, so a setting you changed after the update can be copied back. Without a
+terminal it needs `--yes`.
+
+After an `--edge` update, a branch the update fast-forwarded goes back to where it stood, keeping the
+commits it had before. A branch with commits made after the update is left where it is. The code the
+stack ran is checked out, detached when it is not the branch's tip, and the command says where the
+branch and the checkout are and how to return to the branch.
+
+A rollback that stops part way (a failed restore, for one) is finished by running
+`./update.sh --rollback` again; until then every other `./update.sh` refuses, so nothing backs up or
+starts on the half-restored data. The steps below are for everything else.
 
 ```bash
 git revert <the bump commit>       # or: git checkout <previous tag>

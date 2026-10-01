@@ -161,7 +161,7 @@ directory somewhere else — another machine, object storage, an external disk �
 ```bash
 rsync -a --delete /var/backups/kyoubeai/ backup-host:/srv/kyoubeai-backups/
 # on the other side, before you trust it:
-cd /srv/kyoubeai-backups/20260906T031700Z && sha256sum -c SHA256SUMS
+cd /srv/kyoubeai-backups/20260906T031700Z && sha256sum -c SHA256SUMS   # on macOS: shasum -a 256 -c SHA256SUMS
 ```
 
 `SHA256SUMS` uses relative names precisely so it still verifies after the directory has been moved.
@@ -179,7 +179,8 @@ about to overwrite before it touches anything.
 
 It runs in this order, and the order matters:
 
-1. `sha256sum -c SHA256SUMS`, then `docker compose stop app`.
+1. `sha256sum -c SHA256SUMS` (`shasum -a 256 -c` where there is no `sha256sum`, as on macOS), then
+   `docker compose stop app`.
 2. **Roles first.** `roles.sql` is applied with `ON_ERROR_STOP=0`, because a role that already
    exists is expected — `kyoube` is recreated by `docker/postgres-init/01-kyoube.sh` on any fresh
    volume, and on a same-cluster restore every company role is still there. Then
@@ -318,7 +319,9 @@ The image carries no harness of its own, so the harness checks look at what is o
   `kyoube harness install pi`.
 - **`system packages`.** The packages `sudo apt install` kept, put back at every start. It fails when
   that did not work at the last start; `/kyoubeai/.kyoube/apt-restore.log` says why. A package that
-  could not be reinstalled stays on the list and is tried again at the next start.
+  could not be reinstalled stays on the list and is tried again at the next start. The reinstall has
+  three minutes at most, so a network that does not answer delays a start by that much and no more;
+  what is left is tried again at the next start.
 
 `GET /api/health` is the core's own probe and needs no authentication. It is what the compose
 healthcheck polls, and `.bootstrapStatus == "ready"` is what tells you the instance has been
@@ -369,16 +372,49 @@ docker compose exec app mv /kyoubeai/.hermes /kyoubeai/.hermes.bak    # Hermes A
 
 Hermes is different: `/kyoubeai/.hermes` holds its settings, sessions and memory as well as its login, and
 the installer puts the program under it too, so deleting it would lose all of that. The `mv` above keeps it
-as `.hermes.bak`: copy back what you want to keep (or `mv` the whole directory back to undo the reset), and
-delete `.hermes.bak` yourself when you no longer need it. Run `kyoube harness list` again, and reinstall
-anything that is missing with `kyoube harness install <name>`. Then, from the Terminal page, sign in again
-as [README → Harnesses](../README.md#harnesses) describes for each one. `HOME` is `/kyoubeai` there, so the
+as `.hermes.bak`: copy back what you want to keep, and delete `.hermes.bak` yourself when you no longer
+need it. Every start recreates an empty `/kyoubeai/.hermes`, so a plain `mv` back would land the backup
+inside it. To undo the reset, remove that new folder first, if there is one:
+
+```bash
+docker compose exec app rmdir /kyoubeai/.hermes     # rmdir refuses a folder that is not empty
+docker compose exec app mv /kyoubeai/.hermes.bak /kyoubeai/.hermes
+```
+
+If `rmdir` refuses, Hermes has been set up again since the reset; copy what you want from `.hermes.bak`
+instead.
+
+Run `kyoube harness list` again, and reinstall anything that is missing with
+`kyoube harness install <name>`. Then, from the Terminal page, sign in again as
+[README → Harnesses](../README.md#harnesses) describes for each one. `HOME` is `/kyoubeai` there, so the
 new credentials land back on the volume and survive restarts.
 
 The alternative to interactive logins is provider API keys in `.env` (`ANTHROPIC_API_KEY`,
 `OPENAI_API_KEY`, `OPENROUTER_API_KEY`), which need `docker compose up -d app` to take effect. Note
 that a key in `.env` is visible to anyone who can open the Terminal — which is the same set of
 people who could read the credential files anyway.
+
+## Two source installs on one machine
+
+An install built from source (`./install.sh --edge`, `KYOUBE_VERSION=dev` in `.env`) runs the image
+`${KYOUBE_IMAGE:-kyoubeai}:dev`, and `docker compose build` tags its build with that name. Two source
+installs on one machine that both leave `KYOUBE_IMAGE` unset share the tag `kyoubeai:dev`: a build in
+one replaces the image the other's tag names, and the other's next `docker compose up -d` starts that
+build, of the first install's code, on its own data, with no backup.
+
+Give each source install its own local name in `.env`, before its first build:
+
+```bash
+KYOUBE_IMAGE=kyoubeai-staging     # no '/': a local image, which install.sh and update.sh treat as a source build
+```
+
+An install that already shares the tag can switch the same way: set the name, then run
+`./update.sh --edge`, which finds no image under the new name and builds it, after a backup.
+
+`./update.sh --edge` compares the image the stack's app container runs with the one its tag names, and
+rebuilds (after a backup) when another install has replaced the tag, so a shared tag is caught there;
+a separate name avoids the problem. A published-image install (`KYOUBE_IMAGE=ghcr.io/…`) is not
+affected: its tags are release versions, the same image for everyone.
 
 ## Resource limits
 

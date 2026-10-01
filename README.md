@@ -50,8 +50,10 @@ The script:
 6. prints a link that installs the Kyoube plugins: open it in the same browser and approve it;
 7. checks the result with `kyoube doctor`.
 
-It is safe to run again at any point, and continues where it stopped. Keep a copy of `.env` somewhere
-safe: restoring a backup onto a new machine needs its secrets.
+It is safe to run again at any point, and continues where it stopped. Re-running `./install.sh` repairs
+the version you have; moving to another version is `./update.sh` (on an install that has data,
+`./install.sh` refuses to change the version, before it changes anything). Keep a copy of `.env`
+somewhere safe: restoring a backup onto a new machine needs its secrets.
 
 After you claim the instance, the first-run wizard sets up your company and its first agent. On its
 **Connect a model** step an API key works straight away. With only a Claude or OpenAI subscription,
@@ -99,7 +101,8 @@ backup. Harnesses, their logins and kept system packages carry over ([Harnesses]
 
 If an update goes wrong, `./update.sh --rollback` goes back to the previous release and restores the
 backup taken just before the update. Anything written since then is replaced, because databases only
-migrate forward.
+migrate forward; the `.env` it replaces is kept as `.kyoube/env.before-rollback`. A rollback that stops
+part way is finished by running `./update.sh --rollback` again.
 
 An install built from source (`./install.sh --edge`) updates with `./update.sh --edge`, which
 fast-forwards the current branch and rebuilds. [docs/upgrading.md](docs/upgrading.md) covers moving to
