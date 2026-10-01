@@ -234,7 +234,7 @@ iso_epoch() {
 # build by hand): the next `docker compose up` would start that image on this stack's data. Status 1 otherwise.
 tag_replaced() {
   local ref tag_id stack_id
-  ref="$(image_ref)"
+  ref="$(image_ref .env)"
   tag_id="$(docker image inspect -f '{{.Id}}' "$ref" 2>/dev/null </dev/null)" \
     || { BEHIND_WHY="the image $ref is not on this machine; rebuilding"; return 0; }
   stack_id="$(stack_image_id)"
@@ -248,7 +248,7 @@ tag_replaced() {
 source_image_behind() {
   local ref built committed
   tag_replaced && return 0
-  ref="$(image_ref)"
+  ref="$(image_ref .env)"
   built="$(docker image inspect -f '{{.Created}}' "$ref" 2>/dev/null </dev/null)" \
     || { BEHIND_WHY="the image $ref is not on this machine; rebuilding"; return 0; }
   built="$(iso_epoch "$built")"
@@ -276,7 +276,7 @@ stack_position() {
     [ -n "$POS_COMMIT" ] \
       || die "this stack runs $tag (KYOUBE_VERSION in .env), but git has no tag $tag here, so the code it runs cannot be found; nothing was changed. Run git fetch --tags; if origin has no such tag, set KYOUBE_VERSION in .env to the release the stack really runs (docker compose images shows it), then run ./update.sh again"
     POS_KIND=release; POS_LABEL="$tag"
-  elif runs_source_build; then
+  elif runs_source_build .env; then
     POS_LABEL="source build"
     if POS_COMMIT="$(build_record)"; then
       POS_KIND=record
@@ -319,13 +319,13 @@ require_forward() {
 update_release() {
   local want="$1" current target from image_repo new_ref point stack newcode here
   # A commit can carry several tags (v1.2.0 and v1.2.0-rc1); only a release tag counts.
-  current="$(git tag --points-at HEAD 2>/dev/null | latest_release || true)"
+  current="$(git tag --points-at HEAD 2>/dev/null | latest_release "$KYOUBE_MIN_RELEASE" || true)"
   git fetch --tags --quiet origin || die "could not fetch releases from origin; check the network and run ./update.sh again"
   if [ -n "$want" ]; then
     target="v$want"
     git rev-parse -q --verify "refs/tags/$target" >/dev/null || die "release $target does not exist (releases: https://github.com/jknigel/KyoubeAI/releases)"
   else
-    target="$(git tag -l 'v*' | latest_release || true)"
+    target="$(git tag -l 'v*' | latest_release "$KYOUBE_MIN_RELEASE" || true)"
     [ -n "$target" ] || die "no release ($KYOUBE_MIN_RELEASE or later) found; to follow the current code instead: ./update.sh --edge"
   fi
   # HEAD may carry more than one release tag; the one asked for is enough.
@@ -474,7 +474,7 @@ edge_apply() {
   fi
   # Where the update left the branch: a rollback moves the branch back only while it is still here.
   [ -n "$(env_get "$STATE" after)" ] || env_set "$STATE" after "$(git rev-parse HEAD)"
-  if ! runs_source_build; then
+  if ! runs_source_build .env; then
     say "    switching this install from the published image to a source build"
     env_set .env KYOUBE_IMAGE kyoubeai
     env_set .env KYOUBE_VERSION dev
@@ -482,7 +482,7 @@ edge_apply() {
   merge_settings "edge-$(git rev-parse --short HEAD)"
   say "==> building (10-25 minutes when the core changed)"
   docker compose build app || die "the build failed; the stack still runs the previous image. To try again: ./update.sh --edge. To go back to the previous code: ./update.sh --rollback"
-  record_source_build "$(image_ref)"
+  record_source_build "$(image_ref .env)"
   restart_and_check "$(git symbolic-ref --quiet --short HEAD || true)@$(git rev-parse --short HEAD)"
   env_set "$STATE" "done" 1
   say "updated. The pre-update backup is $BACKUP; ./update.sh --rollback returns to $from."
@@ -507,8 +507,9 @@ do_rollback() {
   [ -f "$STATE" ] || die "there is no update to roll back. To restore any backup: bash scripts/restore.sh backups/<timestamp>"
   mode="$(env_get "$STATE" mode)"; ref="$(env_get "$STATE" ref)"; branch="$(env_get "$STATE" branch)"
   backup="$(env_get "$STATE" backup)"; from="$(env_get "$STATE" from)"
-  [ -n "$ref" ] && [ -n "$backup" ] && [ -f "$ENV_BEFORE" ] \
-    || die "$STATE is incomplete. To restore a backup by hand: bash scripts/restore.sh backups/<timestamp>"
+  if [ -z "$ref" ] || [ -z "$backup" ] || [ ! -f "$ENV_BEFORE" ]; then
+    die "$STATE is incomplete. To restore a backup by hand: bash scripts/restore.sh backups/<timestamp>"
+  fi
   [ -d "$backup" ] || die "the backup taken before the update ($backup) is gone; restore another with bash scripts/restore.sh <backup dir>"
   from="${from:-$(short "$ref")}"
   git diff --quiet HEAD -- || die "tracked files have local changes; stash them (git stash) and run again"
@@ -547,9 +548,9 @@ do_rollback() {
     env_set "$STATE" env_replaced 1 || die "could not write $STATE. $again"
   fi
   cp "$ENV_BEFORE" .env || die "could not restore .env from $ENV_BEFORE. $again"
-  if [ "$mode" = edge ] && runs_source_build; then
+  if [ "$mode" = edge ] && runs_source_build .env; then
     docker compose build app || die "the build of the previous code failed. $again"
-    record_source_build "$(image_ref)"
+    record_source_build "$(image_ref .env)"
   fi
   # restore.sh needs the database running. Then the app container is recreated on the old image without starting it
   # (and without touching other services), so the new version never boots onto the restored data; restore.sh starts it.
