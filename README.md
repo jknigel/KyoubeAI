@@ -241,6 +241,12 @@ Studio has two parts, and neither edits the core: `docker/theme/` (a build-time 
 and label renames, checked against every core bump) and the `kyoube.studio` plugin. Without the
 plugin, the app falls back to the stock layout. [docs/theme.md](docs/theme.md) has the details.
 
+### Agent working rules
+
+An agent finishes the task you give it, asks you (and only you) when it needs approval, and moves
+work up to a manager agent only when you decide it should. [docs/agent-rules.md](docs/agent-rules.md)
+explains the rules, standing handoffs and how to turn them off.
+
 ### Terminal
 
 Company owners and admins see a **Terminal** card on the **Workspace** page. It opens a login shell

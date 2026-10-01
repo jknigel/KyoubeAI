@@ -4,6 +4,30 @@ All notable changes to KyoubeAI are recorded here, in terms of what changed for 
 building on it. The format is loosely [Keep a Changelog](https://keepachangelog.com/); versioning is
 [SemVer](https://semver.org/).
 
+## Unreleased
+
+### Agents
+
+- **Agents finish their own tasks.** Every agent's `AGENTS.md` gets a KyoubeAI rules block:
+  - an agent does its task end to end
+  - it asks the person who started the task for approvals
+  - it hands work to another agent only when that person asks, or its new `## Handoffs` section
+    says so
+  - a manager splits work only across its own team
+
+  The core's default "ask QA, ask your boss" sentences are removed where they appear word for word.
+- **Approval cards go to people.** Confirmation, question, checkbox, verdict and suggested-task
+  cards can now only be answered by a person.
+- **Work moves up to a manager agent only with your decision.** Manager agents are protected; an
+  agent that cannot do a task hands it back to you with an "Escalate" or "Keep" decision.
+- `kyoube agent-rules` keeps all of this in force: once a minute, from container start. It works
+  through the new `kyoube.agent-rules` plugin, with no change to the core.
+  - `kyoube doctor` reports it.
+  - `KYOUBE_AGENT_RULES=off` plus `kyoube agent-rules off` removes it.
+
+  See `docs/agent-rules.md`.
+- Studio's third getting-started step is now "See it through" (`kyoube.studio` 0.2.1).
+
 ## 1.1.0 - 2026-10-01
 
 ### Install and update
