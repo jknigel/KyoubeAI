@@ -74,9 +74,9 @@ function markers(content: string): { start: number; end: number } | { reason: st
   if (starts === 0 && ends === 0) return null;
   if (starts !== 1 || ends !== 1) return { reason: `the rules block markers are incomplete or repeated (${starts} start, ${ends} end)` };
   const start = content.indexOf(START_PREFIX);
-  const end = content.indexOf(END_MARKER) + END_MARKER.length;
-  if (end < start) return { reason: "the rules block's end marker comes before its start" };
-  return { start, end };
+  const endMarker = content.indexOf(END_MARKER);
+  if (endMarker < start) return { reason: "the rules block's end marker comes before its start" };
+  return { start, end: endMarker + END_MARKER.length };
 }
 
 export function applyRules(content: string): RulesEdit {
@@ -93,7 +93,7 @@ export function applyRules(content: string): RulesEdit {
   }
   next = next.split(CORE_HANDOFF_SENTENCES).join("");
   if (!/^## Handoffs[ \t]*\r?$/m.test(next)) {
-    next = `${next.replace(/\s*$/, "")}${eol}${eol}${HANDOFFS_SECTION.replaceAll("\n", eol)}`;
+    next = `${next.trimEnd()}${eol}${eol}${HANDOFFS_SECTION.replaceAll("\n", eol)}`;
   }
   return next === content ? { kind: "unchanged" } : { kind: "changed", content: next };
 }

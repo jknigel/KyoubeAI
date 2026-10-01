@@ -83,6 +83,16 @@ describe("createRulesApi", () => {
     ]);
   });
 
+  it("reports the plugin not ready while it is not installed yet", async () => {
+    const { impl } = fakeFetch(() => ({ status: 404, body: { error: "Plugin not found" } }));
+    expect(await api(impl).pluginReady()).toBe(false);
+  });
+
+  it("leaves any other 404 for the pass to report", async () => {
+    const { impl } = fakeFetch(() => ({ status: 404, body: { error: "Plugin API route not found" } }));
+    expect(await api(impl).pluginReady()).toBe(true);
+  });
+
   it("rejects getGovernance when the response body is an array", async () => {
     const { impl } = fakeFetch(() => ({ status: 200, body: [] }));
     await expect(api(impl).getGovernance("c1")).rejects.toThrow(/no company/);
