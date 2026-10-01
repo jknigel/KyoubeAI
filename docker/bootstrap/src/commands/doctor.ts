@@ -6,6 +6,9 @@ import { readBoardKey, resolveBoardApiKey, resolveBoardKeyPath } from "../key-st
 import { createCoreClient, type CompanySkill, type CompanySummary } from "../core-api.js";
 import { describeHarness, harnessesForAdapterTypes, missingHarnesses, probeHarnesses, systemProbe, type HarnessSpec, type HarnessStatus } from "../harnesses.js";
 import { describeMissing, KYOUBE_SKILLS, missingKyoubeSkills } from "../skills.js";
+import { readState, resolveStatePath, type AgentRulesState } from "../agent-rules/state.js";
+import { failureLines } from "../agent-rules/report.js";
+import { agentRulesEnabled } from "./agent-rules.js";
 
 export interface Check { name: string; ok: boolean; detail: string }
 
@@ -142,6 +145,36 @@ export function systemPackagesCheck(list: string | null, status: string | null, 
   return { name: "system packages", ok: true, detail: `${packages.length} kept: ${shown}` };
 }
 
+export const AGENT_RULES_STALE_MS = 5 * 60_000;
+
+/**
+ * The agent working rules (docs/agent-rules.md), from the last pass the
+ * background loop recorded. Skipped agents get their own line, which is always
+ * ok: they are left alone on purpose, but someone should know.
+ */
+export function agentRulesChecks(env: NodeJS.ProcessEnv, state: AgentRulesState, now: number): Check[] {
+  if (!agentRulesEnabled(env)) return [{ name: "agent rules", ok: true, detail: "off (KYOUBE_AGENT_RULES=off)" }];
+  const pass = state.lastPass;
+  if (!pass) {
+    return [{ name: "agent rules", ok: false, detail: "no pass yet — the container starts kyoube agent-rules --watch; run kyoube agent-rules --once to see what stops it" }];
+  }
+  const skippedAgents = pass.companies.flatMap((company) => company.skipped.map((item) => `${company.name} / ${item.agent}: ${item.reason}`));
+  const skipped: Check = { name: "agent rules skipped", ok: true, detail: skippedAgents.length > 0 ? skippedAgents.join("; ") : "none" };
+  if (pass.mode === "revert") {
+    return [{ name: "agent rules", ok: false, detail: `removed at ${pass.at} by kyoube agent-rules off; the running loop puts them back within a minute unless KYOUBE_AGENT_RULES=off` }, skipped];
+  }
+  if (!(now - Date.parse(pass.at) <= AGENT_RULES_STALE_MS)) {
+    return [{ name: "agent rules", ok: false, detail: `last pass at ${pass.at}, more than 5 minutes ago — is kyoube agent-rules --watch running?` }, skipped];
+  }
+  const failures = failureLines(pass).map((line) => line.replace(/^kyoube: agent rules: /, ""));
+  if (failures.length > 0) {
+    return [{ name: "agent rules", ok: false, detail: `${failures[0]}${failures.length > 1 ? ` (and ${failures.length - 1} more)` : ""}` }, skipped];
+  }
+  const companies = pass.companies.length;
+  const passed = pass.companies.filter((company) => company.guard?.selfTest.status === "pass").length;
+  return [{ name: "agent rules", ok: true, detail: `in force in ${companies} ${companies === 1 ? "company" : "companies"} (self-test passed in ${passed}) as of ${pass.at}` }, skipped];
+}
+
 export function claudeCredentialDetail(raw: string | null, filePath: string): string {
   if (raw === null) return `not found (${filePath}) — only agents without an AI connection use it`;
   try {
@@ -250,6 +283,7 @@ export async function runDoctor(env: NodeJS.ProcessEnv): Promise<number> {
     await readOptional(path.posix.join(stateDir, "apt-restore.status")),
     path.posix.join(stateDir, "apt-restore.log"),
   ));
+  checks.push(...agentRulesChecks(env, await readState(resolveStatePath(config.home), () => {}), Date.now()));
 
   const claudeFile = path.posix.join(config.home, ".claude", ".credentials.json");
   checks.push({ name: "claude credentials", ok: true, detail: claudeCredentialDetail(await readOptional(claudeFile), claudeFile) });
