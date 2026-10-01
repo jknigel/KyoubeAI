@@ -167,3 +167,14 @@ describe("createCoreClient", () => {
     expect(requests[2]?.headers.authorization).toBe("Bearer board-token");
   });
 });
+
+describe("createJsonRequest", () => {
+  it("names the refused route on a CoreApiError", async () => {
+    const { impl } = fakeFetch(() => ({ status: 404, body: { error: "Not found" } }));
+    const { createJsonRequest } = await import("../src/core-api.js");
+    const request = createJsonRequest({ apiBase: "http://app:3100/", apiKey: "k", fetchImpl: impl });
+    const error = await request("/api/x", { method: "POST", body: {} }).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(CoreApiError);
+    expect(error).toMatchObject({ status: 404, route: "POST /api/x", message: "Not found" });
+  });
+});
