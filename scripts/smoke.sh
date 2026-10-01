@@ -99,6 +99,7 @@ grep -q '{label:"Connectors",href:"/apps"}' "$TMP/main.js" || { echo "the core's
 echo "    $THEME_CSS is linked after the core stylesheet; fonts, dark default and renames are in place"
 
 echo "==> home and database names"
+# shellcheck disable=SC2016  # expanded by the shell inside the container
 APP_HOME="$(compose exec -T app sh -c 'echo "$HOME:$PAPERCLIP_HOME:$HERMES_HOME"; getent passwd node | cut -d: -f6; test -e /paperclip && echo LEGACY_PATH_PRESENT || echo no-legacy-path' | tr -d '\r')"
 [[ "$APP_HOME" == $'/kyoubeai:/kyoubeai:/kyoubeai/.hermes\n/kyoubeai\nno-legacy-path' ]] \
   || { echo "unexpected home layout in app:" >&2; echo "$APP_HOME" >&2; exit 1; }
@@ -196,9 +197,9 @@ grep -q 'installed 4, upgraded 0, skipped 0' "$TMP/ensure-first.log" \
   || { echo "expected all four bundled plugins to install on the first pass:" >&2; cat "$TMP/ensure-first.log" >&2; exit 1; }
 curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/plugins" \
   | jq -e 'map(select(.pluginKey == "kyoube.terminal")) | length == 1 and .[0].status == "ready"' >/dev/null
-wait_for_plugin kyoube.apps $APPS_SHIPPED
-wait_for_plugin kyoube.files $FILES_SHIPPED
-wait_for_plugin kyoube.studio $STUDIO_SHIPPED
+wait_for_plugin kyoube.apps "$APPS_SHIPPED"
+wait_for_plugin kyoube.files "$FILES_SHIPPED"
+wait_for_plugin kyoube.studio "$STUDIO_SHIPPED"
 echo "    kyoube.terminal, kyoube.apps ${APPS_SHIPPED}, kyoube.files ${FILES_SHIPPED} and kyoube.studio ${STUDIO_SHIPPED} are installed and ready"
 
 echo "==> kyoube setup (real browser-approval onboarding)"
@@ -266,6 +267,7 @@ echo "==> the entrypoint plugin watcher finishes and exits"
 # `--w[a]tch` keeps the probe from matching its own command line.
 WATCHER="busy"
 for i in $(seq 1 90); do
+  # shellcheck disable=SC2016  # expanded by the shell inside the container
   WATCHER="$(compose exec -T app sh -c \
     'for p in /proc/[0-9]*; do tr "\0" " " < "$p/cmdline" 2>/dev/null | grep -q "ensure-plugins --w[a]tch" && echo busy; done' \
     | tr -d '\r\n ' || true)"
@@ -646,6 +648,7 @@ echo "==> installs land on the home volume: stand-in harnesses, npm -g, sudo apt
 # The image ships no pi or Hermes. Stand-ins in ~/.local/bin let the agents
 # created above resolve their harness (doctor checks that below), and the
 # restore further down proves they, npm globals and kept apt packages come back.
+# shellcheck disable=SC2016  # expanded by the shell inside the container
 compose exec -T -u node app sh -c '
   set -e
   mkdir -p "$HOME/.local/bin"
@@ -694,7 +697,7 @@ AUDIT_BEFORE="$(compose exec -T db psql -U kyoubeai -d kyoube -Atc 'select count
   || { echo "could not read kyoube_meta.audit before the backup: '${AUDIT_BEFORE:-<none>}'" >&2; exit 1; }
 # The company schema is c_<hex> owned by kyoube_c_<hex>, hex being the company
 # uuid without dashes (plugins/kyoube-apps/src/db/company-scope.ts).
-COMPANY_HEX="$(echo "$COMPANY_ID" | tr -d '-' | tr 'A-Z' 'a-z')"
+COMPANY_HEX="$(echo "$COMPANY_ID" | tr -d '-' | tr '[:upper:]' '[:lower:]')"
 
 COMPOSE_PROJECT_NAME="$PROJECT" COMPOSE_ENV_FILES="$ENV_FILE" BACKUP_DIR="$TMP/backups" \
   bash "$ROOT/scripts/backup.sh" | tee "$TMP/backup.log"
@@ -765,7 +768,8 @@ KEY_STAT="$(compose exec -T app sh -c 'stat -c "%a %U" /kyoubeai/kyoube/board-ke
 echo "==> installs came back with the restore: ~/.local/bin on the server's PATH, kept apt packages reinstalled"
 server_env() { # the running server process's environment, one VAR=value per line
   # As node: root in the container lacks CAP_SYS_PTRACE, so it cannot read another user's /proc/<pid>/environ.
-  compose exec -T -u node app sh -c 'for p in /proc/[0-9]*; do if tr "\0" " " < "$p/cmdline" 2>/dev/null | grep -q "^node .*server/dist/[i]ndex.js"; then tr "\0" "\n" < "$p/environ"; break; fi; done' | tr -d '\r'
+  # shellcheck disable=SC2016  # expanded by the shell inside the container
+  compose exec -T -u node app sh -c 'for p in /proc/[0-9]*; do if tr "\0" " " < "$p/cmdline" 2>/dev/null | grep -Eq "^(/usr/local/bin/)?node .*server/dist/[i]ndex.js"; then tr "\0" "\n" < "$p/environ"; break; fi; done' | tr -d '\r'
 }
 SERVER_PATH="$(server_env | sed -n 's/^PATH=//p')"
 [[ "$SERVER_PATH" == /kyoubeai/.local/bin:* ]] || { echo "the server's PATH does not start with /kyoubeai/.local/bin: '$SERVER_PATH'" >&2; exit 1; }
@@ -816,7 +820,7 @@ STATUS="$(curl -sS -o "$TMP/switch-test.json" -w '%{http_code}' -H "Authorizatio
 [[ "$STATUS" =~ ^2 ]] || { echo "Test on an unsaved harness switch answered $STATUS: $(cat "$TMP/switch-test.json")" >&2; exit 1; }
 echo "    a claude_local agent can test codex_local before saving"
 
-wait_for_plugin kyoube.apps $APPS_SHIPPED
+wait_for_plugin kyoube.apps "$APPS_SHIPPED"
 wait_for_plugin kyoube.terminal "$BUMP2"
 wait_for_plugin_api
 echo "    app is ready again, the pre-disaster token authenticates, both plugin workers answer"
@@ -923,9 +927,9 @@ COMPOSE_PROJECT_NAME="$PROJECT" COMPOSE_ENV_FILES="$LEGACY_ENV" bash "$ROOT/scri
 for LINE in 'PAPERCLIP_PUBLIC_URL -> KYOUBE_PUBLIC_URL' 'PAPERCLIP_VERSION -> KYOUBE_CORE_VERSION' 'renaming role paperclip -> kyoubeai' 'renaming database paperclip -> kyoubeai' "copying ${PROJECT}_paperclip-home -> ${PROJECT}_kyoubeai-home" '1 stored path(s) still start with /paperclip/'; do
   grep -qF "$LINE" "$TMP/migrate.log" || { echo "migration log lacks: $LINE" >&2; exit 1; }
 done
-grep -q '^KYOUBE_PUBLIC_URL=' "$LEGACY_ENV" && ! grep -q '^PAPERCLIP_PUBLIC_URL=' "$LEGACY_ENV" || { echo ".env keys were not renamed" >&2; exit 1; }
+{ grep -q '^KYOUBE_PUBLIC_URL=' "$LEGACY_ENV" && ! grep -q '^PAPERCLIP_PUBLIC_URL=' "$LEGACY_ENV"; } || { echo ".env keys were not renamed" >&2; exit 1; }
 DBS="$(compose exec -T db psql -U kyoubeai -d postgres -Atc 'select datname from pg_database order by 1' | tr -d '\r')"
-grep -qx kyoubeai <<<"$DBS" && ! grep -qx paperclip <<<"$DBS" || { echo "databases after migration: $DBS" >&2; exit 1; }
+{ grep -qx kyoubeai <<<"$DBS" && ! grep -qx paperclip <<<"$DBS"; } || { echo "databases after migration: $DBS" >&2; exit 1; }
 compose exec -T db psql -U kyoubeai -d postgres -Atc "select count(*) from pg_roles where rolname in ('paperclip','kyoube_migrator')" | tr -d '\r' | grep -qx 0 \
   || { echo "legacy or temporary roles survived the migration" >&2; exit 1; }
 STATUS="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/plugins")"

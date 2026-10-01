@@ -29,7 +29,9 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm test:sh
-      - run: shellcheck -x install.sh update.sh scripts/lib/host.sh scripts/install-e2e.sh && shellcheck -s sh docker/system/apt-record docker/system/apt-restore docker/system/kyoube-profile.sh
+      # The host scripts (bash; install.sh, update.sh, scripts/lib/host.sh and scripts/install-e2e.sh keep to 3.2),
+      # then the POSIX sh the container runs.
+      - run: shellcheck -x install.sh update.sh scripts/lib/host.sh scripts/install-e2e.sh scripts/backup.sh scripts/restore.sh scripts/smoke.sh && shellcheck -s sh docker/entrypoint.sh docker/kyoube docker/system/apt-record docker/system/apt-restore docker/system/kyoube-profile.sh
       # Ruling P4-R22: the unit suite checks the string buildSrcdoc produces;
       # this loads every one of those shapes in the Chrome the ubuntu runner
       # ships and asks the browser's own DOM where the policy ended up. It

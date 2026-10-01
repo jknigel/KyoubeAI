@@ -202,5 +202,9 @@ ENV KYOUBE_VERSION=${KYOUBE_VERSION} \
     KYOUBE_PLUGIN_ROOT=/opt/kyoube/plugins \
     HERMES_HOME=/kyoubeai/.hermes
 
-ENTRYPOINT ["/usr/bin/tini", "--", "kyoube-entrypoint.sh"]
-CMD ["node", "--import", "./server/node_modules/tsx/dist/loader.mjs", "server/dist/index.js"]
+# Absolute paths: /kyoubeai/.local/bin is first on PATH, and a node people
+# install there (say, another version through npm) must not replace the
+# server's own and stop it starting. docker/entrypoint.sh does the same for
+# everything it runs before the server.
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/kyoube-entrypoint.sh"]
+CMD ["/usr/local/bin/node", "--import", "./server/node_modules/tsx/dist/loader.mjs", "server/dist/index.js"]
