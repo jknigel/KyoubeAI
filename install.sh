@@ -209,6 +209,9 @@ main() {
   fi
 
   # 7. Check and finish.
+  # A fresh agent-rules pass first, so doctor's `agent rules` line reads it rather than none or a stale
+  # one (the background loop makes its first pass up to a minute after the container is healthy).
+  dc_exec_node app kyoube agent-rules --once >/dev/null 2>&1 || true
   dc_exec_node app kyoube doctor || warn "kyoube doctor reported a problem (above); ./install.sh is safe to run again"
   say ""
   say "KyoubeAI is running at $public"
