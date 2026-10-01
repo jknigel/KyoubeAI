@@ -52,11 +52,13 @@ docker compose
         ▲ :3100 (KYOUBE_PORT) — browser: KyoubeAI UI (core pages + Terminal, Data, Apps, project Files tab)
 ```
 
-Three plugins ship in the image: `@kyoube/plugin-terminal` (`plugins/kyoube-terminal`),
+Five plugins ship in the image: `@kyoube/plugin-terminal` (`plugins/kyoube-terminal`),
 `@kyoube/plugin-apps` (`plugins/kyoube-apps`), which carries both the Data layer and the Apps module in
 one worker because apps need in-process access to the data service and plugins cannot call each other,
-and `@kyoube/plugin-files` (`plugins/kyoube-files`), the Files tab on project pages. Everything Kyoube adds
-is one of these three plugins, the `@kyoube/app-sdk` package the apps plugin injects into apps
+`@kyoube/plugin-files` (`plugins/kyoube-files`), the Files tab on project pages,
+`@kyoube/plugin-studio` (`plugins/kyoube-studio`), the Studio layout, and
+`@kyoube/plugin-agent-rules` (`plugins/kyoube-agent-rules`), described below. Everything Kyoube adds
+is one of these plugins, the `@kyoube/app-sdk` package the apps plugin injects into apps
 (`packages/kyoube-app-sdk`), and the `kyoube` bootstrap CLI (`docker/bootstrap`) that installs them.
 
 `@kyoube/plugin-agent-rules` (`plugins/kyoube-agent-rules`) has no UI and no tools. It holds the one
