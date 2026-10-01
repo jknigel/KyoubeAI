@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { reconcileGuard, revertGuard, type GuardPort, type GuardRecord } from "../src/guard.js";
+import { reconcileGuard, revertGuard, selfTest, type GuardPort, type GuardRecord } from "../src/guard.js";
 import { isProtected, ownTeamGrant, type AgentRow, type Grant, type Policy } from "../src/policy.js";
 
 const C = "11111111-1111-4111-8111-111111111111";
@@ -164,6 +164,44 @@ describe("reconcileGuard", () => {
   it("calls the self-test not applicable without an active manager and report", async () => {
     const report = await reconcileGuard(new FakeCore([agent("solo", null), agent("x", "solo", "paused")]), C);
     expect(report.selfTest.status).toBe("not_applicable");
+  });
+
+  it("does not add a manager to scoped if it already has its own-team grant", async () => {
+    const core = org();
+    core.grants.set("cto", [BROAD, ownTeamGrant("cto")]);
+    const report = await reconcileGuard(core, C);
+    expect(core.record.scoped).toEqual(["ceo"]);
+    expect(core.grants.get("cto")).toEqual([ownTeamGrant("cto")]);
+    await revertGuard(core, C);
+    const reverted = core.grants.get("cto") ?? [];
+    expect(reverted).toContainEqual(BROAD);
+    expect(reverted).toContainEqual(ownTeamGrant("cto"));
+    expect(reverted.length).toBe(2);
+  });
+
+  it("preserves a non-manager's own-team grant if the guardrail never added it", async () => {
+    const core = org();
+    core.grants.set("dev", [BROAD, ownTeamGrant("dev")]);
+    const report = await reconcileGuard(core, C);
+    expect(core.record.scoped).toEqual(["ceo", "cto"]);
+    expect(core.grants.get("dev")).toEqual([ownTeamGrant("dev")]);
+    expect(core.record.broadRemoved).toContain("dev");
+  });
+
+  it("excludes skipped managers from self-test and falls back to an eligible pair", async () => {
+    const core = new FakeCore([
+      agent("a-mgr", null),
+      agent("b-rep", "a-mgr"),
+      agent("m2", null),
+      agent("r2", "m2"),
+    ]);
+    core.policies.set("a-mgr", { trustPreset: "low_trust_review" });
+    const report = await reconcileGuard(core, C);
+    expect(report.skipped).toEqual([{ agentId: "a-mgr", name: "A-MGR", reason: "has an authorization policy KyoubeAI does not change" }]);
+    expect(report.selfTest.status).toBe("pass");
+    expect(report.selfTest.detail).toBe("R2 cannot assign to M2; M2 can assign to R2");
+    const unexcluded = await selfTest(core, C, core.agents, new Set());
+    expect(unexcluded.status).toBe("fail");
   });
 });
 
