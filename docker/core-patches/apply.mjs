@@ -22,9 +22,13 @@ const buildCore = value("--core-version");
 const hint = coreVersionHint(buildCore, CORE_VERSION);
 try {
   const report = await applyPatches(root, PATCHES, { dryRun: flag("--dry-run") });
+  // A skip is always logged: the build is on a core that no longer needs the patch.
+  for (const entry of report) if (entry.skipped) console.log(`core-patches: ${entry.id}: ${entry.skipped}`);
   if (flag("--report") || report.length === 0) {
     if (report.length === 0) console.log("core-patches: none declared");
-    for (const entry of report) console.log(`core-patches: ${entry.id} applied ${entry.matched}/${entry.expect} in ${entry.files.join(", ")}`);
+    for (const entry of report) {
+      if (!entry.skipped) console.log(`core-patches: ${entry.id} applied ${entry.matched}/${entry.expect} in ${entry.files.join(", ")}`);
+    }
   }
   if (hint) console.error(`core-patches: note: built on core ${buildCore}; these patches are written for core ${CORE_VERSION} and still matched`);
 } catch (error) {

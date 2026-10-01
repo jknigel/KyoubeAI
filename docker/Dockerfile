@@ -100,7 +100,10 @@ ENV PATH=/kyoubeai/.local/bin:${PATH} \
 # documented entry per patch, each naming its upstream issue or PR). Every
 # pattern must match exactly as declared or this build fails — so a core bump
 # that changes the code, or that already carries the fix, stops here with the
-# patch's id, which is the cue to delete it. Runs before the rebrand so the
+# patch's id, which is the cue to delete it. An entry that declares the
+# upstream fix's own shape (upstreamFix) is skipped instead, with
+# "<id>: already fixed upstream", on a core that carries that fix exactly once
+# (a pre-release, in the weekly beta build). Runs before the rebrand so the
 # asset renaming below hashes the patched bundle. See CONTRIBUTING.md,
 # "Never patch the core", for the rule this is the narrow exception to.
 # --core-version is the core this build is FROM; when it is not the one the
