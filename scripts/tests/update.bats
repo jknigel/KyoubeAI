@@ -11,7 +11,7 @@ setup() {
   # the first `compose up` or `compose build`, reports images as missing, or fails `pull`. An image that is there has the id
   # $STUB_IMAGE_ID and was created at $STUB_IMAGE_CREATED (empty: no time to compare). The app container ($STUB_APP_CID,
   # none by default) runs the image $STUB_CONTAINER_IMAGE. The database lists the agents' harnesses as $STUB_AGENTS, and
-  # `kyoube harness missing` answers $STUB_MISSING.
+  # `kyoube harness missing` answers $STUB_MISSING. `kyoube agent-rules` fails when $STUB_FAIL_AGENT_RULES is set.
   cat > "$STUB_BIN/docker" <<'EOF'
 #!/bin/sh
 echo "$*" >> "$STUB_LOG"
@@ -23,6 +23,7 @@ case "$*" in
   "inspect -f {{.Image}} "*) echo "${STUB_CONTAINER_IMAGE:-sha256:stub}" ;;
   "compose exec -T db psql "*) [ -z "${STUB_AGENTS:-}" ] || echo "$STUB_AGENTS" ;;
   "compose exec -T -u node app kyoube harness missing "*) [ -z "${STUB_MISSING:-}" ] || echo "$STUB_MISSING" ;;
+  "compose exec -T -u node app kyoube agent-rules "*) [ -z "${STUB_FAIL_AGENT_RULES:-}" ] || exit 1 ;;
   "compose up "*) if [ -n "${STUB_FAIL_UP:-}" ] && [ ! -e "$STUB_LOG.up" ]; then touch "$STUB_LOG.up"; exit 1; fi ;;
   "compose build "*)
     echo "$(sed -n 's/^KYOUBE_IMAGE=//p' .env):$(sed -n 's/^KYOUBE_VERSION=//p' .env)" >> "$STUB_LOG.builds"
@@ -76,6 +77,9 @@ nothing_happened() {
 }
 
 backups_taken() { wc -l < "$MARKS/backups" | tr -d ' '; }
+
+# call_line CALL: the line of STUB_LOG where docker was first run with exactly CALL (empty when it never was).
+call_line() { grep -nFx -- "$1" "$STUB_LOG" | head -1 | cut -d: -f1 || true; }
 
 # write_unfinished TO REF: the state an update leaves when it stopped before the end.
 write_unfinished() {
@@ -1068,4 +1072,28 @@ stayed_put() {
   grep -Fx "compose exec -T -u node app kyoube harness install pi" "$STUB_LOG"
   grep -Fx "compose exec -T -u node app kyoube doctor" "$STUB_LOG"
   [ -z "$(grep 'kyoube ' "$STUB_LOG" | grep -v '^compose exec -T -u node app kyoube ' || true)" ]
+}
+
+@test "update.sh runs one fresh agent-rules pass just before doctor, and a failing pass does not stop it" {
+  STUB_FAIL_AGENT_RULES=1 run_update --yes
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Update KyoubeAI v1.1.0 -> v1.2.0"* ]]
+  [ "$(grep -cFx "compose exec -T -u node app kyoube agent-rules --once" "$STUB_LOG")" = 1 ]
+  pass="$(call_line "compose exec -T -u node app kyoube agent-rules --once")"
+  doctor="$(call_line "compose exec -T -u node app kyoube doctor")"
+  [ -n "$pass" ] && [ -n "$doctor" ]
+  [ "$pass" -lt "$doctor" ]
+  # the pass waits for the restart to be healthy
+  [ "$(call_line "compose up -d --no-build --wait --wait-timeout 300")" -lt "$pass" ]
+}
+
+@test "a rollback runs doctor but no agent-rules pass, since the image it returns to may not have the command" {
+  run_update --yes
+  [ "$status" -eq 0 ]
+  : > "$STUB_LOG"
+  run_update --rollback --yes
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"rolled back to v1.1.0"* ]]
+  grep -Fx "compose exec -T -u node app kyoube doctor" "$STUB_LOG"
+  ! grep -F "agent-rules" "$STUB_LOG" || false
 }

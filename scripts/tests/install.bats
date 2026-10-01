@@ -9,7 +9,7 @@ setup() {
   mkdir -p "$STUB_BIN"
   # Answers the preflight questions and logs everything. The database volume exists when STUB_VOLUME is set; the app
   # container ($STUB_APP_CID, none by default) runs $STUB_CONTAINER_IMAGE; every image is there with the id sha256:stub;
-  # the instance is claimed and its plugins are set up.
+  # the instance is claimed and its plugins are set up. `kyoube agent-rules` fails when $STUB_FAIL_AGENT_RULES is set.
   cat > "$STUB_BIN/docker" <<'EOF'
 #!/bin/sh
 echo "$*" >> "$STUB_LOG"
@@ -23,6 +23,7 @@ case "$*" in
   "inspect -f {{.Image}} "*) echo "${STUB_CONTAINER_IMAGE:-sha256:stub}" ;;
   "image inspect -f {{.Id}} "*) echo sha256:stub ;;
   "compose exec -T app curl "*) echo '{"status":"ok","bootstrapStatus":"ready"}' ;;
+  "compose exec -T -u node app kyoube agent-rules "*) [ -z "${STUB_FAIL_AGENT_RULES:-}" ] || exit 1 ;;
 esac
 exit 0
 EOF
@@ -45,6 +46,9 @@ EOF
 }
 
 run_install() { run env PATH="$STUB_BIN:$PATH" "$INST/install.sh" "$@"; }
+
+# call_line CALL: the line of STUB_LOG where docker was first run with exactly CALL (empty when it never was).
+call_line() { grep -nFx -- "$1" "$STUB_LOG" | head -1 | cut -d: -f1 || true; }
 
 # installed_at VERSION [IMAGE]: an install with data that runs the published VERSION, its checkout on that release.
 installed_at() {
@@ -131,6 +135,19 @@ changed_nothing() {
   grep -F "compose up -d --no-build --wait" "$STUB_LOG"
   grep -Fx "compose exec -T -u node app kyoube doctor" "$STUB_LOG"
   ! grep -E '^(pull|compose build)' "$STUB_LOG" || false
+}
+
+@test "install.sh runs one fresh agent-rules pass just before doctor, and a failing pass does not stop it or raise the doctor warning" {
+  installed_at 1.2.0
+  STUB_FAIL_AGENT_RULES=1 run_install --yes
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"KyoubeAI is running at http://localhost:3100"* ]]
+  [[ "$output" != *"kyoube doctor reported a problem"* ]]
+  [ "$(grep -cFx "compose exec -T -u node app kyoube agent-rules --once" "$STUB_LOG")" = 1 ]
+  pass="$(call_line "compose exec -T -u node app kyoube agent-rules --once")"
+  doctor="$(call_line "compose exec -T -u node app kyoube doctor")"
+  [ -n "$pass" ] && [ -n "$doctor" ]
+  [ "$pass" -lt "$doctor" ]
 }
 
 @test "an install whose checkout is not on the release it runs is told to check it out; install.sh does not switch it" {

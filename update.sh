@@ -158,6 +158,9 @@ restart_and_check() { # TARGET_LABEL
   fi
   offer_harnesses
   log="$(mktemp)"
+  # A fresh agent-rules pass first, so doctor's `agent rules` line reads it rather than a pass from
+  # before this restart (the background loop makes its first pass up to a minute later).
+  dc_exec_node app kyoube agent-rules --once >/dev/null 2>&1 || true
   dc_exec_node app kyoube doctor | tee "$log" || true
   bad="$(grep '^FAIL' "$log" | grep -v '^FAIL harnesses in use' || true)"
   rm -f "$log"
