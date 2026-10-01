@@ -1,5 +1,6 @@
 # shellcheck shell=bash
-# Helpers shared by install.sh and update.sh. Sourced, never run. Works with
+# Helpers shared by install.sh and update.sh (and the checksum helpers by
+# scripts/backup.sh and scripts/restore.sh). Sourced, never run. Works with
 # the bash 3.2 macOS ships: no associative arrays, no ${x,,}, no mapfile, and
 # no `sed -i` (GNU and BSD sed disagree on its flags).
 
@@ -57,22 +58,25 @@ latest_release() {
   return 0
 }
 
+# Every helper below reads `KEY=value` and `export KEY=value` alike (compose accepts both in .env).
+
 # env_get FILE KEY: the value of the last uncommented KEY= line (CR stripped); empty when absent.
 env_get() {
   [ -f "$1" ] || return 0
-  KEY="$2" awk '{ sub(/\r$/, "") } index($0, ENVIRON["KEY"] "=") == 1 { v = substr($0, length(ENVIRON["KEY"]) + 2) } END { printf "%s", v }' "$1"
+  KEY="$2" awk '{ sub(/\r$/, ""); line = $0; sub(/^export[ \t]+/, "", line) } index(line, ENVIRON["KEY"] "=") == 1 { v = substr(line, length(ENVIRON["KEY"]) + 2) } END { printf "%s", v }' "$1"
 }
 
-# env_set FILE KEY VALUE: set the first uncommented KEY= line and drop later ones, or append.
-# Comment lines are left alone. Line endings become LF; the file becomes mode 600 (it holds secrets).
+# env_set FILE KEY VALUE: set the first uncommented KEY= line (keeping an `export ` in front of it) and drop later
+# ones, or append. Comment lines are left alone. Line endings become LF; the file becomes mode 600 (it holds secrets).
 # On failure (for example FILE is missing) it returns 1 and leaves no temp file behind.
 env_set() {
   local file="$1" tmp
   tmp="$(mktemp "${file}.XXXXXX")" || return 1
   if KEY="$2" VALUE="$3" awk '
     BEGIN { k = ENVIRON["KEY"]; v = ENVIRON["VALUE"]; done = 0 }
-    { sub(/\r$/, "") }
-    index($0, k "=") == 1 { if (!done) { print k "=" v; done = 1 } next }
+    { sub(/\r$/, ""); line = $0; pre = "" }
+    match(line, /^export[ \t]+/) { pre = substr(line, 1, RLENGTH); line = substr(line, RLENGTH + 1) }
+    index(line, k "=") == 1 { if (!done) { print pre k "=" v; done = 1 } next }
     { print }
     END { if (!done) print k "=" v }
   ' "$file" > "$tmp" && mv -f "$tmp" "$file"; then
@@ -84,7 +88,7 @@ env_set() {
 
 # env_keys FILE: every key the file defines, commented ("# KEY=") or not, sorted, one per line.
 env_keys() {
-  awk '{ sub(/\r$/, "") } match($0, /^[ \t]*#?[ \t]*[A-Z][A-Z0-9_]*=/) { s = substr($0, 1, RLENGTH - 1); sub(/^[ \t]*#?[ \t]*/, "", s); print s }' "$1" | LC_ALL=C sort -u
+  awk '{ sub(/\r$/, "") } match($0, /^[ \t]*#?[ \t]*(export[ \t]+)?[A-Z][A-Z0-9_]*=/) { s = substr($0, 1, RLENGTH - 1); sub(/^[ \t]*#?[ \t]*/, "", s); sub(/^export[ \t]+/, "", s); print s }' "$1" | LC_ALL=C sort -u
 }
 
 # env_merge EXAMPLE TARGET LABEL: append to TARGET every key EXAMPLE defines (commented or not)
@@ -116,7 +120,7 @@ env_merge() {
 env_unused() {
   local known
   known="$(env_keys "$1")"
-  awk '{ sub(/\r$/, "") } match($0, /^[A-Z][A-Z0-9_]*=/) { print substr($0, 1, RLENGTH - 1) }' "$2" | LC_ALL=C sort -u \
+  awk '{ sub(/\r$/, ""); sub(/^export[ \t]+/, "") } match($0, /^[A-Z][A-Z0-9_]*=/) { print substr($0, 1, RLENGTH - 1) }' "$2" | LC_ALL=C sort -u \
     | KNOWN="$known" awk 'BEGIN { n = split(ENVIRON["KNOWN"], l, "\n"); for (i = 1; i <= n; i++) k[l[i]] = 1 } !($0 in k)'
 }
 
@@ -125,9 +129,13 @@ normalize_project_name() {
   printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-' | sed 's/^[_-]*//'
 }
 
-# resolve_project_name DIR: the compose project an install in DIR uses today.
+# resolve_project_name DIR: the compose project an install in DIR uses today, as `docker compose config` resolves it
+# (its output starts with `name: <project>`): COMPOSE_PROJECT_NAME from the shell or .env, then a top-level `name:` in
+# a compose or override file, then the folder name. Without a docker that answers, the same order without `name:`.
 resolve_project_name() {
-  local dir="$1" name="${COMPOSE_PROJECT_NAME:-}"
+  local dir="$1" name
+  name="$(cd "$dir" && docker compose config 2>/dev/null </dev/null | tr -d '\r' | awk 'NR == 1 && sub(/^name:[ \t]*/, "") { print }' || true)"
+  [ -n "$name" ] || name="${COMPOSE_PROJECT_NAME:-}"
   [ -n "$name" ] || name="$(env_get "$dir/.env" COMPOSE_PROJECT_NAME)"
   [ -n "$name" ] || name="$(normalize_project_name "$(basename "$dir")")"
   printf '%s\n' "$name"
@@ -180,6 +188,17 @@ record_source_build() {
   { mkdir -p .kyoube && : > "$KYOUBE_BUILT"; } 2>/dev/null || return 0
   env_set "$KYOUBE_BUILT" commit "$(git rev-parse HEAD 2>/dev/null || true)" || true
   env_set "$KYOUBE_BUILT" image "$id" || true
+}
+
+# sha256_sums FILE...: `sha256sum FILE...`, or `shasum -a 256` where there is no sha256sum (stock macOS). Both print
+# the same "<hash>  <name>" lines, and each tool checks the other's.
+sha256_sums() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; else shasum -a 256 "$@"; fi
+}
+
+# sha256_check DIR: verify DIR/SHA256SUMS (relative names, as scripts/backup.sh writes it) against the files in DIR.
+sha256_check() {
+  (cd "$1" && if command -v sha256sum >/dev/null 2>&1; then sha256sum -c SHA256SUMS; else shasum -a 256 -c SHA256SUMS; fi)
 }
 
 # dc_exec ARGS...: `docker compose exec`, with a TTY only when this script has one.

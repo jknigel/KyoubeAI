@@ -22,6 +22,9 @@ OUT="${BACKUP_DIR:-$ROOT/backups}/$STAMP"
 # Any image with a POSIX tar and gzip works; it only ever sees /kyoubeai.
 TAR_IMAGE="${KYOUBE_BACKUP_IMAGE:-alpine:3.20}"
 cd "$ROOT"
+# sha256_sums: sha256sum, or shasum -a 256 on a Mac, which has no sha256sum.
+# shellcheck source=scripts/lib/host.sh
+. "$ROOT/scripts/lib/host.sh"
 
 # `docker compose ps -q` lists running containers only, so -a is required for a
 # service that may be stopped (restore.sh stops `app` before it calls this).
@@ -108,10 +111,10 @@ for file in kyoubeai.dump kyoube.dump roles.sql kyoubeai-home.tgz; do
   fi
 done
 
-# Relative names so `sha256sum -c` still works after the directory is copied
+# Relative names so `sha256sum -c` (or `shasum -a 256 -c`) still works after the directory is copied
 # off-site. The four payload files are named explicitly rather than globbed, so
 # the manifest can never silently gain or lose an entry. SHA256SUMS itself is
 # not one of them: a manifest cannot vouch for its own contents.
-(cd "$OUT" && sha256sum kyoubeai.dump kyoube.dump roles.sql kyoubeai-home.tgz > SHA256SUMS)
+(cd "$OUT" && sha256_sums kyoubeai.dump kyoube.dump roles.sql kyoubeai-home.tgz > SHA256SUMS)
 
 echo "backup written to $OUT"
