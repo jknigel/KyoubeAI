@@ -65,6 +65,7 @@ jobs:
         env:
           # scripts/studio-live-check.mjs writes Home and Workspace screenshots here.
           STUDIO_SHOTS_DIR: ${{ runner.temp }}/studio-shots
+          KYOUBE_SMOKE_LICENSE: ${{ secrets.KYOUBE_SMOKE_LICENSE }}
         run: bash scripts/smoke.sh
       - name: install.sh and update.sh end to end
         run: bash scripts/install-e2e.sh

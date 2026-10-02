@@ -206,21 +206,24 @@ STUDIO_SHIPPED="$(jq -r .version "$ROOT/plugins/kyoube-studio/package.json")"
 [[ "$STUDIO_SHIPPED" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected kyoube.studio version '$STUDIO_SHIPPED' in package.json" >&2; exit 1; }
 AGENT_RULES_SHIPPED="$(jq -r .version "$ROOT/plugins/kyoube-agent-rules/package.json")"
 [[ "$AGENT_RULES_SHIPPED" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected kyoube.agent-rules version '$AGENT_RULES_SHIPPED' in package.json" >&2; exit 1; }
+LICENSE_SHIPPED="$(jq -r .version "$ROOT/plugins/kyoube-license/package.json")"
+[[ "$LICENSE_SHIPPED" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected kyoube.license version '$LICENSE_SHIPPED' in package.json" >&2; exit 1; }
 
 echo "==> install plugins via kyoube ensure-plugins"
-# Five plugins ship in the image (/opt/kyoube/plugins/{terminal,apps,files,studio,agent-rules}),
-# so the first pass installs all five — `installed 5`, nothing upgraded or
+# Six plugins ship in the image (/opt/kyoube/plugins/{terminal,apps,files,studio,agent-rules,license}),
+# so the first pass installs all six — `installed 6`, nothing upgraded or
 # skipped.
 compose exec -T app kyoube ensure-plugins --api-key "$TOKEN" | tee "$TMP/ensure-first.log"
-grep -q 'installed 5, upgraded 0, skipped 0' "$TMP/ensure-first.log" \
-  || { echo "expected all five bundled plugins to install on the first pass:" >&2; cat "$TMP/ensure-first.log" >&2; exit 1; }
+grep -q 'installed 6, upgraded 0, skipped 0' "$TMP/ensure-first.log" \
+  || { echo "expected all six bundled plugins to install on the first pass:" >&2; cat "$TMP/ensure-first.log" >&2; exit 1; }
 curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/plugins" \
   | jq -e 'map(select(.pluginKey == "kyoube.terminal")) | length == 1 and .[0].status == "ready"' >/dev/null
 wait_for_plugin kyoube.apps "$APPS_SHIPPED"
 wait_for_plugin kyoube.files "$FILES_SHIPPED"
 wait_for_plugin kyoube.studio "$STUDIO_SHIPPED"
 wait_for_plugin kyoube.agent-rules "$AGENT_RULES_SHIPPED"
-echo "    kyoube.terminal, kyoube.apps ${APPS_SHIPPED}, kyoube.files ${FILES_SHIPPED}, kyoube.studio ${STUDIO_SHIPPED} and kyoube.agent-rules ${AGENT_RULES_SHIPPED} are installed and ready"
+wait_for_plugin kyoube.license "$LICENSE_SHIPPED"
+echo "    kyoube.terminal, kyoube.apps ${APPS_SHIPPED}, kyoube.files ${FILES_SHIPPED}, kyoube.studio ${STUDIO_SHIPPED}, kyoube.agent-rules ${AGENT_RULES_SHIPPED} and kyoube.license ${LICENSE_SHIPPED} are installed and ready"
 
 echo "==> kyoube setup (real browser-approval onboarding)"
 # Run setup detached inside the container; it prints an approval URL and then
@@ -249,10 +252,10 @@ done
 compose exec -T app sh -c 'sed "s/^/    setup| /" /tmp/setup.log'
 [[ "$SETUP_EXIT" == "0" ]] || { echo "kyoube setup exited '${SETUP_EXIT:-<timeout>}'" >&2; exit 1; }
 # setup ends by running ensure-plugins with the key it just stored; the bundled
-# plugins are already installed at the on-disk version, so it skips all five.
+# plugins are already installed at the on-disk version, so it skips all six.
 compose exec -T app sh -c 'cat /tmp/setup.log' >"$TMP/setup.log"
-grep -q 'installed 0, upgraded 0, skipped 5' "$TMP/setup.log" \
-  || { echo "expected setup's ensure-plugins to skip the five bundled plugins:" >&2; cat "$TMP/setup.log" >&2; exit 1; }
+grep -q 'installed 0, upgraded 0, skipped 6' "$TMP/setup.log" \
+  || { echo "expected setup's ensure-plugins to skip the six bundled plugins:" >&2; cat "$TMP/setup.log" >&2; exit 1; }
 # No company exists at this point, so setup has nothing to verify and says so
 # rather than waiting for skills that cannot appear yet.
 grep -q 'no company exists yet' "$TMP/setup.log" \
@@ -275,11 +278,79 @@ grep -q 'kyoube.studio skip' "$TMP/ensure-stored.log" \
   || { echo "expected kyoube.studio to be skipped:" >&2; cat "$TMP/ensure-stored.log" >&2; exit 1; }
 grep -q 'kyoube.agent-rules skip' "$TMP/ensure-stored.log" \
   || { echo "expected kyoube.agent-rules to be skipped:" >&2; cat "$TMP/ensure-stored.log" >&2; exit 1; }
+grep -q 'kyoube.license skip' "$TMP/ensure-stored.log" \
+  || { echo "expected kyoube.license to be skipped:" >&2; cat "$TMP/ensure-stored.log" >&2; exit 1; }
 # All bundled plugins are already at the on-disk version by now, so the whole
-# run is a no-op: five skips, nothing installed or upgraded.
-grep -q 'installed 0, upgraded 0, skipped 5' "$TMP/ensure-stored.log" \
-  || { echo "expected 'installed 0, upgraded 0, skipped 5' in the summary:" >&2; cat "$TMP/ensure-stored.log" >&2; exit 1; }
+# run is a no-op: six skips, nothing installed or upgraded.
+grep -q 'installed 0, upgraded 0, skipped 6' "$TMP/ensure-stored.log" \
+  || { echo "expected 'installed 0, upgraded 0, skipped 6' in the summary:" >&2; cat "$TMP/ensure-stored.log" >&2; exit 1; }
 sed 's/^/    /' "$TMP/ensure-stored.log"
+
+echo "==> licensing: five users free, the sixth refused, removing a user frees a seat, a key raises the limit"
+# Every sign-up comes from a fresh cookie jar, so the admin's session in
+# $COOKIES stays as it is.
+signup() { # name email -> prints the HTTP status; the body lands in $TMP/signup.json
+  # The core rate-limits sign-ups (429, x-retry-after 10), so wait and retry on a 429.
+  local code attempt
+  for attempt in 1 2 3 4 5 6; do
+    code="$(curl -sS -o "$TMP/signup.json" -w '%{http_code}' -H 'Content-Type: application/json' -H "Origin: $BASE_URL" \
+      -X POST "$BASE_URL/api/auth/sign-up/email" --data "{\"name\":\"$1\",\"email\":\"$2\",\"password\":\"smoke-password-123\"}")"
+    [[ "$code" == "429" ]] || break
+    sleep 11
+  done
+  printf '%s' "$code"
+}
+expect_refused() { # status limit-text
+  [[ "$1" == "400" ]] && jq -e --arg t "$2" '.code == "SEAT_LIMIT_REACHED" and (.message | contains($t))' "$TMP/signup.json" >/dev/null \
+    || { echo "the sign-up was not refused with SEAT_LIMIT_REACHED ($2): $1 $(cat "$TMP/signup.json")" >&2; exit 1; }
+}
+compose exec -T app kyoube doctor >"$TMP/doctor-licence.log" || true
+grep -Eq '^ok +licence enforcement +active' "$TMP/doctor-licence.log" || { echo "doctor does not report the licence enforcement active:" >&2; cat "$TMP/doctor-licence.log" >&2; exit 1; }
+for n in 2 3 4 5; do
+  STATUS="$(signup "Seat $n" "seat$n@kyoube.local")"
+  [[ "$STATUS" =~ ^2 ]] || { echo "sign-up $n of 5 failed: $STATUS $(cat "$TMP/signup.json")" >&2; exit 1; }
+done
+expect_refused "$(signup "Seat 6" "seat6@kyoube.local")" "(5 of 5)"
+compose exec -T app kyoube license refresh >/dev/null
+[[ "$(compose exec -T app sh -c 'jq ".users | length" /kyoubeai/kyoube/license-users.json' | tr -d '\r')" == "5" ]] \
+  || { echo "the user snapshot does not hold 5 users" >&2; exit 1; }
+compose exec -T app kyoube doctor >"$TMP/doctor-licence.log" || true
+grep -Eq '^WARN +licence +Free: 5 of 5 users' "$TMP/doctor-licence.log" || { echo "doctor does not WARN at the free limit:" >&2; cat "$TMP/doctor-licence.log" >&2; exit 1; }
+# The only admin (who also owns the board key) can't be removed. The last-admin
+# guard fires before the board-key-owner guard, so that is the text to expect.
+if compose exec -T app kyoube users remove smoke@kyoube.local --yes >"$TMP/remove-owner.log" 2>&1; then
+  echo "kyoube users remove deleted the board key's owner" >&2; exit 1
+fi
+grep -q "is the last instance admin" "$TMP/remove-owner.log" || { echo "unexpected refusal text:" >&2; cat "$TMP/remove-owner.log" >&2; exit 1; }
+compose exec -T app kyoube users remove seat5@kyoube.local --yes | tee "$TMP/remove.log"
+grep -q 'removed seat5@kyoube.local. 4 of 5 users.' "$TMP/remove.log" || { echo "kyoube users remove did not report 4 of 5:" >&2; cat "$TMP/remove.log" >&2; exit 1; }
+STATUS="$(signup "Seat 6" "seat6@kyoube.local")"
+[[ "$STATUS" =~ ^2 ]] || { echo "the sign-up after a removal failed: $STATUS $(cat "$TMP/signup.json")" >&2; exit 1; }
+SEATS=(seat2 seat3 seat4 seat6)
+if [[ -n "${KYOUBE_SMOKE_LICENSE:-}" ]]; then
+  # A real key, signed with the production signing key: 7 users, any instance.
+  compose exec -T app kyoube license set "$KYOUBE_SMOKE_LICENSE" | tee "$TMP/license-set.log"
+  grep -q ': 5 of 7 users' "$TMP/license-set.log" || { echo "the smoke licence did not apply as 7 users:" >&2; cat "$TMP/license-set.log" >&2; exit 1; }
+  for n in 7 8; do
+    STATUS="$(signup "Seat $n" "seat$n@kyoube.local")"
+    [[ "$STATUS" =~ ^2 ]] || { echo "licensed sign-up seat$n failed: $STATUS $(cat "$TMP/signup.json")" >&2; exit 1; }
+  done
+  SEATS+=(seat7 seat8)
+  expect_refused "$(signup "Seat 9" "seat9@kyoube.local")" "(7 of 7)"
+  MID=$(( ${#KYOUBE_SMOKE_LICENSE} / 2 ))
+  SWAP="A"; [[ "${KYOUBE_SMOKE_LICENSE:$MID:1}" == "A" ]] && SWAP="B"
+  TAMPERED="${KYOUBE_SMOKE_LICENSE:0:$MID}${SWAP}${KYOUBE_SMOKE_LICENSE:$((MID + 1))}"
+  if compose exec -T app kyoube license set "$TAMPERED" >/dev/null 2>&1; then echo "a tampered licence key was accepted" >&2; exit 1; fi
+  compose exec -T app kyoube license clear >/dev/null
+  echo "    licensed: 7 users allowed, the 8th account refused, a one-character change rejected"
+else
+  echo "    licensed path SKIPPED: KYOUBE_SMOKE_LICENSE is not set (a fork's PR, or a local run without the secret)"
+fi
+# Back to the one admin, so the rest of the smoke (and its backup and restore) is unchanged.
+for seat in "${SEATS[@]}"; do compose exec -T app kyoube users remove "$seat@kyoube.local" --yes >/dev/null; done
+compose exec -T app kyoube users list | tee "$TMP/users.log"
+grep -q '^1 of 5 users$' "$TMP/users.log" || { echo "expected 1 of 5 users after the licensing checks:" >&2; cat "$TMP/users.log" >&2; exit 1; }
+echo "    5 free, the 6th refused with SEAT_LIMIT_REACHED, a removal frees a seat, doctor WARNs at the limit"
 
 echo "==> the entrypoint plugin watcher finishes and exits"
 # Until a board key exists the watcher retries on a 60s cycle; once it succeeds
@@ -879,6 +950,7 @@ AUDIT_BEFORE="$(compose exec -T db psql -U kyoubeai -d kyoube -Atc 'select count
 # uuid without dashes (plugins/kyoube-apps/src/db/company-scope.ts).
 COMPANY_HEX="$(echo "$COMPANY_ID" | tr -d '-' | tr '[:upper:]' '[:lower:]')"
 
+INSTANCE_ID_BEFORE="$(compose exec -T app cat /kyoubeai/kyoube/instance-id | tr -d '\r')"
 COMPOSE_PROJECT_NAME="$PROJECT" COMPOSE_ENV_FILES="$ENV_FILE" BACKUP_DIR="$TMP/backups" \
   bash "$ROOT/scripts/backup.sh" | tee "$TMP/backup.log"
 BACKUP_PATH="$(sed -n 's/^backup written to //p' "$TMP/backup.log" | tail -1)"
@@ -1069,6 +1141,9 @@ grep -q "kyoube.files@${FILES_SHIPPED}=ready" "$TMP/doctor.log" \
 grep -q "kyoube.agent-rules@${AGENT_RULES_SHIPPED}=ready" "$TMP/doctor.log" \
   || { echo "kyoube doctor did not report kyoube.agent-rules@${AGENT_RULES_SHIPPED}=ready:" >&2; cat "$TMP/doctor.log" >&2; exit 1; }
 grep -Eq '^ok +agent rules +in force in ' "$TMP/doctor.log" || { echo "doctor did not report the agent rules in force:" >&2; cat "$TMP/doctor.log" >&2; exit 1; }
+grep -Eq '^ok +licence enforcement +active' "$TMP/doctor.log" || { echo "doctor did not report the licence enforcement active after the restore:" >&2; cat "$TMP/doctor.log" >&2; exit 1; }
+grep -Eq '^ok +licence +Free: 1 of 5 users' "$TMP/doctor.log" || { echo "doctor did not report Free: 1 of 5 users after the restore:" >&2; cat "$TMP/doctor.log" >&2; exit 1; }
+[[ "$(compose exec -T app cat /kyoubeai/kyoube/instance-id | tr -d '\r')" == "$INSTANCE_ID_BEFORE" ]] || { echo "the instance ID changed across backup and restore" >&2; exit 1; }
 grep -Eq '^ok +harnesses in use .*pi_local \(1\)' "$TMP/doctor.log" || { echo "doctor did not pass 'harnesses in use':" >&2; cat "$TMP/doctor.log" >&2; exit 1; }
 grep -Eq '^ok +pi cli +pi 0\.0\.0-smoke — yours \(/kyoubeai/\.local/bin/pi\)' "$TMP/doctor.log" || { echo "doctor did not list the stand-in pi as yours" >&2; cat "$TMP/doctor.log" >&2; exit 1; }
 grep -Eq '^ok +claude cli .*core image \(/usr/local/bin/claude\)' "$TMP/doctor.log" || { echo "doctor did not list the core image's claude" >&2; cat "$TMP/doctor.log" >&2; exit 1; }

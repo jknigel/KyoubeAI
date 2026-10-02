@@ -24,4 +24,4 @@ for pkg in "$ROOT"/plugins/*/package.json; do
 done
 for file in "${edited[@]}"; do rm -f "$file.bak"; done
 (cd "$ROOT" && pnpm install && bash scripts/check-pins.sh)
-echo "Bumped the core pins to ${NEW}. Next: pnpm test && bash scripts/smoke.sh, then commit 'chore: bump core to ${NEW}'."
+echo "Bumped the core pins to ${NEW}. Next: pnpm test && bash scripts/smoke.sh (it proves the licence user limit still holds on this core; with KYOUBE_SMOKE_LICENSE set it checks a licensed instance too), then commit 'chore: bump core to ${NEW}'."
