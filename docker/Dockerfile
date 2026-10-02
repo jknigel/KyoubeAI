@@ -205,6 +205,7 @@ RUN chmod +x /usr/local/bin/kyoube /usr/local/bin/kyoube-entrypoint.sh \
  && test -f /opt/kyoube/plugins/license/dist/worker.js \
  && test -f /opt/kyoube/plugins/license/dist/ui/index.js \
  && gosu node node --input-type=module -e 'const m = await import("/opt/kyoube/license/enforce.mjs"); const r = await m.checkSeat({ countUsers: async () => 0 }); if (!r.ok || r.limit !== 5) process.exit(1); console.log("licence check ok")' \
+ && gosu node sh -c 'node -e "require(\"/opt/kyoube/bootstrap/node_modules/pg\"); console.log(\"bootstrap deps ok\")"' \
  && HOME=/tmp/build-home node /opt/kyoube/bootstrap/dist/kyoube.mjs --help >/dev/null \
  && rm -rf /tmp/build-home \
  && test -z "$(ls -A /kyoubeai)"
