@@ -35,12 +35,14 @@ docker compose
 │   │    │     ├─ worker  kyoube.terminal   — node-pty PTY sessions
 │   │    │     ├─ worker  kyoube.apps       — DataService + AppService
 │   │    │     ├─ worker  kyoube.files      — WorkspaceFiles over each project's folder
-│   │    │     └─ worker  kyoube.agent-rules — protected manager agents (docs/agent-rules.md)
+│   │    │     ├─ worker  kyoube.agent-rules — protected manager agents (docs/agent-rules.md)
+│   │    │     └─ worker  kyoube.license    — the Licence page (docs/licensing.md); reads files on the home volume, never the core database
 │   │    └─ plugin API routes  ◀── agent runs (Claude Code, pi, Hermes) over REST
 │   │
 │   ├─ CLIs on PATH: yours in /kyoubeai/.local/bin, then the core image's claude, codex, gemini, kimi, opencode
 │   ├─ kyoube-entrypoint.sh → background: `kyoube ensure-plugins --watch`
 │   │                                     `kyoube agent-rules --watch` (docs/agent-rules.md)
+│   │                                     `kyoube license --watch` (docs/licensing.md)
 │   ├─ DATABASE_URL         ───────────▶ db: `kyoubeai` database
 │   ├─ KYOUBE_DATABASE_URL  ───────────▶ db: `kyoube` database
 │   └─ volume kyoubeai-home:/kyoubeai (board key, ~/.claude ~/.codex ~/.pi ~/.hermes, ~/.local, ~/.kyoube, project folders)
@@ -53,12 +55,14 @@ docker compose
         ▲ :3100 (KYOUBE_PORT) — browser: KyoubeAI UI (core pages + Terminal, Data, Apps, project Files tab)
 ```
 
-Five plugins ship in the image: `@kyoube/plugin-terminal` (`plugins/kyoube-terminal`),
+Six plugins ship in the image: `@kyoube/plugin-terminal` (`plugins/kyoube-terminal`),
 `@kyoube/plugin-apps` (`plugins/kyoube-apps`), which carries both the Data layer and the Apps module in
 one worker because apps need in-process access to the data service and plugins cannot call each other,
 `@kyoube/plugin-files` (`plugins/kyoube-files`), the Files tab on project pages,
 `@kyoube/plugin-studio` (`plugins/kyoube-studio`), the Studio layout, and
-`@kyoube/plugin-agent-rules` (`plugins/kyoube-agent-rules`), described below. Everything Kyoube adds
+`@kyoube/plugin-agent-rules` (`plugins/kyoube-agent-rules`), described below, and
+`@kyoube/plugin-license` (`plugins/kyoube-license`), the Licence page (`kyoube.license`: it reads files on
+the home volume and never the core database). Everything Kyoube adds
 is one of these plugins, the `@kyoube/app-sdk` package the apps plugin injects into apps
 (`packages/kyoube-app-sdk`), and the `kyoube` bootstrap CLI (`docker/bootstrap`) that installs them.
 
@@ -241,9 +245,11 @@ each plugin's own dependency:
 ### Core patches
 
 The image is the pinned core, rebranded and themed, with a short, bounded list of behaviour fixes.
-`docker/core-patches/patches.mjs` carries fixes to upstream bugs that had to ship here first. In 1.1 it
-has seven: five in the served UI (the first-run wizard's "Skip for now" and a pi transcript display fix)
-and two in the compiled server code: `anthropic-signin-setup-token` (the command Claude subscription
+The one standing behaviour change in the core is the licensing hook (`docs/licensing.md`): a Better Auth
+`user.create.before` hook that calls `/opt/kyoube/license/enforce.mjs`.
+`docker/core-patches/patches.mjs` carries fixes to upstream bugs that had to ship here first, and the
+standing licensing entries. The temporary fixes are five in the served UI (the first-run wizard's "Skip
+for now" and a pi transcript display fix) and two in the compiled server code: `anthropic-signin-setup-token` (the command Claude subscription
 sign-in presents, in `local-ai-login.js`) and `adapter-test-unsaved-harness-switch` (upstream 9335b7d,
 in the agent Test route, `routes/agents.js`). They are applied to the pristine core layer by
 `docker/core-patches/apply.mjs` in the Dockerfile step right before the rebrand, while the same fix is
@@ -254,7 +260,7 @@ that code or already carries the fix fails the build with the patch's id — the
 entry. The one exception: an entry may also declare the shape of the upstream fix (`upstreamFix`), and
 on a core that carries it exactly once the entry is skipped with `<id>: already fixed upstream` in the
 build log, so the weekly build against the core's pre-releases keeps working; the entry is still deleted
-at the first stable core that carries the fix. The list is meant to be empty; `CONTRIBUTING.md` ("Never patch the core") has the rules, and
+at the first stable core that carries the fix. The temporary entries are meant to go away, the licensing ones stay; `CONTRIBUTING.md` ("Never patch the core") has the rules, and
 `docs/upgrading.md` what to do when the step fails at a bump.
 
 ### Plugin hot reload

@@ -365,6 +365,10 @@ shapes; an agent's name only picks among them and is never put into the markup.
 
 ## Telemetry
 
+**Licensing is offline.** Licence keys are checked on the instance against public keys built into the
+image (`packages/license`). Nothing is sent to KyoubeAI or any other server, and an instance needs no
+internet connection to apply or keep a licence.
+
 Two switches are set in two places, because one place is not enough. `docker/Dockerfile`'s runtime
 stage sets `DO_NOT_TRACK=1` and `DISABLE_TELEMETRY=1` in the **container** environment, which covers
 the core server, the `kyoube` CLI, and anything the entrypoint starts. A **Terminal** session

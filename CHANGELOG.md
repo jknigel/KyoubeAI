@@ -4,6 +4,22 @@ All notable changes to KyoubeAI are recorded here, in terms of what changed for 
 building on it. The format is loosely [Keep a Changelog](https://keepachangelog.com/); versioning is
 [SemVer](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- Licensing: an instance allows 5 users for free, and a KyoubeAI licence key raises the limit. The
+  limit is enforced when an account is created; existing users are never locked out. The key is
+  applied on Settings → Plugins → KyoubeAI Licence or with `kyoube license set`, and checked offline.
+  See docs/licensing.md.
+- `kyoube users list` and `kyoube users remove <email>`, to free a seat.
+- `kyoube doctor` reports the licence and whether the limit is enforced, and can now print `WARN`.
+
+### Upgrading
+
+- An instance that already has more than 5 users keeps all of them, but no new user can be added
+  until a licence key is applied. `kyoube doctor` shows `WARN` until then.
+
 ## 1.2.0 - 2026-10-01
 
 ### Agents

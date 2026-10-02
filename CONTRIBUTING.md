@@ -100,7 +100,7 @@ The workspace is the private root and these build-time or deployable members:
 | `docker/bootstrap/` | `@kyoube/bootstrap` | The `kyoube` CLI (`setup`, `ensure-plugins`, `agent-rules`, `doctor`, `harness`, `connect`). |
 | `docker/system/` | *(not a package)* | What the image adds for the Terminal: passwordless `sudo`, the apt hook that keeps installed system packages (`apt-record`, `apt-restore`), `/etc/profile.d` and npm's prefix. |
 | `docker/rebrand/` | `@kyoube/rebrand` | The build-time brand transform: names, logo and artwork (see `docs/branding.md`). |
-| `docker/core-patches/` | `@kyoube/core-patches` | Build-time fixes to upstream bugs, held only until the upstream fix ships (see "Never patch the core"). |
+| `docker/core-patches/` | `@kyoube/core-patches` | Build-time fixes to upstream bugs, held only until the upstream fix ships, plus the standing licensing entries (see "Never patch the core"). |
 | `docker/theme/` | `@kyoube/theme` | The build-time Studio theme: brand tokens, a gated skin and display-text renames (see `docs/theme.md`). |
 | `plugins/kyoube-terminal/` | `@kyoube/plugin-terminal` | The browser terminal plugin. |
 | `plugins/kyoube-apps/` | `@kyoube/plugin-apps` | The organisation database and Apps plugin (one worker, two modules). |
@@ -129,10 +129,11 @@ possible through `@paperclipai/plugin-sdk` (a capability that doesn't exist, a r
 doesn't expose), the answer is never to vendor or patch upstream code — propose it upstream (open an issue or PR on
 [`paperclipai/paperclip`](https://github.com/paperclipai/paperclip)) or find a way to build it as a
 plugin. `docs/architecture.md`'s "Isolation from upstream" material and `docs/upgrading.md` explain why
-this matters: it is what makes a core version bump a one-line change instead of a rebase. There are two
-standing exceptions that change presentation only, one standing exception that changes behaviour, and one temporary list that
-changes behaviour; all four are build-time transforms re-applied to the pristine core on every build, and all four fail the
-build when upstream moves what they rely on. The two presentation exceptions:
+this matters: it is what makes a core version bump a one-line change instead of a rebase. There are
+two standing exceptions that change presentation only, one standing exception that changes behaviour,
+and one temporary list that changes behaviour; all four are build-time transforms re-applied to the
+pristine core on every build, and all four fail the build when upstream moves what they rely on.
+The two presentation exceptions:
 
 - `docker/rebrand/` changes the core's *user-facing text and artwork* to KyoubeAI; `docs/branding.md`
   lists what it leaves alone.
@@ -152,12 +153,13 @@ it anchors on, the build fails naming the entry, and the fix is to redo it for t
 delete it. `scripts/smoke.sh` proves the limit on every PR, after every core bump, and weekly against
 the core's `:beta`.
 
-The one narrow, temporary way to change behaviour is `docker/core-patches/patches.mjs`, a list that
-is meant to be empty. In 1.1 it holds five fixes in the served UI and two in the compiled server
-(`server/dist`): the command the Claude subscription sign-in presents, and the agent Test route on an
-unsaved harness switch. An entry is a fix to an upstream bug that had to ship here first, applied to the
+The one narrow, temporary way to change behaviour is `docker/core-patches/patches.mjs`, a list whose
+temporary entries are meant to go away; only the standing licensing entries stay. The temporary
+entries are fixes in the served UI and in the compiled server (`server/dist`), for example the command
+the Claude subscription sign-in presents and the agent Test route on an unsaved harness switch. A
+temporary entry is a fix to an upstream bug that had to ship here first, applied to the
 pristine core layer at image build time (`docker/core-patches/apply.mjs`, the Dockerfile step right
-before the rebrand) **while the same fix is on its way upstream** — every entry names its upstream
+before the rebrand) **while the same fix is on its way upstream** — every temporary entry names its upstream
 issue or pull request, and opening that PR is part of adding the entry, not an afterthought. The rules
 that keep this from turning into a fork: a pattern anchors on the compiled bundle's string literals
 and code shape, never on minifier-chosen identifier names; it must match **exactly** the declared

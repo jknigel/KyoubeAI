@@ -83,6 +83,9 @@ Inside `/kyoubeai` (the `kyoubeai-home` volume):
 | Path | What is in it |
 |---|---|
 | `kyoube/board-key.json` | The instance-admin board API key `kyoube setup` stored, mode `600`, owned by `node`. Plugin installs and upgrades use it. |
+| `kyoube/license.key` | The licence key, if one is applied, mode `600` (`docs/licensing.md`). |
+| `kyoube/instance-id` | This instance's ID, created once. Send it to KyoubeAI for a key that works on this instance only. |
+| `kyoube/license-users.json` | The Licence page's user list, mode `600`, refreshed every minute. |
 | `kyoube/config.json` | Rendered from the container environment by the entrypoint on every start. Disposable. |
 | `.claude/.credentials.json` | Claude Code login. |
 | `.codex/` | Codex's configuration and login. |
@@ -307,7 +310,9 @@ database, whether a board key is present and where it came from, every `kyoube.*
 `key@version=status`, the Kyoube skills in every company, and the harness and system-package checks
 below. The credential lines at the end (Claude Code, pi, Hermes) are informational — they report
 "not found" until someone authenticates — so a non-zero exit always comes from one of the checks above
-them.
+them. A line can also read `WARN`: the licence needs attention (a key close to expiry or expired, or the
+user limit reached). A `WARN` doesn't fail `kyoube doctor`. The `licence enforcement` line fails when the
+user limit isn't being enforced.
 
 The image carries no harness of its own, so the harness checks look at what is on the `PATH`:
 
@@ -330,6 +335,15 @@ claimed:
 ```bash
 curl -fsS http://localhost:3100/api/health | jq
 docker compose ps          # per-service health from the compose healthchecks
+```
+
+## Licence commands
+
+Run these in the container or from the Terminal page; `docs/licensing.md` has the whole picture.
+
+```bash
+kyoube license [show|set <key>|clear|refresh]   # show the licence; apply, remove or refresh the user list
+kyoube users list|remove <email> [--yes]        # list users; remove one to free a seat
 ```
 
 ## Rotating the board API key
