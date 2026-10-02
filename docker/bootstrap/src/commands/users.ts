@@ -19,6 +19,8 @@ export interface UsersDeps {
   coreApi: () => Promise<UsersCoreApi>;
   /** The user the stored board key (kyoube setup) belongs to, or null. */
   boardKeyUserId: () => Promise<string | null>;
+  /** True when the board key kyoube will use comes from KYOUBE_BOARD_API_KEY, whose owner is unknown. */
+  boardKeyFromEnv: () => boolean;
   confirm: (question: string) => Promise<boolean>;
   now: () => Date;
   trustedKeys: TrustedKeys;
@@ -49,6 +51,7 @@ function defaults(env: NodeJS.ProcessEnv): UsersDeps {
       const config = await readConfig(resolveConfigPath(env));
       return (await readBoardKey(resolveBoardKeyPath(config)))?.userId ?? null;
     },
+    boardKeyFromEnv: () => Boolean(env.KYOUBE_BOARD_API_KEY?.trim()),
     confirm: promptYes,
     now: () => new Date(),
     trustedKeys: TRUSTED_KEYS,
@@ -91,7 +94,11 @@ export async function runUsers(positionals: string[], flags: Record<string, stri
       deps.log(`kyoube: ${target.email} is the last instance admin; make someone else an instance admin first`);
       return 1;
     }
-    if ((await deps.boardKeyUserId()) === target.id) {
+    if (target.isInstanceAdmin && deps.boardKeyFromEnv()) {
+      deps.log("kyoube: KYOUBE_BOARD_API_KEY is set, so kyoube can't tell whose key it is; removing an instance admin could delete it. Unset KYOUBE_BOARD_API_KEY to use the stored key, then run this again");
+      return 1;
+    }
+    if (!deps.boardKeyFromEnv() && (await deps.boardKeyUserId()) === target.id) {
       deps.log(`kyoube: ${target.email} owns the board API key kyoube uses; removing them would delete it. Run kyoube setup signed in as another instance admin first`);
       return 1;
     }
@@ -104,10 +111,24 @@ export async function runUsers(positionals: string[], flags: Record<string, stri
     }
     const api = await deps.coreApi();
     await api.setUserCompanyAccess(target.id, []);
-    if (target.isInstanceAdmin) await api.demoteInstanceAdmin(target.id);
-    await db.deleteUser(target.id);
-    const snapshot = await refreshSnapshot(db, paths.users, deps.now());
-    deps.log(`kyoube: removed ${target.email}. ${snapshot.users.length} of ${await limitFor(snapshot.users.length)} users.`);
+    try {
+      if (target.isInstanceAdmin) await api.demoteInstanceAdmin(target.id);
+      if (!(await db.deleteUser(target.id))) {
+        deps.log(`kyoube: ${target.email} was not found when deleting; nothing more to do`);
+        return 1;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      deps.log(`kyoube: ${target.email}'s memberships were archived but the account was not deleted (${message}). Run kyoube users remove ${target.email} --yes again to finish.`);
+      return 1;
+    }
+    try {
+      const snapshot = await refreshSnapshot(db, paths.users, deps.now());
+      deps.log(`kyoube: removed ${target.email}. ${snapshot.users.length} of ${await limitFor(snapshot.users.length)} users.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      deps.log(`kyoube: removed ${target.email}, but the Licence page's user list could not be refreshed (${message}); it refreshes within a minute.`);
+    }
     return 0;
   } finally {
     await db.close();
