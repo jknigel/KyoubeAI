@@ -77,6 +77,8 @@ function harness(options: {
       return next;
     },
     whoAmI: options.whoAmI ?? (async () => ({ userId: "user-1" })),
+    setUserCompanyAccess: async () => {},
+    demoteInstanceAdmin: async () => {},
   };
   return {
     lines,
