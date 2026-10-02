@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -33,6 +33,7 @@ function deps(db: FakeDb, api: FakeApi, extra: Partial<UsersDeps> = {}): Partial
     openDb: () => db,
     coreApi: async () => api,
     boardKeyUserId: async () => "u1",
+    boardKeyFromEnv: () => false,
     confirm: async () => true,
     now: () => new Date("2026-10-03T12:00:00Z"),
     trustedKeys: {},
@@ -101,5 +102,41 @@ describe("kyoube users remove", () => {
     api.setUserCompanyAccess = async () => { throw new Error("403 forbidden"); };
     await expect(runUsers(["remove", "u2@x.test"], { yes: true }, {}, deps(db, api))).rejects.toThrow("403 forbidden");
     expect(db.deleted).toEqual([]);
+  });
+
+  it("reports a half-done removal when the delete throws after the archive", async () => {
+    const db = new FakeDb([user(1, true), user(2)]);
+    db.deleteUser = async () => { throw new Error("db down"); };
+    expect(await runUsers(["remove", "u2@x.test"], { yes: true }, {}, deps(db, new FakeApi()))).toBe(1);
+    expect(lines.join("\n")).toContain("memberships were archived");
+    expect(lines.join("\n")).toContain("db down");
+  });
+
+  it("says nothing more to do when the delete finds no row", async () => {
+    const db = new FakeDb([user(1, true), user(2)]);
+    db.deleteUser = async () => false;
+    expect(await runUsers(["remove", "u2@x.test"], { yes: true }, {}, deps(db, new FakeApi()))).toBe(1);
+    expect(lines.join("\n")).toContain("u2@x.test was not found when deleting; nothing more to do");
+  });
+
+  it("still succeeds when the snapshot refresh fails after the delete", async () => {
+    await mkdir(licensePaths(dir).users, { recursive: true });
+    const db = new FakeDb([user(1, true), user(2)]);
+    expect(await runUsers(["remove", "u2@x.test"], { yes: true }, {}, deps(db, new FakeApi()))).toBe(0);
+    expect(db.deleted).toEqual(["u2"]);
+    expect(lines.join("\n")).toContain("removed u2@x.test, but the Licence page's user list could not be refreshed");
+  });
+
+  it("refuses to remove an instance admin when the board key comes from the environment", async () => {
+    const db = new FakeDb([user(1, true), user(2, true)]);
+    expect(await runUsers(["remove", "u2@x.test"], { yes: true }, {}, deps(db, new FakeApi(), { boardKeyFromEnv: () => true }))).toBe(1);
+    expect(db.deleted).toEqual([]);
+    expect(lines.join("\n")).toContain("KYOUBE_BOARD_API_KEY is set");
+  });
+
+  it("still removes a non-admin when the board key comes from the environment", async () => {
+    const db = new FakeDb([user(1, true), user(2)]);
+    expect(await runUsers(["remove", "u2@x.test"], { yes: true }, {}, deps(db, new FakeApi(), { boardKeyFromEnv: () => true }))).toBe(0);
+    expect(db.deleted).toEqual(["u2"]);
   });
 });
