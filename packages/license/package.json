@@ -1,0 +1,21 @@
+{
+  "name": "@kyoube/license",
+  "version": "0.1.0",
+  "private": true,
+  "description": "KyoubeAI licence keys: the KYB1 format, signing, verifying, and the user-limit check the core calls",
+  "license": "BUSL-1.1",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "files": ["dist"],
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node build.mjs && vitest run",
+    "typecheck": "tsc --noEmit",
+    "keygen": "node scripts/keygen.mjs",
+    "sign": "node build.mjs && node scripts/sign.mjs"
+  },
+  "devDependencies": { "@types/node": "^24.0.0", "esbuild": "^0.28.2", "typescript": "^7.0.2", "vitest": "^5.0.0" },
+  "engines": { "node": ">=24.11.0" }
+}
