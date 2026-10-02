@@ -368,6 +368,8 @@ and redistribute the code, and use it for evaluation, development and testing wi
 
 Production use is free for up to five users across your instances, as long as you do not offer
 KyoubeAI to others as a hosted, managed or embedded service. AI agents do not count as users.
+The limit is enforced in the app; a licence key from KyoubeAI raises it. See
+[docs/licensing.md](docs/licensing.md).
 Anything beyond that needs a commercial licence: self-hosted for more users, hosted by us, or
 enterprise terms. Plans and prices are at [kyoubeai.com/pricing](https://kyoubeai.com/pricing).
 
