@@ -9,8 +9,11 @@ import { describeMissing, KYOUBE_SKILLS, missingKyoubeSkills } from "../skills.j
 import { EMPTY_STATE, readState, resolveStatePath, type AgentRulesState } from "../agent-rules/state.js";
 import { failureLines } from "../agent-rules/report.js";
 import { agentRulesEnabled } from "./agent-rules.js";
+import { AUTH_MODULE_PATH, ENFORCE_MODULE_PATH, HOOK_MARKER, licensePaths, licenseStatus, readTrimmed, readUserSnapshot, TRUSTED_KEYS, type LicenseStatus } from "@kyoube/license";
+import { pathToFileURL } from "node:url";
+import { coreDatabaseUrl, openCoreUsersDb } from "../license/core-db.js";
 
-export interface Check { name: string; ok: boolean; detail: string }
+export interface Check { name: string; ok: boolean; detail: string; /** Printed as WARN; doesn't fail doctor. */ warn?: boolean }
 
 /**
  * Whether every company's skill library holds both Kyoube skills. A company
@@ -208,6 +211,71 @@ export function claudeCredentialDetail(raw: string | null, filePath: string): st
   }
 }
 
+/**
+ * Whether the user limit is enforced: the seat check loads, and the served
+ * auth module carries the core patch's hook. Either missing means sign-ups are
+ * refused with LICENSE_CHECK_FAILED, or the limit isn't enforced at all.
+ */
+export async function licenceEnforcementCheck(opts: {
+  modulePath: string;
+  authModulePath: string;
+  importModule?: (file: string) => Promise<unknown>;
+  readText?: (file: string) => Promise<string | null>;
+}): Promise<Check> {
+  const name = "licence enforcement";
+  const importModule = opts.importModule ?? ((file: string) => import(pathToFileURL(file).href));
+  const readText = opts.readText ?? readOptional;
+  try {
+    const module = (await importModule(opts.modulePath)) as { checkSeat?: unknown };
+    if (typeof module.checkSeat !== "function") return { name, ok: false, detail: `${opts.modulePath} has no checkSeat; rebuild the image` };
+  } catch (error) {
+    return { name, ok: false, detail: `${opts.modulePath} does not load (${error instanceof Error ? error.message : String(error)}): every sign-up is refused until the image is fixed` };
+  }
+  if (!(await readText(opts.authModulePath))?.includes(HOOK_MARKER)) {
+    return { name, ok: false, detail: `${opts.authModulePath} has no licensing hook: the core patch did not apply, so the user limit is not enforced` };
+  }
+  return { name, ok: true, detail: `active (the sign-up hook calls ${opts.modulePath})` };
+}
+
+/** The licence status as one doctor line; WARN whenever the status needs someone's attention. */
+export function licenceCheck(status: LicenseStatus, snapshotAt: string | null): Check {
+  const notes: string[] = [];
+  if (status.problem) notes.push(status.problem);
+  if (status.expiringSoon && status.daysLeft !== null) notes.push(`expires in ${status.daysLeft} ${status.daysLeft === 1 ? "day" : "days"}`);
+  if (status.overLimit) notes.push("over the user limit: no new user can be added");
+  else if (status.atLimit) notes.push("at the user limit: the next sign-up is refused");
+  const detail = `${status.summary}${notes.length > 0 ? ` — ${notes.join("; ")}` : ""}${snapshotAt ? ` (count from the user snapshot of ${snapshotAt})` : ""}`;
+  return status.needsAttention ? { name: "licence", ok: true, warn: true, detail } : { name: "licence", ok: true, detail };
+}
+
+async function licenceDoctorChecks(env: NodeJS.ProcessEnv, home: string): Promise<Check[]> {
+  const enforcement = await licenceEnforcementCheck({ modulePath: ENFORCE_MODULE_PATH, authModulePath: AUTH_MODULE_PATH });
+  const paths = licensePaths(path.posix.join(home, "kyoube"));
+  let count: number | null = null;
+  let snapshotAt: string | null = null;
+  try {
+    const db = openCoreUsersDb(coreDatabaseUrl(env));
+    try {
+      count = (await db.listUsers()).length;
+    } finally {
+      await db.close();
+    }
+  } catch {
+    const snapshot = await readUserSnapshot(paths.users);
+    if (snapshot) {
+      count = snapshot.users.length;
+      snapshotAt = snapshot.at;
+    }
+  }
+  if (count === null) return [enforcement, { name: "licence", ok: false, detail: "cannot count the users: the core database and the user snapshot are both unavailable" }];
+  const status = licenseStatus({ key: await readTrimmed(paths.key), instanceId: await readTrimmed(paths.instanceId), userCount: count, now: new Date(), trustedKeys: TRUSTED_KEYS });
+  return [enforcement, licenceCheck(status, snapshotAt)];
+}
+
+export function formatCheck(check: Check): string {
+  return `${check.ok ? (check.warn ? "WARN" : "ok  ") : "FAIL"} ${check.name.padEnd(20)} ${check.detail}`;
+}
+
 export async function runDoctor(env: NodeJS.ProcessEnv): Promise<number> {
   const checks: Check[] = [];
   const configPath = resolveConfigPath(env);
@@ -306,6 +374,7 @@ export async function runDoctor(env: NodeJS.ProcessEnv): Promise<number> {
     path.posix.join(stateDir, "apt-restore.log"),
   ));
   checks.push(...await agentRulesDoctorChecks(env, resolveStatePath(config.home), Date.now()));
+  checks.push(...await licenceDoctorChecks(env, config.home));
 
   const claudeFile = path.posix.join(config.home, ".claude", ".credentials.json");
   checks.push({ name: "claude credentials", ok: true, detail: claudeCredentialDetail(await readOptional(claudeFile), claudeFile) });
@@ -322,8 +391,6 @@ export async function runDoctor(env: NodeJS.ProcessEnv): Promise<number> {
 }
 
 function report(checks: Check[]): number {
-  for (const check of checks) {
-    console.log(`${check.ok ? "ok  " : "FAIL"} ${check.name.padEnd(20)} ${check.detail}`);
-  }
+  for (const check of checks) console.log(formatCheck(check));
   return checks.every((check) => check.ok) ? 0 : 1;
 }
