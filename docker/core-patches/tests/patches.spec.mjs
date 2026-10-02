@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { applyPatches, applyToText, countMatches, coreVersionHint, expandGlob } from "../lib.mjs";
@@ -71,6 +71,25 @@ const UPSTREAM_FIX_2026_921_0_BETA_1 =
   '            adapterConfigForTest = canRestoreEnv\n' +
   '                ? restoreRedactedAgentEnv(inputAdapterConfig, savedAgent.adapterConfig)\n' +
   '                : inputAdapterConfig;\n';
+
+// The auth module's imports and the start of authConfig in core 2026.916.1's
+// server/dist/auth/better-auth.js, copied verbatim.
+const BETTER_AUTH_2026_916_1 =
+  'import { betterAuth } from "better-auth";\n' +
+  'import { drizzleAdapter } from "better-auth/adapters/drizzle";\n' +
+  'import { toNodeHandler } from "better-auth/node";\n' +
+  'import { authAccounts, authSessions, authUsers, authVerifications, } from "@paperclipai/db";\n' +
+  "export function createBetterAuthInstance(db, config, trustedOrigins) {\n" +
+  "    const authConfig = {\n" +
+  "        baseURL: baseUrl,\n" +
+  "        secret,\n" +
+  "        trustedOrigins,\n" +
+  "        emailAndPassword: {\n" +
+  "            enabled: true,\n" +
+  "            requireEmailVerification: false,\n" +
+  "            disableSignUp: config.authDisableSignUp,\n" +
+  "        },\n" +
+  "        rateLimit: buildBetterAuthRateLimitOptions({\n";
 
 const CLAUDE_VERIFY_2026_916_1 =
   '            if (!token)\n' +
@@ -348,10 +367,100 @@ async function writeFullCore(root) {
   await writeFile(path.join(root, "server/dist/services/local-ai-login.js"), SIGNIN_COMMAND_2026_916_1);
   await writeFile(path.join(root, "server/dist/routes/agents.js"), TEST_GUARD_2026_916_1);
   await writeFile(path.join(root, "server/dist/services/local-ai-credentials.js"), CLAUDE_VERIFY_2026_916_1);
+  await mkdir(path.join(root, "server", "dist", "auth"), { recursive: true });
+  await writeFile(path.join(root, "server/dist/auth/better-auth.js"), BETTER_AUTH_2026_916_1);
 }
 
 const signinPatch = patch("anthropic-signin-setup-token");
 const guardPatch = patch("adapter-test-unsaved-harness-switch");
+
+const licenseImportPatch = patch("license-seat-limit-import");
+const licenseHookPatch = patch("license-seat-limit-hook");
+const ENFORCE_BUILT = path.join(HERE, "..", "..", "..", "packages", "license", "dist", "enforce.mjs");
+
+/** A standing patch: no upstream to wait for, so no upstream link and no upstreamFix. */
+function declaredStanding(entry) {
+  expect(entry).toBeDefined();
+  expect(entry.standing).toMatch(/licensing/i);
+  expect(entry.upstream).toBeUndefined();
+  expect(entry.upstreamFix).toBeUndefined();
+  expect(entry.expect).toBe(1);
+  expect(entry.pattern.flags).toContain("g");
+}
+
+/**
+ * Runs the patched hook as the core would, with the core's db, its user table
+ * and Better Auth's APIError stood in for, and the module path pointed at the
+ * real built enforce.mjs (or at `modulePath`).
+ */
+async function runPatchedHook(count, modulePath = ENFORCE_BUILT) {
+  const patched = applyToText(applyToText(BETTER_AUTH_2026_916_1, licenseImportPatch).text, licenseHookPatch).text;
+  const objectText = /databaseHooks: (\{.*\}),$/m.exec(patched)?.[1];
+  if (!objectText) throw new Error("no databaseHooks line in the patched module");
+  const source = objectText.replace("/opt/kyoube/license/enforce.mjs", pathToFileURL(modulePath).href);
+  const authUsers = { table: "user" };
+  class FakeAPIError extends Error {
+    constructor(status, body) { super(body.message); this.status = status; this.body = body; }
+  }
+  const db = { $count: async (table) => { if (table !== authUsers) throw new Error("counted the wrong table"); return count; } };
+  // vitest's runner rejects a dynamic import() inside `new Function`
+  // (ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING), so the hook object goes through a real module.
+  const file = path.join(HERE, `.hook-under-test-${process.pid}-${Math.random().toString(36).slice(2)}.mjs`);
+  await writeFile(file, `export default (db, authUsers, KyoubeLicenseAPIError) => (${source});\n`);
+  try {
+    const { default: build } = await import(pathToFileURL(file).href);
+    return await build(db, authUsers, FakeAPIError).user.create.before();
+  } finally {
+    await rm(file, { force: true });
+  }
+}
+
+describe("license-seat-limit-import", () => {
+  it("is declared as a standing licensing patch", () => declaredStanding(licenseImportPatch));
+  it("adds Better Auth's APIError once, right after the betterAuth import, and not again", () => {
+    const { count, text } = applyToText(BETTER_AUTH_2026_916_1, licenseImportPatch);
+    expect(count).toBe(1);
+    expect(text).toContain('import { betterAuth } from "better-auth";\nimport { APIError as KyoubeLicenseAPIError } from "better-auth/api";\n');
+    expect(applyToText(text, licenseImportPatch).count).toBe(0);
+  });
+});
+
+describe("license-seat-limit-hook", () => {
+  it("is declared as a standing licensing patch", () => declaredStanding(licenseHookPatch));
+  it("adds the user.create.before hook once, after emailAndPassword, with the marker", () => {
+    const { count, text } = applyToText(BETTER_AUTH_2026_916_1, licenseHookPatch);
+    expect(count).toBe(1);
+    expect(text).toContain("disableSignUp: config.authDisableSignUp,\n        },\n        databaseHooks: { user: { create: { before: async () => {");
+    expect(text).toContain("kyoube-license-seat-limit");
+    expect(text).toContain('import("/opt/kyoube/license/enforce.mjs")');
+    expect(applyToText(text, licenseHookPatch).count).toBe(0);
+  });
+  // These run the real dist/enforce.mjs (`pnpm test` builds it first). Its folder,
+  // /kyoubeai/kyoube, doesn't exist outside the container, so this is the free tier.
+  it("lets an account in below the limit", async () => {
+    await expect(runPatchedHook(4)).resolves.toBeUndefined();
+  });
+  it("refuses at the limit with 400 SEAT_LIMIT_REACHED and the spec's message", async () => {
+    await expect(runPatchedHook(5)).rejects.toMatchObject({ status: "BAD_REQUEST", body: { code: "SEAT_LIMIT_REACHED", message: expect.stringContaining("(5 of 5)") } });
+  });
+  it("fails closed with 500 LICENSE_CHECK_FAILED when enforce.mjs can't be loaded", async () => {
+    await expect(runPatchedHook(0, path.join(HERE, "no-such-enforce.mjs"))).rejects.toMatchObject({ status: "INTERNAL_SERVER_ERROR", body: { code: "LICENSE_CHECK_FAILED" } });
+  });
+});
+
+describe("a standing patch that stops matching", () => {
+  let root;
+  beforeEach(async () => { root = await mkdtemp(path.join(tmpdir(), "core-patches-standing-")); });
+  afterEach(async () => { await rm(root, { recursive: true, force: true }); });
+  it("tells the build to redo it for this core, never to delete it", async () => {
+    await mkdir(path.join(root, "server", "dist", "auth"), { recursive: true });
+    await writeFile(path.join(root, "server/dist/auth/better-auth.js"), "export const moved = true;\n");
+    const error = await applyPatches(root, [licenseHookPatch]).catch((caught) => caught);
+    expect(error.message).toMatch(/"license-seat-limit-hook" matched 0 time\(s\)/);
+    expect(error.message).toMatch(/standing KyoubeAI patch \(KyoubeAI licensing: the user limit\): redo it for this core; never delete it/);
+    expect(error.message).not.toMatch(/delete the patch/);
+  });
+});
 
 describe("anthropic-signin-setup-token", () => {
   it("is declared with the safety fields every patch needs", () => declaredSafely(signinPatch));
@@ -519,6 +628,9 @@ describe("applyPatches", () => {
     expect(patched).toContain(SKIP_HARNESS_LABEL);
     expect(await readFile(path.join(root, "server/dist/services/local-ai-login.js"), "utf8")).toContain("kyoube connect claude");
     expect(await readFile(path.join(root, "server/dist/routes/agents.js"), "utf8")).toContain("kyoubeCanRestoreEnv");
+    const auth = await readFile(path.join(root, "server/dist/auth/better-auth.js"), "utf8");
+    expect(auth).toContain("KyoubeLicenseAPIError");
+    expect(auth).toContain("kyoube-license-seat-limit");
   });
 
   it("finds the pi parser in a code-split chunk", async () => {

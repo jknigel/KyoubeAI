@@ -9,6 +9,11 @@
  * that no longer has the bug — or that changed the code's shape — fails the
  * build with the patch's id, which is the cue to remove (or redo) it.
  *
+ * One kind of entry is permanent: a `standing` entry (KyoubeAI licensing)
+ * carries `standing: "<what it is for>"` in place of `upstream` and is never
+ * deleted. When a core release moves the code it anchors on, the build fails
+ * the same way, and the fix is to redo the entry for that core.
+ *
  * One exception keeps the weekly build against the core's pre-releases
  * useful: a patch may declare `upstreamFix`, a pattern for the upstream fix
  * itself in the compiled code. When the patch's own pattern matches nothing
@@ -164,5 +169,43 @@ export const PATCHES = [
       "adapterConfigForTest = kyoubeCanRestoreEnv ? restoreRedactedAgentEnv(inputAdapterConfig, savedAgent.adapterConfig) : inputAdapterConfig;",
     expect: 1,
     upstreamFix: /\bconst canRestoreEnv = savedAgent\.adapterType === type \|\| providerAdapter === type;[\s\S]{0,600}?throw unprocessable\("Re-enter environment values when testing a different adapter"\);/g,
+  },
+  // ── Licensing: KyoubeAI's user limit (standing: never deleted) ───────────
+  // The one standing behaviour patch (CONTRIBUTING.md, "Never patch the core";
+  // docs/licensing.md). Every account is created through Better Auth's
+  // createUser, so one `user.create.before` hook covers open sign-up, the
+  // first-run claim and invited people. The hook only calls KyoubeAI code:
+  // packages/license, built to /opt/kyoube/license/enforce.mjs, whose checkSeat
+  // never throws. Its answer becomes a Better Auth APIError, which sign-up
+  // passes through unchanged: 400 SEAT_LIMIT_REACHED, never a 403, which sign-up
+  // swaps for a generic duplicate-account reply. A module that can't load
+  // refuses the sign-up (500 LICENSE_CHECK_FAILED): fail closed.
+  // scripts/smoke.sh proves the limit end to end on every PR, after every core
+  // bump, and weekly against the core's :beta. When either entry stops matching,
+  // redo it for the new core.
+  {
+    id: "license-seat-limit-import",
+    title: "licensing: the auth module imports Better Auth's APIError for the user-limit hook",
+    standing: "KyoubeAI licensing: the user limit",
+    files: ["server/dist/auth/better-auth.js"],
+    pattern: /^import \{ betterAuth \} from "better-auth";$(?!\nimport \{ APIError as KyoubeLicenseAPIError \})/gm,
+    replacement: 'import { betterAuth } from "better-auth";\nimport { APIError as KyoubeLicenseAPIError } from "better-auth/api";',
+    expect: 1,
+  },
+  {
+    id: "license-seat-limit-hook",
+    title: "licensing: refuse a new account when the instance is at its user limit",
+    standing: "KyoubeAI licensing: the user limit",
+    files: ["server/dist/auth/better-auth.js"],
+    pattern: /(\n( *)emailAndPassword: \{\s*enabled: true,\s*requireEmailVerification: false,\s*disableSignUp: config\.authDisableSignUp,\s*\},)(?!\n *databaseHooks:)/g,
+    replacement:
+      "$1\n$2databaseHooks: { user: { create: { before: async () => { /* kyoube-license-seat-limit (docs/licensing.md) */ " +
+      'const kyoubeSeat = await import("/opt/kyoube/license/enforce.mjs").then(' +
+      "(module) => module.checkSeat({ countUsers: async () => Number(await db.$count(authUsers)) }), " +
+      '(error) => { console.error("[kyoube] licence check unavailable", error); ' +
+      'return { ok: false, status: "INTERNAL_SERVER_ERROR", code: "LICENSE_CHECK_FAILED", message: "KyoubeAI could not check its user limit, so no account was created. An instance admin can run kyoube doctor to see why." }; }); ' +
+      "if (!kyoubeSeat.ok) throw new KyoubeLicenseAPIError(kyoubeSeat.status, { code: kyoubeSeat.code, message: kyoubeSeat.message }); " +
+      "} } } },",
+    expect: 1,
   },
 ];

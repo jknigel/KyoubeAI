@@ -108,6 +108,7 @@ The workspace is the private root and these build-time or deployable members:
 | `plugins/kyoube-studio/` | `@kyoube/plugin-studio` | The Studio layout: Home, the sidebar's Build group and Team roster, the Workspace page, agent characters. |
 | `plugins/kyoube-agent-rules/` | `@kyoube/plugin-agent-rules` | The agent working rules guardrail: protected manager agents and their own-team assign grants (no UI; `kyoube agent-rules` drives it, see `docs/agent-rules.md`). |
 | `packages/kyoube-app-sdk/` | `@kyoube/app-sdk` | `window.kyoube`, injected into every app's iframe. |
+| `packages/license/` | `@kyoube/license` | Licence keys: the `KYB1` format, signing and verifying, the licence status, and `enforce.mjs`, the seat check the core's sign-up hook calls (see `docs/licensing.md`). |
 
 Within `plugins/kyoube-apps/src/`: `data/` is the schema/records/permissions/SQL-validation service,
 `apps/` is the Apps module (manifest, store, service, tools, API routes) built on top of it, `db/` is the
@@ -129,8 +130,8 @@ doesn't expose), the answer is never to vendor or patch upstream code — propos
 [`paperclipai/paperclip`](https://github.com/paperclipai/paperclip)) or find a way to build it as a
 plugin. `docs/architecture.md`'s "Isolation from upstream" material and `docs/upgrading.md` explain why
 this matters: it is what makes a core version bump a one-line change instead of a rebase. There are two
-standing exceptions that change presentation only, and one temporary list that changes behaviour; all
-three are build-time transforms re-applied to the pristine core on every build, and all three fail the
+standing exceptions that change presentation only, one standing exception that changes behaviour, and one temporary list that
+changes behaviour; all four are build-time transforms re-applied to the pristine core on every build, and all four fail the
 build when upstream moves what they rely on. The two presentation exceptions:
 
 - `docker/rebrand/` changes the core's *user-facing text and artwork* to KyoubeAI; `docs/branding.md`
@@ -142,6 +143,14 @@ build when upstream moves what they rely on. The two presentation exceptions:
   every rule that hides or moves core UI is gated on the Studio plugin being present, so a miss shows
   the stock layout. It may not change behaviour: anything that needs data or logic goes in
   `plugins/kyoube-studio`, on the public SDK. `docs/theme.md` has the details.
+
+The one standing behaviour exception is licensing. Two entries in `docker/core-patches/patches.mjs`
+marked `standing` register a Better Auth `user.create.before` hook in `server/dist/auth/better-auth.js`.
+The hook only calls KyoubeAI code (`packages/license`, shipped as `/opt/kyoube/license/enforce.mjs`),
+which enforces the user limit in `LICENSE` (`docs/licensing.md`). When a core release moves the code
+it anchors on, the build fails naming the entry, and the fix is to redo it for that core, never to
+delete it. `scripts/smoke.sh` proves the limit on every PR, after every core bump, and weekly against
+the core's `:beta`.
 
 The one narrow, temporary way to change behaviour is `docker/core-patches/patches.mjs`, a list that
 is meant to be empty. In 1.1 it holds five fixes in the served UI and two in the compiled server

@@ -78,7 +78,9 @@ export async function applyPatches(root, patches, { dryRun = false } = {}) {
       throw new Error(
         `core patch "${patch.id}" matched ${total} time(s) in ${files.length} candidate file(s), expected ${patch.expect}` +
           (patch.upstreamFix ? ` (its upstream fix matched ${fixed} time(s), and only exactly 1 skips it)` : "") +
-          `. Either the core release changed this code (redo the patch) or it now carries the upstream fix (delete the patch): ${patch.upstream}`,
+          (patch.standing
+            ? `. This is a standing KyoubeAI patch (${patch.standing}): redo it for this core; never delete it.`
+            : `. Either the core release changed this code (redo the patch) or it now carries the upstream fix (delete the patch): ${patch.upstream}`),
       );
     }
     if (!dryRun) for (const { file, text } of pending) await writeFile(file, text);
