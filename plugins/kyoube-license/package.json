@@ -1,0 +1,28 @@
+{
+  "name": "@kyoube/plugin-license",
+  "version": "0.1.0",
+  "description": "KyoubeAI's Licence page: the user limit, the licence key and who is counted (Paperclip plugin)",
+  "license": "BUSL-1.1",
+  "type": "module",
+  "files": ["dist", "package.json"],
+  "paperclipPlugin": { "manifest": "./dist/manifest.js", "worker": "./dist/worker.js", "ui": "./dist/ui/" },
+  "scripts": {
+    "build": "pnpm --filter @kyoube/license build && node build.mjs",
+    "test": "pnpm --filter @kyoube/license build && vitest run",
+    "typecheck": "pnpm --filter @kyoube/license build && tsc --noEmit"
+  },
+  "dependencies": { "@paperclipai/plugin-sdk": "2026.916.1" },
+  "peerDependencies": { "react": ">=18" },
+  "devDependencies": {
+    "@kyoube/license": "workspace:*",
+    "@types/node": "^24.0.0",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.5",
+    "esbuild": "^0.28.2",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.0"
+  },
+  "engines": { "node": ">=24.11.0" }
+}

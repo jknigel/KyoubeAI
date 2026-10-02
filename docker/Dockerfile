@@ -14,6 +14,7 @@ COPY plugins/kyoube-apps/package.json plugins/kyoube-apps/
 COPY plugins/kyoube-files/package.json plugins/kyoube-files/
 COPY plugins/kyoube-studio/package.json plugins/kyoube-studio/
 COPY plugins/kyoube-agent-rules/package.json plugins/kyoube-agent-rules/
+COPY plugins/kyoube-license/package.json plugins/kyoube-license/
 COPY packages/kyoube-app-sdk/package.json packages/kyoube-app-sdk/
 COPY packages/license/package.json packages/license/
 RUN pnpm install --frozen-lockfile
@@ -30,6 +31,7 @@ RUN pnpm -r build \
  && pnpm --filter @kyoube/plugin-files deploy --prod /out/plugins/files \
  && pnpm --filter @kyoube/plugin-studio deploy --prod /out/plugins/studio \
  && pnpm --filter @kyoube/plugin-agent-rules deploy --prod /out/plugins/agent-rules \
+ && pnpm --filter @kyoube/plugin-license deploy --prod /out/plugins/license \
  && mkdir -p /out/license && cp packages/license/dist/enforce.mjs /out/license/enforce.mjs \
  && test -f /out/license/enforce.mjs \
  && test -f /out/bootstrap/dist/kyoube.mjs \
@@ -37,7 +39,8 @@ RUN pnpm -r build \
  && test -f /out/plugins/apps/dist/manifest.js \
  && test -f /out/plugins/files/dist/manifest.js \
  && test -f /out/plugins/studio/dist/manifest.js \
- && test -f /out/plugins/agent-rules/dist/manifest.js
+ && test -f /out/plugins/agent-rules/dist/manifest.js \
+ && test -f /out/plugins/license/dist/manifest.js
 
 # ---------------------------------------------------------------------------
 # Stage 2: the runtime image = the upstream core image + KyoubeAI.
@@ -198,6 +201,9 @@ RUN chmod +x /usr/local/bin/kyoube /usr/local/bin/kyoube-entrypoint.sh \
  && test -f /opt/kyoube/plugins/agent-rules/dist/manifest.js \
  && test -f /opt/kyoube/plugins/agent-rules/dist/worker.js \
  && gosu node sh -c 'node -e "require.resolve(\"/opt/kyoube/plugins/agent-rules/node_modules/@paperclipai/plugin-sdk/package.json\"); console.log(\"agent-rules deps ok\")"' \
+ && test -f /opt/kyoube/plugins/license/dist/manifest.js \
+ && test -f /opt/kyoube/plugins/license/dist/worker.js \
+ && test -f /opt/kyoube/plugins/license/dist/ui/index.js \
  && gosu node node --input-type=module -e 'const m = await import("/opt/kyoube/license/enforce.mjs"); const r = await m.checkSeat({ countUsers: async () => 0 }); if (!r.ok || r.limit !== 5) process.exit(1); console.log("licence check ok")' \
  && HOME=/tmp/build-home node /opt/kyoube/bootstrap/dist/kyoube.mjs --help >/dev/null \
  && rm -rf /tmp/build-home \
