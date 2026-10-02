@@ -30,6 +30,7 @@ jobs:
         env:
           # The Studio design on the next core, for a person to look at.
           STUDIO_SHOTS_DIR: ${{ runner.temp }}/studio-shots
+          KYOUBE_SMOKE_LICENSE: ${{ secrets.KYOUBE_SMOKE_LICENSE }}
         run: |
           grep -q '^KYOUBE_CORE_VERSION=' scripts/smoke.env
           sed -i 's/^KYOUBE_CORE_VERSION=.*/KYOUBE_CORE_VERSION=beta/' scripts/smoke.env
