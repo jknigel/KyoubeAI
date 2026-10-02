@@ -115,6 +115,8 @@ function registryClient(options: RegistryOptions) {
     async createCliAuthChallenge() { throw new Error("not used"); },
     async getCliAuthChallengeStatus() { throw new Error("not used"); },
     async whoAmI() { throw new Error("not used"); },
+    async setUserCompanyAccess() {},
+    async demoteInstanceAdmin() {},
   } satisfies CoreClient;
 
   return { client, calls, rows };
@@ -282,6 +284,8 @@ function fakeRunClient(
     createCliAuthChallenge: async () => { throw new Error("not used"); },
     getCliAuthChallengeStatus: async () => { throw new Error("not used"); },
     whoAmI: async () => { throw new Error("not used"); },
+    setUserCompanyAccess: async () => {},
+    demoteInstanceAdmin: async () => {},
   } satisfies CoreClient;
 }
 

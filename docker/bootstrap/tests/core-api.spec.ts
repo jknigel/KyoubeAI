@@ -25,6 +25,16 @@ function fakeFetch(responder: (req: RecordedRequest) => { status: number; body?:
 }
 
 describe("createCoreClient", () => {
+  it("archives a user's memberships and demotes an instance admin through the admin routes", async () => {
+    const { impl, requests } = fakeFetch(() => ({ status: 200, body: {} }));
+    const client = createCoreClient({ apiBase: "http://app:3100", apiKey: "k", fetchImpl: impl });
+    await client.setUserCompanyAccess("u 2", []);
+    await client.demoteInstanceAdmin("u2");
+    expect(requests[0]).toMatchObject({ url: "http://app:3100/api/admin/users/u%202/company-access", method: "PUT", body: { companyIds: [] } });
+    expect(requests[1]).toMatchObject({ url: "http://app:3100/api/admin/users/u2/demote-instance-admin", method: "POST" });
+    expect(requests.every((request) => request.headers.authorization === "Bearer k")).toBe(true);
+  });
+
   it("sends the bearer token and parses plugin lists", async () => {
     const { impl, requests } = fakeFetch(() => ({
       status: 200,

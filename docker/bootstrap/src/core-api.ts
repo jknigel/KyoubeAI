@@ -95,6 +95,10 @@ export interface CoreClient {
   createCliAuthChallenge(input: { command: string; clientName: string }): Promise<CliAuthChallenge>;
   getCliAuthChallengeStatus(pollPath: string, token: string): Promise<CliAuthStatus>;
   whoAmI(token: string): Promise<{ userId: string | null }>;
+  /** `PUT /api/admin/users/:userId/company-access` — the companies the user belongs to; `[]` archives every membership. */
+  setUserCompanyAccess(userId: string, companyIds: string[]): Promise<void>;
+  /** `POST /api/admin/users/:userId/demote-instance-admin`. */
+  demoteInstanceAdmin(userId: string): Promise<void>;
 }
 
 export class CoreApiError extends Error {
@@ -250,6 +254,12 @@ export function createCoreClient(opts: CoreClientOptions): CoreClient {
     async uninstallPlugin(pluginId, opts = {}) {
       const query = opts.purge ? "?purge=true" : "";
       await request<unknown>(`/api/plugins/${encodeURIComponent(pluginId)}${query}`, { method: "DELETE" });
+    },
+    async setUserCompanyAccess(userId, companyIds) {
+      await request(`/api/admin/users/${encodeURIComponent(userId)}/company-access`, { method: "PUT", body: { companyIds } });
+    },
+    async demoteInstanceAdmin(userId) {
+      await request(`/api/admin/users/${encodeURIComponent(userId)}/demote-instance-admin`, { method: "POST" });
     },
     createCliAuthChallenge: (input) =>
       request<CliAuthChallenge>("/api/cli-auth/challenges", {

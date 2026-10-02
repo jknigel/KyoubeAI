@@ -4,6 +4,7 @@ import { runDoctor } from "./commands/doctor.js";
 import { runEnsurePlugins } from "./commands/ensure-plugins.js";
 import { runHarness } from "./commands/harness.js";
 import { runLicense } from "./commands/license.js";
+import { runUsers } from "./commands/users.js";
 import { runSetup } from "./commands/setup.js";
 import { runWriteConfig } from "./commands/write-config.js";
 import { AS_NODE_ENV, findGosu, planNodeUser, reexec } from "./run-as-node.js";
@@ -52,6 +53,8 @@ Commands:
   license set <key>     Apply a KyoubeAI licence key (checked first; an invalid key is never saved)
   license clear         Remove the licence key; the free limit of 5 users applies
   license refresh       Re-read the users for the Licence page now (the container does it every minute)
+  users list            List every user the licence counts
+  users remove <email>  Delete a user's account to free a seat (--yes skips the question)
   doctor                Check config, databases, plugins, harnesses and kept system packages
   harness list          Show the agent harness CLIs on PATH, their versions and where they come from
   harness install <name>  Install a harness with its official installer (claude, codex, hermes, pi, gemini, opencode, kimi)
@@ -92,6 +95,8 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
       return runAgentRules(parsed.positionals, parsed.flags, env);
     case "license":
       return runLicense(parsed.positionals, parsed.flags, env);
+    case "users":
+      return runUsers(parsed.positionals, parsed.flags, env);
     case "doctor":
       return runDoctor(env);
     case "harness":
