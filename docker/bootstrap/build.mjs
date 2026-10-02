@@ -4,6 +4,7 @@ await esbuild.build({
   entryPoints: ["src/cli.ts"],
   outfile: "dist/kyoube.mjs",
   bundle: true,
+  external: ["pg-native"],
   platform: "node",
   format: "esm",
   target: ["node24"],

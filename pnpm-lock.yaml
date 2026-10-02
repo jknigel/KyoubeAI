@@ -28,10 +28,20 @@ importers:
         version: 5.0.0(@types/node@24.13.3)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2))
 
   docker/bootstrap:
+    dependencies:
+      pg:
+        specifier: ^8.23.0
+        version: 8.23.0
     devDependencies:
+      '@kyoube/license':
+        specifier: workspace:*
+        version: link:../../packages/license
       '@types/node':
         specifier: ^24.0.0
         version: 24.13.3
+      '@types/pg':
+        specifier: ^8.23.1
+        version: 8.23.1
       esbuild:
         specifier: ^0.28.2
         version: 0.28.2

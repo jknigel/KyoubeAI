@@ -25,6 +25,12 @@ describe("writesAsNode", () => {
   });
 });
 
+it("re-runs license and users as node, since they write files the server's node processes rewrite", () => {
+  expect(writesAsNode("license", ["set"])).toBe(true);
+  expect(writesAsNode("users", ["remove"])).toBe(true);
+  expect(writesAsNode("doctor", [])).toBe(false);
+});
+
 describe("planNodeUser", () => {
   it("re-executes a harness install as node through gosu when run as root, with the same arguments", () => {
     expect(planNodeUser(base)).toEqual({
