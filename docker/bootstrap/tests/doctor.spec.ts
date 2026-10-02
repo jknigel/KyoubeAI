@@ -3,8 +3,9 @@ import { mkdtemp } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import {
-  LEGACY_ENV_KEYS, agentRulesChecks, agentRulesDoctorChecks, claudeCredentialDetail, exposureWarning, harnessChecks, harnessesInUseCheck, legacyEnvCheck, legacyHomeLinkCheck, skillsCheck, systemPackagesCheck,
+  LEGACY_ENV_KEYS, agentRulesChecks, agentRulesDoctorChecks, claudeCredentialDetail, exposureWarning, formatCheck, harnessChecks, harnessesInUseCheck, legacyEnvCheck, legacyHomeLinkCheck, licenceCheck, licenceEnforcementCheck, skillsCheck, systemPackagesCheck,
 } from "../src/commands/doctor.js";
+import { licenseStatus } from "@kyoube/license";
 import { HARNESSES, type HarnessStatus } from "../src/harnesses.js";
 import { EMPTY_STATE, type AgentRulesState } from "../src/agent-rules/state.js";
 import type { PassReport } from "../src/agent-rules/report.js";
@@ -292,5 +293,49 @@ describe("agentRulesDoctorChecks", () => {
     } finally {
       // Cleanup is best-effort; test framework will clean tmpdir
     }
+  });
+});
+
+describe("formatCheck", () => {
+  it("prints ok, WARN or FAIL", () => {
+    expect(formatCheck({ name: "x", ok: true, detail: "d" })).toBe(`ok   ${"x".padEnd(20)} d`);
+    expect(formatCheck({ name: "x", ok: true, warn: true, detail: "d" })).toBe(`WARN ${"x".padEnd(20)} d`);
+    expect(formatCheck({ name: "x", ok: false, detail: "d" })).toBe(`FAIL ${"x".padEnd(20)} d`);
+  });
+});
+
+describe("licenceEnforcementCheck", () => {
+  const opts = (module: unknown, text: string | null) => ({
+    modulePath: "/opt/kyoube/license/enforce.mjs",
+    authModulePath: "/app/server/dist/auth/better-auth.js",
+    importModule: async () => { if (module instanceof Error) throw module; return module; },
+    readText: async () => text,
+  });
+  it("is ok when the module loads and the hook is in the served auth module", async () => {
+    expect(await licenceEnforcementCheck(opts({ checkSeat: () => {} }, "x /* kyoube-license-seat-limit */ y"))).toEqual({ name: "licence enforcement", ok: true, detail: "active (the sign-up hook calls /opt/kyoube/license/enforce.mjs)" });
+  });
+  it("fails when the module can't load or has no checkSeat", async () => {
+    expect((await licenceEnforcementCheck(opts(new Error("ENOENT"), "kyoube-license-seat-limit"))).ok).toBe(false);
+    expect((await licenceEnforcementCheck(opts({}, "kyoube-license-seat-limit"))).detail).toContain("has no checkSeat");
+  });
+  it("fails when the hook isn't in the served auth module", async () => {
+    const check = await licenceEnforcementCheck(opts({ checkSeat: () => {} }, "export {}"));
+    expect(check).toMatchObject({ ok: false });
+    expect(check.detail).toContain("/app/server/dist/auth/better-auth.js has no licensing hook");
+  });
+});
+
+describe("licenceCheck", () => {
+  const status = (key: string | null, count: number) => licenseStatus({ key, instanceId: null, userCount: count, now: new Date("2026-10-03T00:00:00Z"), trustedKeys: {} });
+  it("is a plain ok within the limit", () => {
+    expect(licenceCheck(status(null, 2), null)).toEqual({ name: "licence", ok: true, detail: "Free: 2 of 5 users" });
+  });
+  it("warns at the limit and when the stored key isn't valid, without failing", () => {
+    expect(licenceCheck(status(null, 5), null)).toMatchObject({ ok: true, warn: true, detail: "Free: 5 of 5 users — at the user limit: the next sign-up is refused" });
+    expect(licenceCheck(status("KYB1.bad.key", 1), null)).toMatchObject({ ok: true, warn: true });
+    expect(licenceCheck(status("KYB1.bad.key", 1), null).detail).toContain("doesn't look like a KyoubeAI licence key");
+  });
+  it("names the snapshot when the count came from it", () => {
+    expect(licenceCheck(status(null, 2), "2026-10-03T00:00:00.000Z").detail).toBe("Free: 2 of 5 users (count from the user snapshot of 2026-10-03T00:00:00.000Z)");
   });
 });
