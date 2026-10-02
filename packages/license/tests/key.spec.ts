@@ -44,6 +44,38 @@ describe("signLicense and verifyLicense", () => {
     }
   });
 
+  it("never verifies a key whose last character only changes unused bits", () => {
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const key = signLicense(PAYLOAD, TEST.privatePem);
+    const parts = key.split(".");
+    const prefix = parts[0];
+    const payload = parts[1];
+    const signature = parts[2];
+
+    if (!prefix || !payload || !signature) throw new Error("invalid key format");
+
+    for (const part of [payload, signature]) {
+      const lastChar = part[part.length - 1];
+      if (!lastChar) continue;
+      const idx = alphabet.indexOf(lastChar);
+      const unusedBits = (6 * part.length) % 8;
+
+      if (unusedBits === 0) {
+        // Skip: no unused bits in this part, all bits are significant
+        continue;
+      }
+
+      // Prove the flip is unused: buffer should be identical
+      const flipped = alphabet[idx ^ 1];
+      const changedPart = part.slice(0, -1) + flipped;
+      expect(Buffer.from(changedPart, "base64url")).toEqual(Buffer.from(part, "base64url"));
+
+      // The key with the flipped bit should not verify
+      const changedKey = [prefix, payload === part ? changedPart : payload, signature === part ? changedPart : signature].join(".");
+      expect(check(changedKey).code, `part with unused bits: ${part.slice(0, 10)}...`).toBe("malformed");
+    }
+  });
+
   it("calls a re-encoded payload with more seats bad_signature", () => {
     const [prefix, , signature] = signLicense(PAYLOAD, TEST.privatePem).split(".");
     expect(check([prefix, encode({ ...PAYLOAD, seats: 1000 }), signature].join(".")).code).toBe("bad_signature");
