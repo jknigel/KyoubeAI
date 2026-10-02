@@ -77,6 +77,12 @@ fi
 # Double-forked for the same reason as the watcher above.
 ( run_as_node "$NODE" "$BOOTSTRAP" agent-rules --watch & )
 
+# Keeps the user list the Licence page shows fresh (docs/licensing.md): one read
+# of the core's users a minute, as node, written to
+# /kyoubeai/kyoube/license-users.json. Enforcement doesn't depend on it; the
+# core's sign-up hook counts live. Double-forked like the loops above.
+( run_as_node "$NODE" "$BOOTSTRAP" license --watch & )
+
 # The core's entrypoint (root: remaps and chowns, then gosu to node) runs on the
 # image's PATH like everything above; `env` hands the server the full one.
 exec /usr/local/bin/docker-entrypoint.sh /usr/bin/env PATH="$SERVER_PATH" "$@"

@@ -16,9 +16,11 @@ export const AS_NODE_ENV = "KYOUBE_AS_NODE";
  * leave root-owned files that the Terminal and the agents cannot write.
  * `agent-rules` writes its state file, which the background loop, running as node, must
  * be able to rewrite.
+ * `license` and `users` write the licence key and the user snapshot, which the licence plugin's worker and the
+ * background loop, both node, read and rewrite.
  */
 export function writesAsNode(command: string | null, positionals: string[]): boolean {
-  return command === "connect" || command === "agent-rules" || (command === "harness" && positionals[0] === "install");
+  return command === "connect" || command === "agent-rules" || command === "license" || command === "users" || (command === "harness" && positionals[0] === "install");
 }
 
 export type NodeUserPlan =
@@ -46,7 +48,7 @@ export interface NodeUserInput {
 /** Decides whether this run continues as is, re-executes itself as `node` through gosu, or refuses. */
 export function planNodeUser(input: NodeUserInput): NodeUserPlan {
   if (input.uid !== 0 || !writesAsNode(input.command, input.positionals)) return { kind: "run" };
-  const what = input.command === "connect" ? "kyoube connect" : input.command === "agent-rules" ? "kyoube agent-rules" : "kyoube harness install";
+  const what = input.command === "harness" ? "kyoube harness install" : `kyoube ${input.command}`;
   if (input.reexeced) {
     return { kind: "refuse", message: `${what} is still running as root after switching to the node user; nothing was changed. Run it from the Terminal page, or with docker compose exec -u node app kyoube ...` };
   }

@@ -3,6 +3,7 @@ import { runConnect } from "./commands/connect.js";
 import { runDoctor } from "./commands/doctor.js";
 import { runEnsurePlugins } from "./commands/ensure-plugins.js";
 import { runHarness } from "./commands/harness.js";
+import { runLicense } from "./commands/license.js";
 import { runSetup } from "./commands/setup.js";
 import { runWriteConfig } from "./commands/write-config.js";
 import { AS_NODE_ENV, findGosu, planNodeUser, reexec } from "./run-as-node.js";
@@ -47,6 +48,10 @@ Commands:
   setup                 One-time: log in as instance admin (browser approval), store a board key, install plugins
   ensure-plugins        Install/upgrade Kyoube plugins into the core host (flags: --watch, --api-key <key>, --api-base <url>)
   agent-rules           Keep the agent working rules in force (--once, --watch) or remove them (off)
+  license [show]        Show the licence: Free (5 users) or licensed, users counted, expiry, instance ID
+  license set <key>     Apply a KyoubeAI licence key (checked first; an invalid key is never saved)
+  license clear         Remove the licence key; the free limit of 5 users applies
+  license refresh       Re-read the users for the Licence page now (the container does it every minute)
   doctor                Check config, databases, plugins, harnesses and kept system packages
   harness list          Show the agent harness CLIs on PATH, their versions and where they come from
   harness install <name>  Install a harness with its official installer (claude, codex, hermes, pi, gemini, opencode, kimi)
@@ -85,6 +90,8 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
       return runEnsurePlugins(parsed.flags, env);
     case "agent-rules":
       return runAgentRules(parsed.positionals, parsed.flags, env);
+    case "license":
+      return runLicense(parsed.positionals, parsed.flags, env);
     case "doctor":
       return runDoctor(env);
     case "harness":
