@@ -6,9 +6,9 @@
   "description": "The `kyoube` CLI: writes runtime config, installs the Kyoube plugins into the core host, and runs diagnostics",
   "files": ["dist", "package.json"],
   "scripts": {
-    "build": "pnpm --filter @kyoube/license build && node build.mjs",
-    "test": "pnpm --filter @kyoube/license build && vitest run",
-    "typecheck": "pnpm --filter @kyoube/license build && tsc --noEmit"
+    "build": "node build.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "pg": "^8.23.0"

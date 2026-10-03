@@ -54,6 +54,9 @@ importers:
 
   docker/core-patches:
     devDependencies:
+      '@kyoube/license':
+        specifier: workspace:*
+        version: link:../../packages/license
       vitest:
         specifier: ^5.0.0
         version: 5.0.0(@types/node@24.13.3)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2))
