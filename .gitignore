@@ -12,3 +12,5 @@ coverage/
 .env.tmp
 # Local compose wiring (tunnels, host services, extra volumes): yours, never tracked.
 docker-compose.override.yml
+# Scratch hook modules the core-patches tests write
+docker/core-patches/tests/.hook-under-test-*.mjs
