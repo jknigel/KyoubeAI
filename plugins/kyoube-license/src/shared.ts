@@ -11,7 +11,7 @@ export const PLUGINS_SETTINGS_PATH = "/company/settings/instance/plugins";
 export const TERMINAL_PATH = "/terminal";
 
 export function removeCommand(email: string): string {
-  return `kyoube users remove ${email}`;
+  return `kyoube users remove '${email.replace(/'/g, "'\\''")}'`;
 }
 
 export interface LicenceUser extends SnapshotUser {

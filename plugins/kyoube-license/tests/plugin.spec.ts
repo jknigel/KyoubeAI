@@ -41,7 +41,7 @@ describe("license.status", () => {
     expect(view.status.summary).toBe("Free: 2 of 5 users");
     expect(view.instanceId).toBe("inst-1");
     expect(view.snapshotAt).toBe("2026-10-03T11:59:00.000Z");
-    expect(view.users.map((u) => [u.email, u.removeCommand])).toEqual([["u1@x.test", "kyoube users remove u1@x.test"], ["u2@x.test", "kyoube users remove u2@x.test"]]);
+    expect(view.users.map((u) => [u.email, u.removeCommand])).toEqual([["u1@x.test", "kyoube users remove 'u1@x.test'"], ["u2@x.test", "kyoube users remove 'u2@x.test'"]]);
   });
 
   it("shows nothing to someone who isn't an instance admin", async () => {
