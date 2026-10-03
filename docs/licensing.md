@@ -99,14 +99,18 @@ and `kyoube doctor` show the overage.
     and weekly against the core's `:beta`.
   - Its licensed check needs the `KYOUBE_SMOKE_LICENSE` repository secret.
 - **Two paths the hook doesn't cover:** the hook sees every account created through Better Auth. The
-  core also inserts into its `user` table directly in two places: the `local-board` principal of a
-  `local_trusted` deployment (`server/dist/index.js`), and the cloud-tenant header sync
-  (`server/dist/middleware/auth.js`). KyoubeAI forces `PAPERCLIP_DEPLOYMENT_MODE=authenticated` and
-  is never a cloud tenant, so neither runs. When you bump the core, check they are still
-  unreachable.
+  core also inserts into its `user` table directly in two places:
+  - The `local-board` principal of a `local_trusted` deployment (`server/dist/index.js`). It is
+    unreachable, because KyoubeAI forces `PAPERCLIP_DEPLOYMENT_MODE=authenticated`.
+  - The cloud-tenant header sync (`resolveCloudTenantActor` in `server/dist/middleware/auth.js`). It
+    is gated by `PAPERCLIP_CLOUD_TENANT_SERVER_TOKEN`, which `docker/entrypoint.sh` clears before
+    the core starts.
+
+  When you bump the core, re-check both.
 - **Signing keys:**
   - `pnpm --filter @kyoube/license keygen <kid>` creates one and prints the entry for
     `packages/license/src/trusted-keys.ts`.
-  - `pnpm --filter @kyoube/license sign --kid <kid> --customer "<name>" --seats <n>` issues a key.
+  - `pnpm --silent --filter @kyoube/license sign --kid <kid> --customer "<name>" --seats <n>` issues a key. Keep `--silent`: without it pnpm writes its banner and engine warnings
+    to stdout, and the output (often redirected to a file or a secret) must be the single `KYB1.` line.
   - The private key lives in `~/.kyoube-license/keys/`. It must never enter a repository, and it
     must be backed up.
