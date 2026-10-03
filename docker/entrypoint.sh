@@ -83,6 +83,10 @@ fi
 # core's sign-up hook counts live. Double-forked like the loops above.
 ( run_as_node "$NODE" "$BOOTSTRAP" license --watch & )
 
+# KyoubeAI is never a cloud tenant. The core's cloud-tenant path creates `user`
+# rows directly, without the licensing hook (docs/licensing.md), so clear it.
+unset PAPERCLIP_CLOUD_TENANT_SERVER_TOKEN
+
 # The core's entrypoint (root: remaps and chowns, then gosu to node) runs on the
 # image's PATH like everything above; `env` hands the server the full one.
 exec /usr/local/bin/docker-entrypoint.sh /usr/bin/env PATH="$SERVER_PATH" "$@"
