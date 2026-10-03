@@ -323,6 +323,11 @@ describe("licenceEnforcementCheck", () => {
     expect(check).toMatchObject({ ok: false });
     expect(check.detail).toContain("/app/server/dist/auth/better-auth.js has no licensing hook");
   });
+  it("fails when the served auth module has more than one databaseHooks block", async () => {
+    const check = await licenceEnforcementCheck(opts({ checkSeat: () => {} }, "databaseHooks: {} /* kyoube-license-seat-limit */ databaseHooks: {}"));
+    expect(check).toMatchObject({ ok: false });
+    expect(check.detail).toContain("has more than one databaseHooks block: a core change may override the licensing hook");
+  });
 });
 
 describe("licenceCheck", () => {
