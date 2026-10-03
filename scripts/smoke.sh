@@ -291,8 +291,8 @@ echo "==> licensing: five users free, the sixth refused, removing a user frees a
 # $COOKIES stays as it is.
 signup() { # name email -> prints the HTTP status; the body lands in $TMP/signup.json
   # The core rate-limits sign-ups (429, x-retry-after 10), so wait and retry on a 429.
-  local code attempt
-  for attempt in 1 2 3 4 5 6; do
+  local code _
+  for _ in 1 2 3 4 5 6; do
     code="$(curl -sS -o "$TMP/signup.json" -w '%{http_code}' -H 'Content-Type: application/json' -H "Origin: $BASE_URL" \
       -X POST "$BASE_URL/api/auth/sign-up/email" --data "{\"name\":\"$1\",\"email\":\"$2\",\"password\":\"smoke-password-123\"}")"
     [[ "$code" == "429" ]] || break
@@ -301,8 +301,10 @@ signup() { # name email -> prints the HTTP status; the body lands in $TMP/signup
   printf '%s' "$code"
 }
 expect_refused() { # status limit-text
-  [[ "$1" == "400" ]] && jq -e --arg t "$2" '.code == "SEAT_LIMIT_REACHED" and (.message | contains($t))' "$TMP/signup.json" >/dev/null \
-    || { echo "the sign-up was not refused with SEAT_LIMIT_REACHED ($2): $1 $(cat "$TMP/signup.json")" >&2; exit 1; }
+  if [[ "$1" != "400" ]] || ! jq -e --arg t "$2" '.code == "SEAT_LIMIT_REACHED" and (.message | contains($t))' "$TMP/signup.json" >/dev/null; then
+    echo "the sign-up was not refused with SEAT_LIMIT_REACHED ($2): $1 $(cat "$TMP/signup.json")" >&2
+    exit 1
+  fi
 }
 compose exec -T app kyoube doctor >"$TMP/doctor-licence.log" || true
 grep -Eq '^ok +licence enforcement +active' "$TMP/doctor-licence.log" || { echo "doctor does not report the licence enforcement active:" >&2; cat "$TMP/doctor-licence.log" >&2; exit 1; }
