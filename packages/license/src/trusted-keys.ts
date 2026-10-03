@@ -11,4 +11,6 @@ import type { TrustedKeys } from "./key.js";
  * Nothing at runtime adds to this list: no environment variable, file or flag.
  * That would let anyone trust a key of their own.
  */
-export const TRUSTED_KEYS: TrustedKeys = Object.freeze({});
+export const TRUSTED_KEYS: TrustedKeys = Object.freeze({
+  "2026a": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAs8wGbgdKwNuUCc1NmM4XNjckBu1S+a+Sg7H8Y0S0KmU=\n-----END PUBLIC KEY-----\n",
+});
