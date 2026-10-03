@@ -23,6 +23,8 @@ export function coreDatabaseUrl(env: NodeJS.ProcessEnv): string {
 
 export function openCoreUsersDb(url: string): CoreUsersDb {
   const pool = new pg.Pool({ connectionString: url, max: 1 });
+  // An idle connection dropped by a database restart must not crash the long-lived `--watch` process.
+  pool.on("error", () => {});
   return {
     async listUsers() {
       const { rows } = await pool.query<{ id: string; email: string; name: string; created_at: Date | string; is_instance_admin: boolean }>(LIST_USERS_SQL);
