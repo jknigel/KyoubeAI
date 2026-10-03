@@ -328,8 +328,11 @@ STATUS="$(signup "Seat 6" "seat6@kyoube.local")"
 [[ "$STATUS" =~ ^2 ]] || { echo "the sign-up after a removal failed: $STATUS $(cat "$TMP/signup.json")" >&2; exit 1; }
 SEATS=(seat2 seat3 seat4 seat6)
 if [[ -n "${KYOUBE_SMOKE_LICENSE:-}" ]]; then
+  # Take only the token: a pasted secret can carry a trailing newline, quotes or a banner line.
+  SMOKE_KEY="$(grep -oE 'KYB1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+' <<<"${KYOUBE_SMOKE_LICENSE}" | head -1 || true)"
+  [[ -n "$SMOKE_KEY" ]] || { echo "KYOUBE_SMOKE_LICENSE is set but holds no KYB1.<payload>.<signature> token; fix the secret (never printed here)" >&2; exit 1; }
   # A real key, signed with the production signing key: 7 users, any instance.
-  compose exec -T app kyoube license set "$KYOUBE_SMOKE_LICENSE" | tee "$TMP/license-set.log"
+  compose exec -T app kyoube license set "$SMOKE_KEY" | tee "$TMP/license-set.log"
   grep -q ': 5 of 7 users' "$TMP/license-set.log" || { echo "the smoke licence did not apply as 7 users:" >&2; cat "$TMP/license-set.log" >&2; exit 1; }
   for n in 7 8; do
     STATUS="$(signup "Seat $n" "seat$n@kyoube.local")"
@@ -337,10 +340,12 @@ if [[ -n "${KYOUBE_SMOKE_LICENSE:-}" ]]; then
   done
   SEATS+=(seat7 seat8)
   expect_refused "$(signup "Seat 9" "seat9@kyoube.local")" "(7 of 7)"
-  MID=$(( ${#KYOUBE_SMOKE_LICENSE} / 2 ))
-  SWAP="A"; [[ "${KYOUBE_SMOKE_LICENSE:$MID:1}" == "A" ]] && SWAP="B"
-  TAMPERED="${KYOUBE_SMOKE_LICENSE:0:$MID}${SWAP}${KYOUBE_SMOKE_LICENSE:$((MID + 1))}"
-  if compose exec -T app kyoube license set "$TAMPERED" >/dev/null 2>&1; then echo "a tampered licence key was accepted" >&2; exit 1; fi
+  MID=$(( ${#SMOKE_KEY} / 2 ))
+  SWAP="A"; [[ "${SMOKE_KEY:$MID:1}" == "A" ]] && SWAP="B"
+  TAMPERED="${SMOKE_KEY:0:$MID}${SWAP}${SMOKE_KEY:$((MID + 1))}"
+  # The key is never printed: the output goes to a file that is only searched.
+  if compose exec -T app kyoube license set "$TAMPERED" >"$TMP/license-tamper.log" 2>&1; then echo "a tampered licence key was accepted" >&2; exit 1; fi
+  grep -q 'licence key not applied' "$TMP/license-tamper.log" || { echo "a tampered licence key failed, but not with 'licence key not applied' (output withheld: it may echo the key)" >&2; exit 1; }
   compose exec -T app kyoube license clear >/dev/null
   echo "    licensed: 7 users allowed, the 8th account refused, a one-character change rejected"
 else
