@@ -231,8 +231,12 @@ export async function licenceEnforcementCheck(opts: {
   } catch (error) {
     return { name, ok: false, detail: `${opts.modulePath} does not load (${error instanceof Error ? error.message : String(error)}): every sign-up is refused until the image is fixed` };
   }
-  if (!(await readText(opts.authModulePath))?.includes(HOOK_MARKER)) {
+  const authText = await readText(opts.authModulePath);
+  if (!authText?.includes(HOOK_MARKER)) {
     return { name, ok: false, detail: `${opts.authModulePath} has no licensing hook: the core patch did not apply, so the user limit is not enforced` };
+  }
+  if (authText.split("databaseHooks").length - 1 > 1) {
+    return { name, ok: false, detail: `${opts.authModulePath} has more than one databaseHooks block: a core change may override the licensing hook` };
   }
   return { name, ok: true, detail: `active (the sign-up hook calls ${opts.modulePath})` };
 }

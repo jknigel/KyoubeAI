@@ -122,11 +122,14 @@ ENV PATH=/kyoubeai/.local/bin:${PATH} \
 ARG KYOUBE_CORE_VERSION
 COPY docker/core-patches/apply.mjs docker/core-patches/lib.mjs docker/core-patches/patches.mjs /opt/kyoube/core-patches/
 RUN gosu node node /opt/kyoube/core-patches/apply.mjs --root /app --report --core-version "${KYOUBE_CORE_VERSION}"
-# The licensing hook (a standing core patch above) imports Better Auth's APIError
-# and KyoubeAI's seat check; prove both resolve for the runtime user before
-# anything else is layered on. The bundle itself is copied in below with the
-# rest of /opt/kyoube.
+# The licensing hook (a standing core patch above) imports Better Auth's APIError.
+# Check the hook marker is in the served auth module, that the module has exactly
+# one databaseHooks block (a second one could override the hook), that it still
+# parses, and that APIError resolves for the runtime user. The seat check bundle
+# itself is copied in below with the rest of /opt/kyoube.
 RUN grep -q 'kyoube-license-seat-limit' /app/server/dist/auth/better-auth.js \
+ && test "$(grep -c 'databaseHooks' /app/server/dist/auth/better-auth.js)" -eq 1 \
+ && cd /app/server && node --check dist/auth/better-auth.js \
  && cd /app/server && gosu node node --input-type=module -e 'const { APIError } = await import("better-auth/api"); if (new APIError("BAD_REQUEST", { code: "X", message: "x" }).statusCode !== 400) process.exit(1)'
 
 # ---------------------------------------------------------------------------
