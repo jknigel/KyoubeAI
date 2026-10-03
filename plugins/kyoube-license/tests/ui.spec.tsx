@@ -24,7 +24,7 @@ const view = (count: number): LicenceView => ({
   status: licenseStatus({ key: null, instanceId: "inst-1", userCount: count, now: new Date("2026-10-03T00:00:00Z"), trustedKeys: {} }),
   instanceId: "inst-1",
   snapshotAt: "2026-10-03T11:59:00.000Z",
-  users: [{ id: "u1", email: "u1@x.test", name: "User 1", createdAt: "2026-10-01T00:00:00.000Z", isInstanceAdmin: true, removeCommand: "kyoube users remove u1@x.test" }],
+  users: [{ id: "u1", email: "u1@x.test", name: "User 1", createdAt: "2026-10-01T00:00:00.000Z", isInstanceAdmin: true, removeCommand: "kyoube users remove 'u1@x.test'" }],
 });
 
 const panel = (props: Partial<Parameters<typeof LicencePanel>[0]>) =>
@@ -36,7 +36,7 @@ describe("LicencePanel", () => {
     expect(html).toContain("Free: 1 of 5 users");
     expect(html).toContain("inst-1");
     expect(html).toContain("u1@x.test");
-    expect(html).toContain("kyoube users remove u1@x.test");
+    expect(html).toContain("kyoube users remove &#x27;u1@x.test&#x27;");
     expect(html).toContain('href="/acme/terminal"');
     expect(html).toContain("Apply");
   });
