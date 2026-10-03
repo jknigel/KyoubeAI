@@ -12,7 +12,7 @@
   "scripts": {
     "build": "node build.mjs",
     "test": "node build.mjs && vitest run",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "node build.mjs && tsc --noEmit",
     "keygen": "node scripts/keygen.mjs",
     "sign": "node build.mjs && node scripts/sign.mjs"
   },

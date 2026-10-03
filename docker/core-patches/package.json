@@ -5,9 +5,10 @@
   "type": "module",
   "description": "Build-time fixes applied to the pristine core layer until the upstream fix ships (docker/Dockerfile runs apply.mjs before the rebrand)",
   "scripts": {
-    "test": "pnpm --filter @kyoube/license build && vitest run"
+    "test": "vitest run"
   },
   "devDependencies": {
+    "@kyoube/license": "workspace:*",
     "vitest": "^5.0.0"
   }
 }
