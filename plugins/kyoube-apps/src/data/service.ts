@@ -1,6 +1,9 @@
 import type { Pool, PoolClient } from "pg";
 import type { AiCellsView, AiColumnHooks, AiRowWrite, CellCounts, ReviewEntry } from "./ai-hooks.js";
 import { ensureCompany, schemaNameFor, type CompanyScope } from "../db/company-scope.js";
+import type { GuardAgentAction, GuardContext, GuardedAction } from "../decisions/guardrail.js";
+// Pure functions only, so this runtime import makes no cycle with DecisionService.
+import { isBulkTarget, rowTargetParams } from "../decisions/guardrail.js";
 import { withMeta, type AuditEntry } from "./audit.js";
 import { DataError } from "./errors.js";
 import { isAiColumn } from "./field-kinds.js";
@@ -70,6 +73,8 @@ export function systemActor(): DataActor {
  */
 export interface DataServiceHooks {
   aiColumns?: AiColumnHooks;
+  /** The guardrail on risky agent actions (milestone 4). Throws to hold the call; returns to let it go ahead. */
+  guardAgentAction?: GuardAgentAction;
 }
 
 function declaresAiColumn(raw: unknown): boolean {
@@ -200,8 +205,9 @@ export class DataService {
     return info;
   }
 
-  async removeField(companyId: string, actor: DataActor, table: string, field: string): Promise<TableInfo> {
+  async removeField(companyId: string, actor: DataActor, table: string, field: string, guard?: GuardContext): Promise<TableInfo> {
     const scope = await this.authorize(companyId, actor, "schema", "remove a field");
+    await this.guarded(companyId, actor, { operation: "remove_field", table, field, params: { table, field } }, guard);
     const hard = (await getCompanySettings(this.pool, companyId)).hardDelete;
     const info = await this.schema.removeField(scope, table, field, hard,
       (name) => this.entry(companyId, actor, "remove_field", name, { field, hard }));
@@ -209,8 +215,9 @@ export class DataService {
     return info;
   }
 
-  async dropTable(companyId: string, actor: DataActor, table: string): Promise<{ ok: true }> {
+  async dropTable(companyId: string, actor: DataActor, table: string, guard?: GuardContext): Promise<{ ok: true }> {
     const scope = await this.authorize(companyId, actor, "schema", "drop a table");
+    await this.guarded(companyId, actor, { operation: "drop_table", table, params: { table }, countRows: () => this.records.count(scope, table) }, guard);
     const hard = (await getCompanySettings(this.pool, companyId)).hardDelete;
     await this.schema.dropTable(scope, table, hard,
       (name) => this.entry(companyId, actor, "drop_table", name, { hard }));
@@ -218,8 +225,9 @@ export class DataService {
     return { ok: true };
   }
 
-  async renameTable(companyId: string, actor: DataActor, table: string, newName: string): Promise<TableInfo> {
+  async renameTable(companyId: string, actor: DataActor, table: string, newName: string, guard?: GuardContext): Promise<TableInfo> {
     const scope = await this.authorize(companyId, actor, "schema", "rename a table");
+    await this.guarded(companyId, actor, { operation: "rename_table", table, newName, params: { table, newName } }, guard);
     const info = await this.schema.renameTable(scope, table, newName,
       (name) => this.entry(companyId, actor, "rename_table", name, { from: table }));
     await this.notify(companyId, actor, "rename_table", info.name, `renamed table ${table} to ${info.name}`);
@@ -247,8 +255,14 @@ export class DataService {
     return inserted;
   }
 
-  async update(companyId: string, actor: DataActor, table: string, target: RowTarget, patch: Row, via?: ViaApp): Promise<{ affected: number; rows: Row[] }> {
+  async update(companyId: string, actor: DataActor, table: string, target: RowTarget, patch: Row, via?: ViaApp, guard?: GuardContext): Promise<{ affected: number; rows: Row[] }> {
     const scope = await this.authorize(companyId, actor, "write", "update rows");
+    if (isBulkTarget(target)) {
+      await this.guarded(companyId, actor, {
+        operation: "update", table, params: { ...rowTargetParams(table, target), patch },
+        countRows: () => this.targetCount(scope, table, target),
+      }, guard);
+    }
     // With AI columns attached, the write also hands back the AI values it replaced (only when the
     // patch sets one), which is what tells an edit from a save that wrote a value back.
     const { previous, ...result } = await this.records.update(scope, table, target, patch,
@@ -259,8 +273,14 @@ export class DataService {
     return result;
   }
 
-  async delete(companyId: string, actor: DataActor, table: string, target: RowTarget, via?: ViaApp): Promise<{ affected: number }> {
+  async delete(companyId: string, actor: DataActor, table: string, target: RowTarget, via?: ViaApp, guard?: GuardContext): Promise<{ affected: number }> {
     const scope = await this.authorize(companyId, actor, "write", "delete rows");
+    if (isBulkTarget(target)) {
+      await this.guarded(companyId, actor, {
+        operation: "delete", table, params: rowTargetParams(table, target),
+        countRows: () => this.targetCount(scope, table, target),
+      }, guard);
+    }
     const result = await this.records.delete(scope, table, target,
       (done) => this.entry(companyId, actor, "delete", table, { affected: done.affected }, via));
     await this.notify(companyId, actor, "delete", table, `deleted ${result.affected} row(s) from ${table}`);
@@ -464,6 +484,22 @@ export class DataService {
     } catch (error) {
       this.onMutationError?.(error, { companyId, actor, operation: "ai_cells", table, summary: "AI column bookkeeping failed" });
     }
+  }
+
+  /**
+   * The guardrail (docs/decisions.md): agents only, after authorisation and before the change, so a
+   * call the agent may not make anyway never costs a check. A throw stops the change; nothing has
+   * been written by then.
+   */
+  private async guarded(companyId: string, actor: DataActor, action: Omit<GuardedAction, "companyId" | "actor" | "guard">, guard?: GuardContext): Promise<void> {
+    const check = this.hooks.guardAgentAction;
+    if (actor.kind !== "agent" || !check) return;
+    await check({ ...action, companyId, actor, guard });
+  }
+
+  /** How many rows a bulk update or delete would touch, for the guardrail's question. */
+  private targetCount(scope: CompanyScope, table: string, target: RowTarget): Promise<number> {
+    return target.ids && target.ids.length > 0 ? Promise.resolve(new Set(target.ids).size) : this.records.count(scope, table, target.where);
   }
 
   /**

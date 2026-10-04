@@ -115,7 +115,8 @@ export function guardPasses(result: DecideResult): boolean {
   const matches = result.answers.matches_task;
   const risk = result.answers.risk;
   if (!matches || !risk) return false;
-  return matches.status === "auto" && risk.status === "auto" && matches.value === true && risk.value !== "dangerous";
+  // An allow-list, not "anything but dangerous": a value outside the two safe levels never passes.
+  return matches.status === "auto" && risk.status === "auto" && matches.value === true && (risk.value === "routine" || risk.value === "notable");
 }
 
 export interface ConfirmationPayload { version: 1; prompt: string; detailsMarkdown: string; acceptLabel: string; rejectLabel: string }
@@ -142,6 +143,9 @@ export function confirmationPayload(agentName: string, action: GuardedAction, af
   return { version: 1, prompt: `Agent ${agentName} wants to ${describeAction(action, affectedRows)}.`, detailsMarkdown: details, acceptLabel: "Allow once", rejectLabel: "Don't allow" };
 }
 
+/** The sentence every covered tool's description ends with. */
+export const GUARD_NOTE = " If the company's guardrail is on, pass issueId (your task's id, $PAPERCLIP_TASK_ID); a held error means stop and wait for the person, then send the same call again with its confirmationId.";
+
 /** Optional parameters on every covered tool and REST body. */
 export const guardToolParams = {
   issueId: z.string().min(1).max(200).optional().describe("the id of the task you are working on ($PAPERCLIP_TASK_ID); needed when the company's guardrail is on"),
@@ -150,12 +154,21 @@ export const guardToolParams = {
 
 const guardSource = z.object({ issueId: z.string().min(1).max(200).optional(), confirmationId: z.string().min(1).max(200).optional() });
 
-/** The two guard ids from a request body or tool parameters; everything else is left where it was. */
-export function guardFrom(source: unknown): GuardContext {
+/**
+ * The two guard ids from a request body, tool parameters or action params; everything else is left
+ * where it was. Undefined when the call carries neither, so a caller passes no guard at all then.
+ */
+export function guardFrom(source: unknown): GuardContext | undefined {
   const parsed = guardSource.safeParse(source ?? {});
   if (!parsed.success) throw new DataError("invalid", "issueId and confirmationId must be strings");
   const guard: GuardContext = {};
   if (parsed.data.issueId) guard.issueId = parsed.data.issueId;
   if (parsed.data.confirmationId) guard.confirmationId = parsed.data.confirmationId;
-  return guard;
+  return guard.issueId || guard.confirmationId ? guard : undefined;
+}
+
+/** `{ guard }` for an options object when the call carries guard ids, else `{}`: nothing is added. */
+export function guardOption(source: unknown): { guard?: GuardContext } {
+  const guard = guardFrom(source);
+  return guard ? { guard } : {};
 }

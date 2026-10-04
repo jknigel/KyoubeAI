@@ -54,7 +54,8 @@ describe("apps API routes", () => {
     const { apps: service, calls } = apps();
     const agent = request("apps.archive", { params: { slug: "crm" }, body: { companyId: COMPANY }, actor: { actorType: "agent", actorId: "a1", agentId: "a1", runId: "r1" } });
     expect((await handleAppsApiRequest(service, agent))?.status).toBe(200);
-    expect(calls.at(-1)).toEqual({ method: "archive", args: [COMPANY, { kind: "agent", id: "a1", runId: "r1" }, "crm"] });
+    // No guard ids in the body, so archive's options carry no guard (docs/decisions.md, the guardrail).
+    expect(calls.at(-1)).toEqual({ method: "archive", args: [COMPANY, { kind: "agent", id: "a1", runId: "r1" }, "crm", {}] });
 
     await handleAppsApiRequest(service, request("apps.create", { body: { companyId: COMPANY, manifest: MANIFEST, source: SOURCE, notes: "v1" } }));
     expect(calls.at(-1)).toEqual({ method: "create", args: [COMPANY, USER, MANIFEST, SOURCE, "v1"] });

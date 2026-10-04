@@ -54,8 +54,8 @@ async function setup() {
     },
   });
   await plugin.definition.setup(harness.ctx);
-  // Setup itself calls the data service once (`attach`, for AI columns); the tests count only
-  // what the actions and reads they make reach.
+  // Setup itself calls the data service (`attach`, for the guardrail and AI columns); the tests
+  // count only what the actions and reads they make reach.
   stub.calls.length = 0;
   return { harness, plugin, poolEnds, serviceDeps: serviceDeps as unknown as DataServiceDeps, appDeps: appDeps as unknown as AppServiceDeps, ...stub };
 }

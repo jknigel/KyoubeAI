@@ -93,6 +93,11 @@ describe("GUARD_QUESTIONS and guardPasses", () => {
     expect(guardPasses(result(true, "auto", "routine", "review"))).toBe(false);
     expect(guardPasses({ decisionId: null, model: "m", answers: {} })).toBe(false);
   });
+  it("passes only the two known safe risk levels, nothing else the model could return", () => {
+    expect(guardPasses(result(true, "auto", "unsure", "auto"))).toBe(false);
+    expect(guardPasses(result(true, "auto", "Routine", "auto"))).toBe(false);
+    expect(guardPasses(result(true, "auto", "", "auto"))).toBe(false);
+  });
 });
 
 describe("confirmationPayload", () => {
@@ -113,7 +118,10 @@ describe("guardFrom", () => {
   it("keeps only issueId and confirmationId", () => {
     expect(guardFrom({ companyId: C, issueId: "i-1", confirmationId: "card-1", table: "x" })).toEqual({ issueId: "i-1", confirmationId: "card-1" });
     expect(guardFrom({ issueId: "i-1" })).toEqual({ issueId: "i-1" });
-    expect(guardFrom(undefined)).toEqual({});
+  });
+  it("is undefined when the call carries neither id, so callers pass no guard at all", () => {
+    expect(guardFrom(undefined)).toBeUndefined();
+    expect(guardFrom({ companyId: C, table: "x" })).toBeUndefined();
   });
   it("refuses values that are not strings", () => {
     expect(() => guardFrom({ issueId: 42 })).toThrow(/issueId and confirmationId must be strings/);
