@@ -1,6 +1,6 @@
 // tests/integration/ai-fill.spec.ts
 import { afterEach, describe, expect, it } from "vitest";
-import { getCells, listAiColumns } from "../../src/decisions/cells.js";
+import { countCells, getCells, listAiColumns } from "../../src/decisions/cells.js";
 import { setDecisionSettings, usageOn, utcDay } from "../../src/decisions/store.js";
 import { aiFixture, answer, failure, OWNER } from "./ai-fixture.js";
 
@@ -93,6 +93,28 @@ describe("filling AI columns", () => {
     await f.ai.fillCompany(C);
     expect(await refunds(f)).toEqual([["a refund", true], ["b refund", true], ["c refund", true]]);
     expect(f.calls).toHaveLength(3);
+  });
+
+  it("retries failed cells only with what is left of the run, after new and changed rows", async () => {
+    const f = await setup({ limits: { rowsPerRun: 2 } });
+    // Over the 96 KB request limit: refused every run, before the provider or the budget.
+    const outsized = "outsized ".repeat(12_000);
+    await f.data.insert(C, OWNER, "tickets", [{ subject: `a ${outsized}` }, { subject: `b ${outsized}` }]);
+    await f.addRefund();
+    await f.ai.idle(C);
+    const [ref] = await listAiColumns(f.db.pool, C);
+    const errors = async () => (await countCells(f.db.pool, [ref!.fieldId])).get(ref!.fieldId)!.error;
+    expect(await errors()).toBe(2);
+    await f.data.insert(C, OWNER, "tickets", [{ subject: "c refund" }, { subject: "d refund" }]);
+    // The run's two rows go to the new ones; the failed cells wait.
+    expect(await f.ai.fillCompany(C)).toMatchObject({ decided: 2, failed: 0 });
+    expect(f.calls).toHaveLength(2);
+    const { rows } = await f.data.query(C, OWNER, "tickets", { orderBy: [{ field: "subject" }] });
+    expect(rows.map((row) => [String(row.subject).slice(0, 1), row.refund])).toEqual([["a", null], ["b", null], ["c", true], ["d", true]]);
+    expect(await errors()).toBe(2);
+    // Nothing new: now they are retried (and fail again, without asking the provider).
+    expect(await f.ai.fillCompany(C)).toMatchObject({ decided: 0, failed: 2 });
+    expect(f.calls).toHaveLength(2);
   });
 
   it("takes at most the run's row limit and stops at its deadline", async () => {

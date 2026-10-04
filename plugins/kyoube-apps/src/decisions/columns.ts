@@ -82,7 +82,7 @@ export class AiColumnService {
     return this.deps.limits?.deadlineMs ?? FILL_DEADLINE_MS;
   }
 
-  /** A broken operator log must never break a fill (nor reject `runPool`, see `fillColumn`). */
+  /** A broken operator log must never break a fill (nor reject `runPool`, see `decideBatch`). */
   private log(message: string, meta: Record<string, unknown>): void {
     try {
       this.deps.log?.(message, meta);
@@ -159,37 +159,30 @@ export class AiColumnService {
       }
       throw error;
     }
+    const columns = await listAiColumns(this.deps.pool, companyId);
+    // Per column, the rows this run has already asked about: the retry pass never asks twice.
+    const asked = new Map(columns.map((ref) => [ref.fieldId, new Set<string>()]));
     let budget = this.rowsPerRun;
-    for (const column of await listAiColumns(this.deps.pool, companyId)) {
+    // 1. New and changed rows, every column.
+    for (const ref of columns) {
+      if (budget <= 0 || report.stoppedBy || this.now() >= deadline) return report;
+      budget -= await this.fillChanged(ref, budget, deadline, report, asked.get(ref.fieldId)!);
+    }
+    // 2. Cells that failed on an earlier run, with only what is left of the run's rows: a row that
+    //    fails the same way every run can never crowd out new ones.
+    for (const ref of columns) {
       if (budget <= 0 || report.stoppedBy || this.now() >= deadline) break;
-      budget -= await this.fillColumn(column, budget, deadline, report);
+      budget -= await this.retryFailed(ref, budget, deadline, report, asked.get(ref.fieldId)!);
     }
     return report;
   }
 
-  /** Returns how many rows this column used of the run's budget. */
-  private async fillColumn(ref: AiColumnRef, budget: number, deadline: number, report: FillReport): Promise<number> {
-    const { definition } = ref;
-    const fingerprint = columnFingerprint(definition);
+  /** Rows changed since the column's watermark, in (updated_at, id) order. Returns how many rows it used of the run's budget. */
+  private async fillChanged(ref: AiColumnRef, budget: number, deadline: number, report: FillReport, asked: Set<string>): Promise<number> {
+    const sources = ref.definition.sourceFields;
+    const fingerprint = columnFingerprint(ref.definition);
     const mark = await syncColumn(this.deps.pool, ref, fingerprint);
-    const sources = definition.sourceFields;
-    const via = `${ref.table}.${ref.field}`;
     const candidates: Candidate[] = [];
-    const chosen = new Set<string>();
-
-    // 1. Cells that failed last time, whatever the watermark says.
-    const retry = await errorRowIds(this.deps.pool, ref.fieldId, budget);
-    if (retry.length > 0) {
-      const rows = await this.deps.data.rowsForAi(ref.companyId, ref.table, retry, sources);
-      for (const row of rows) {
-        if (chosen.has(row.id)) continue;
-        chosen.add(row.id);
-        candidates.push({ row, hash: sourceHash(fingerprint, row.values, sources), scanIndex: null });
-      }
-      await deleteCells(this.deps.pool, ref.fieldId, retry.filter((id) => !chosen.has(id)));
-    }
-
-    // 2. Rows changed since the watermark, in (updated_at, id) order.
     const examined: Array<{ at: string; id: string }> = [];
     let after = mark.at && mark.id ? { at: mark.at, id: mark.id } : null;
     let more = true;
@@ -204,17 +197,49 @@ export class AiColumnService {
         const cell = cells.get(row.id);
         const hash = sourceHash(fingerprint, row.values, sources);
         if (cell?.status === "manual") continue;
-        if (cell && cell.status !== "error" && cell.sourceHash === hash) continue;
-        if (chosen.has(row.id)) continue;
-        chosen.add(row.id);
+        // Answered, or failed, on these very sources: a failed cell waits for the retry pass.
+        if (cell && cell.sourceHash === hash) continue;
+        if (asked.has(row.id)) continue;
+        asked.add(row.id);
         candidates.push({ row, hash, scanIndex: examined.length - 1 });
         if (candidates.length >= budget) { more = false; break; }
       }
     }
+    const outcomes = await this.decideBatch(ref, candidates, deadline, report);
+    // The watermark passes every examined row up to the first candidate left unprocessed.
+    let through = examined.length - 1;
+    candidates.forEach((candidate, index) => {
+      if (outcomes[index] === null && candidate.scanIndex !== null) through = Math.min(through, candidate.scanIndex - 1);
+    });
+    if (through >= 0) await advanceWatermark(this.deps.pool, ref.fieldId, examined[through]!.at, examined[through]!.id);
+    return outcomes.filter((outcome) => outcome !== null).length;
+  }
 
-    // 3. Decide, eight at a time. A row whose turn never came stays unprocessed. `runPool` gives
-    //    up on the first rejection while the other workers carry on, so this never throws: every
-    //    failure becomes the row's outcome (or, for a stop that never touched it, none).
+  /** Cells that failed on an earlier run, longest-waiting first. Returns how many rows it used of the run's budget. */
+  private async retryFailed(ref: AiColumnRef, budget: number, deadline: number, report: FillReport, asked: Set<string>): Promise<number> {
+    const sources = ref.definition.sourceFields;
+    // Enough ids to make up for the ones this run has already asked about (and just failed on).
+    const ids = (await errorRowIds(this.deps.pool, ref.fieldId, budget + asked.size)).filter((id) => !asked.has(id)).slice(0, budget);
+    if (ids.length === 0) return 0;
+    const rows = await this.deps.data.rowsForAi(ref.companyId, ref.table, ids, sources);
+    const found = new Set(rows.map((row) => row.id));
+    await deleteCells(this.deps.pool, ref.fieldId, ids.filter((id) => !found.has(id)));
+    const fingerprint = columnFingerprint(ref.definition);
+    const candidates = rows.map((row): Candidate => ({ row, hash: sourceHash(fingerprint, row.values, sources), scanIndex: null }));
+    const outcomes = await this.decideBatch(ref, candidates, deadline, report);
+    return outcomes.filter((outcome) => outcome !== null).length;
+  }
+
+  /**
+   * Decides a batch eight at a time and writes it in one transaction: values for auto answers,
+   * empty for review, and the cells with them. Returns each candidate's outcome; null means its
+   * turn never came (stopped, or past the deadline) and the row was left as it was.
+   */
+  private async decideBatch(ref: AiColumnRef, candidates: Candidate[], deadline: number, report: FillReport): Promise<Array<FillOutcome | null>> {
+    const { definition } = ref;
+    const via = `${ref.table}.${ref.field}`;
+    // `runPool` gives up on the first rejection while the other workers carry on, so this never
+    // throws: every failure becomes the row's outcome (or, for a stop that never touched it, none).
     const outcomes: Array<FillOutcome | null> = candidates.map(() => null);
     let stop: string | null = null;
     await runPool(candidates, FILL_CONCURRENCY, async (candidate, index) => {
@@ -233,7 +258,6 @@ export class AiColumnService {
       }
     });
 
-    // 4. One write for the batch: values for auto answers, empty for review; cells in the same transaction.
     const values: Array<{ id: string; value: string | boolean | null }> = [];
     const writes: CellWrite[] = [];
     const results: DecideResult[] = [];
@@ -243,7 +267,8 @@ export class AiColumnService {
       if (!outcome) return;
       if (outcome.kind === "error") {
         failed += 1;
-        writes.push({ rowId: candidate.row.id, status: "error", suggestion: null, confidence: null, decisionId: null, sourceHash: null });
+        // The hash it failed on: unchanged, the row waits for the retry pass instead of the scan.
+        writes.push({ rowId: candidate.row.id, status: "error", suggestion: null, confidence: null, decisionId: null, sourceHash: candidate.hash });
         return;
       }
       const answer = outcome.result.answers[AI_QUESTION_KEY]!;
@@ -258,13 +283,6 @@ export class AiColumnService {
       await upsertCells(this.deps.pool, ref, cellWrites);
     }
 
-    // 5. The watermark passes every examined row up to the first candidate left unprocessed.
-    let through = examined.length - 1;
-    candidates.forEach((candidate, index) => {
-      if (outcomes[index] === null && candidate.scanIndex !== null) through = Math.min(through, candidate.scanIndex - 1);
-    });
-    if (through >= 0) await advanceWatermark(this.deps.pool, ref.fieldId, examined[through]!.at, examined[through]!.id);
-
     if (results.length + failed > 0) {
       const tally = { ...this.deps.decisions.tally(results, failed), questions: 1 };
       await this.deps.decisions.announce(ref.companyId, systemActor(), "columns", via, tally);
@@ -273,6 +291,6 @@ export class AiColumnService {
       report.failed += failed;
     }
     if (stop) report.stoppedBy = stop;
-    return results.length + failed;
+    return outcomes;
   }
 }
