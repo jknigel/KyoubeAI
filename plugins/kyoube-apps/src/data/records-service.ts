@@ -119,8 +119,10 @@ export class RecordsService {
   /**
    * `opts.previousOf` picks patched fields whose values from just before the write come back in
    * `previous`, by row id. They are read in the same statement, from the rows it locks, so they
-   * are exactly what the write replaced. A patch that sets none of them runs the plain statement
-   * and `previous` is null.
+   * are exactly what the write replaced. The lock is FOR NO KEY UPDATE, the one the UPDATE itself
+   * takes: it waits for other writes to the row, but not for a foreign key check (FOR KEY SHARE)
+   * from a row elsewhere that refers to it. A patch that sets none of them runs the plain
+   * statement and `previous` is null.
    */
   async update(
     scope: CompanyScope,
@@ -148,7 +150,7 @@ export class RecordsService {
     const sql = kept.length === 0
       ? `UPDATE ${name} SET ${sets.join(", ")} WHERE "id" IN (${targets}) RETURNING *`
       : `WITH ${quoteIdent(BEFORE_CTE)} AS MATERIALIZED (
-          SELECT "id"${kept.map((field, index) => `, ${quoteIdent(field)} AS ${before(index)}`).join("")} FROM ${name} WHERE "id" IN (${targets}) FOR UPDATE)
+          SELECT "id"${kept.map((field, index) => `, ${quoteIdent(field)} AS ${before(index)}`).join("")} FROM ${name} WHERE "id" IN (${targets}) FOR NO KEY UPDATE)
         UPDATE ${name} AS t SET ${sets.join(", ")} FROM ${quoteIdent(BEFORE_CTE)} AS b WHERE t."id" = b."id"
         RETURNING t.*${kept.map((_, index) => `, b.${before(index)}`).join("")}`;
     return this.run(scope, async ({ client }) => {
