@@ -4,9 +4,10 @@ import { DataError } from "../data/errors.js";
 import type { QuerySpec } from "../data/filter.js";
 import { assertLevel, levelAllows, type AccessLevel, type DataActor, type Operation } from "../data/permissions.js";
 import type { Row, RowTarget } from "../data/records-service.js";
+import type { TableInfo } from "../data/schema-service.js";
 import type { DataService, MutationEvent } from "../data/service.js";
 import { schemaNameFor } from "../db/company-scope.js";
-import { assertAppSource, validateAppManifest } from "./manifest.js";
+import { assertAppSource, decisionSetsChanged, validateAppManifest, type AppManifest } from "./manifest.js";
 import { AppStore, type AppRecord, type AppVersion } from "./store.js";
 
 /** What a running app is told about itself, its viewer, and the tables it may touch. */
@@ -147,6 +148,7 @@ export class AppService {
     await this.authorize(companyId, actor, "write", "create an app");
     const manifest = validateAppManifest(rawManifest);
     const source = assertAppSource(rawSource);
+    await this.assertDecisionFields(companyId, actor, manifest, true);
     const created = await this.store.create(companyId, manifest, source, { kind: actor.kind, id: actor.id }, notes,
       (result) => this.entry(companyId, actor, "app_create", result.app, { version: result.version.version }));
     await this.notify(companyId, actor, "app_create", created.app, `created app ${manifest.slug} (draft)`);
@@ -159,6 +161,7 @@ export class AppService {
     const manifest = validateAppManifest(rawManifest);
     if (manifest.slug !== slug) throw new DataError("invalid", "the manifest slug must match the app being updated");
     const source = assertAppSource(rawSource);
+    await this.assertDecisionFields(companyId, actor, manifest, true);
     const saved = await this.store.addVersion(companyId, slug, manifest, source, { kind: actor.kind, id: actor.id }, notes,
       (result) => this.entry(companyId, actor, "app_update", result.app, { version: result.version.version }));
     await this.notify(companyId, actor, "app_update", saved.app, `saved app ${slug} version ${saved.version.version} (draft)`);
@@ -274,6 +277,7 @@ export class AppService {
     const target = await this.store.getVersion(companyId, slug, version);
     if (!target) throw new DataError("not_found", `app "${slug}" has no version ${version}`);
     for (const table of target.manifest.tables) await this.data.describeTable(companyId, actor, table.name);
+    await this.assertDecisionFields(companyId, actor, target.manifest, false);
     const app = await this.store.setCurrent(companyId, slug, target.version,
       (published) => this.entry(companyId, actor, operation, published, { version: target.version }));
     return { app, version: target.version };
@@ -285,6 +289,29 @@ export class AppService {
    * archived app, and a slug that never existed all get the same "not
    * published" answer, so read access cannot be used to probe for drafts.
    */
+  /**
+   * Every field a decision set may send must exist on its table. At save a table that does not exist
+   * yet is skipped (`tolerateMissingTable`) — an app may be drafted before its tables, exactly as
+   * declared tables are only checked at publish — and `makeCurrent` checks again with no exceptions.
+   * `describeTable` runs as the caller, so this reads nothing they could not read themselves.
+   */
+  private async assertDecisionFields(companyId: string, actor: DataActor, manifest: AppManifest, tolerateMissingTable: boolean): Promise<void> {
+    for (const [key, set] of Object.entries(manifest.decisions ?? {})) {
+      let info: TableInfo;
+      try {
+        info = await this.data.describeTable(companyId, actor, set.table);
+      } catch (error) {
+        if (tolerateMissingTable && error instanceof DataError && error.code === "not_found") continue;
+        throw error;
+      }
+      const known = new Set(info.fields.map((field) => field.name));
+      const missing = set.fields.filter((field) => !known.has(field));
+      if (missing.length > 0) {
+        throw new DataError("invalid", `decision set "${key}" names field(s) ${missing.join(", ")} that table "${set.table}" does not have`);
+      }
+    }
+  }
+
   private async open(companyId: string, actor: DataActor, slug: string): Promise<{ app: AppRecord; version: AppVersion; level: AccessLevel }> {
     const level = await this.authorize(companyId, actor, "read", "open an app");
     const app = await this.store.get(companyId, slug);

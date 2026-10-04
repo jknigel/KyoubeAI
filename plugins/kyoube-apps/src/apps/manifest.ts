@@ -1,11 +1,29 @@
 import { z } from "zod";
 import { DataError } from "../data/errors.js";
 import { assertIdentifier } from "../data/identifiers.js";
+import { canonical, questionKeySchema, questionsSchema, type Question } from "../decisions/contract.js";
 
 export const APP_SLUG_RE = /^[a-z][a-z0-9-]{1,48}$/;
 export const MAX_APP_SOURCE_BYTES = 2 * 1024 * 1024;
 /** Version notes are a short human record of a change, not a place to park text; every entry point caps them here. */
 export const MAX_APP_NOTES = 2000;
+
+/** How many decision sets one app may declare, and how many fields one set may send. */
+export const MAX_DECISION_SETS = 10;
+export const MAX_DECISION_FIELDS = 20;
+
+/**
+ * One named set of typed questions an app may ask (docs/decisions.md). It is tied to one table the
+ * manifest declares and the fields it may send: the worker builds the state from those fields and
+ * nothing else, so an app can never send free text of its own or rewrite its questions at run time.
+ */
+export interface AppDecisionSet {
+  table: string;
+  fields: string[];
+  /** Every answer is `review`: the set can only ever suggest. */
+  advisory: boolean;
+  questions: Record<string, Question>;
+}
 
 export interface AppManifest {
   name: string;
@@ -14,6 +32,8 @@ export interface AppManifest {
   icon: string | null;
   tables: Array<{ name: string; access: "read" | "readwrite" }>;
   surfaces: Array<"page">;
+  /** Present only when the manifest declares at least one decision set. */
+  decisions?: Record<string, AppDecisionSet>;
 }
 
 /**
@@ -33,6 +53,15 @@ export const APP_MANIFEST_SCHEMA = z.object({
   // rather than silently dropped.
   tables: z.array(z.object({ name: z.string(), access: z.enum(["read", "readwrite"]).optional() }).strict()).max(50),
   surfaces: z.array(z.enum(["page"])).optional(),
+  decisions: z.record(questionKeySchema, z.object({
+    table: z.string(),
+    fields: z.array(z.string()).min(1).max(MAX_DECISION_FIELDS),
+    advisory: z.boolean().optional(),
+    questions: questionsSchema,
+  }).strict())
+    .refine((sets) => Object.keys(sets).length <= MAX_DECISION_SETS, `at most ${MAX_DECISION_SETS} decision sets`)
+    .optional()
+    .describe("named sets of typed questions (docs/decisions.md): each names one declared table, the fields it may send, and its questions"),
 }).strict();
 
 export function validateAppManifest(raw: unknown): AppManifest {
@@ -45,7 +74,43 @@ export function validateAppManifest(raw: unknown): AppManifest {
     seen.add(name);
     return { name, access: table.access ?? ("read" as const) };
   });
-  return { name: parsed.data.name, slug: parsed.data.slug, description: parsed.data.description ?? null, icon: parsed.data.icon ?? null, tables, surfaces: parsed.data.surfaces?.length ? parsed.data.surfaces : ["page"] };
+  const decisions = normaliseDecisionSets(parsed.data.decisions, new Set(tables.map((table) => table.name)));
+  return {
+    name: parsed.data.name, slug: parsed.data.slug, description: parsed.data.description ?? null, icon: parsed.data.icon ?? null,
+    tables, surfaces: parsed.data.surfaces?.length ? parsed.data.surfaces : ["page"],
+    ...(decisions ? { decisions } : {}),
+  };
+}
+
+function normaliseDecisionSets(
+  raw: Record<string, { table: string; fields: string[]; advisory?: boolean; questions: Record<string, Question> }> | undefined,
+  declared: ReadonlySet<string>,
+): Record<string, AppDecisionSet> | null {
+  if (!raw || Object.keys(raw).length === 0) return null;
+  const sets: Record<string, AppDecisionSet> = {};
+  for (const [key, set] of Object.entries(raw)) {
+    const table = assertIdentifier(set.table, `decision set "${key}" table`);
+    if (!declared.has(table)) throw new DataError("invalid", `decision set "${key}" uses table "${table}", which the manifest does not declare`);
+    const seen = new Set<string>();
+    const fields = set.fields.map((name) => {
+      const field = assertIdentifier(name, `decision set "${key}" field`);
+      if (seen.has(field)) throw new DataError("invalid", `decision set "${key}" names field "${field}" twice`);
+      seen.add(field);
+      return field;
+    });
+    sets[key] = { table, fields, advisory: set.advisory ?? false, questions: set.questions };
+  }
+  return sets;
+}
+
+/**
+ * Whether publishing `target` over `current` adds or changes what an app sends. A version with no
+ * decision sets never counts — removing sets only ever narrows what leaves the server.
+ */
+export function decisionSetsChanged(current: AppManifest | null, target: AppManifest): boolean {
+  const next = target.decisions ?? {};
+  if (Object.keys(next).length === 0) return false;
+  return JSON.stringify(canonical(current?.decisions ?? {})) !== JSON.stringify(canonical(next));
 }
 
 export function assertAppSource(source: unknown): string {
