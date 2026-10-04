@@ -58,14 +58,13 @@ docker compose
 Six plugins ship in the image: `@kyoube/plugin-terminal` (`plugins/kyoube-terminal`),
 `@kyoube/plugin-apps` (`plugins/kyoube-apps`), which carries the Data layer, the Apps module and typed
 decisions (`docs/decisions.md`) in one worker because apps need in-process access to the data service and
-plugins cannot call each other. It is the only Kyoube plugin that calls out of the server:
-`ctx.http.fetch` to the company's chosen `/v1/systemone` provider, with the key read through
-`ctx.secrets`,
-`@kyoube/plugin-files` (`plugins/kyoube-files`), the Files tab on project pages,
-`@kyoube/plugin-studio` (`plugins/kyoube-studio`), the Studio layout, and
+plugins cannot call each other, `@kyoube/plugin-files` (`plugins/kyoube-files`), the Files tab on project
+pages, `@kyoube/plugin-studio` (`plugins/kyoube-studio`), the Studio layout,
 `@kyoube/plugin-agent-rules` (`plugins/kyoube-agent-rules`), described below, and
 `@kyoube/plugin-license` (`plugins/kyoube-license`), the Licence page (`kyoube.license`: it reads files on
-the home volume and never the core database). Everything Kyoube adds
+the home volume and never the core database). The apps plugin is the only one that calls out of the
+server: `ctx.http.fetch` to the company's chosen `/v1/systemone` provider, with the key read through
+`ctx.secrets`. Everything Kyoube adds
 is one of these plugins, the `@kyoube/app-sdk` package the apps plugin injects into apps
 (`packages/kyoube-app-sdk`), and the `kyoube` bootstrap CLI (`docker/bootstrap`) that installs them.
 
