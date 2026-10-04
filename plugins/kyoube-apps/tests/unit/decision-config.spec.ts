@@ -69,6 +69,58 @@ describe("ProviderResolver", () => {
     await r.resolve("c1");
     expect(lookups).toHaveLength(3);
   });
+  it("looks a cold key up once for any number of callers at the same time", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const lookups: unknown[] = [];
+    const r = new ProviderResolver({ getConfig: async () => config, resolveSecret: async (ref) => { lookups.push(ref); await gate; return "key-1"; } });
+    const pending = Array.from({ length: 8 }, () => r.resolve("c1"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    release();
+    expect((await Promise.all(pending)).map((target) => target.apiKey)).toEqual(Array(8).fill("key-1"));
+    expect(lookups).toHaveLength(1);
+    // Each company still has its own lookup.
+    await r.resolve("c2");
+    expect(lookups).toHaveLength(2);
+  });
+  it("never lets a lookup started before a config change fill the cache after it", async () => {
+    const releases: Array<() => void> = [];
+    let n = 0;
+    const r = new ProviderResolver({
+      getConfig: async () => config,
+      resolveSecret: async () => { n += 1; const value = `key-${n}`; await new Promise<void>((resolve) => releases.push(resolve)); return value; },
+    });
+    const before = r.resolve("c1");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    r.invalidate("c1");
+    releases[0]!();
+    expect((await before).apiKey).toBe("key-1");
+    // The old lookup's key was not cached: the next caller looks the key up again.
+    const after = r.resolve("c1");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(releases).toHaveLength(2);
+    releases[1]!();
+    expect((await after).apiKey).toBe("key-2");
+    expect((await r.resolve("c1")).apiKey).toBe("key-2");
+    expect(n).toBe(2);
+    // Invalidating every company works the same way.
+    r.invalidate();
+    const third = r.resolve("c1");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    releases[2]!();
+    expect((await third).apiKey).toBe("key-3");
+  });
+  it("does not cache a failed lookup", async () => {
+    let fail = true;
+    let n = 0;
+    const r = new ProviderResolver({ getConfig: async () => config, resolveSecret: async () => { n += 1; if (fail) throw new Error("secrets offline"); return "key-ok"; } });
+    const failed = await Promise.all([r.resolve("c1"), r.resolve("c1")].map((p) => p.catch((error: unknown) => error)));
+    expect(failed.map((error) => (error as DataError).code)).toEqual(["disabled", "disabled"]);
+    expect(n).toBe(1);
+    fail = false;
+    expect((await r.resolve("c1")).apiKey).toBe("key-ok");
+    expect(n).toBe(2);
+  });
   it("answers disabled when no provider is set or the secret cannot be read", async () => {
     await expect(resolver({}).r.resolve("c1")).rejects.toMatchObject({ code: "disabled" });
     const broken = new ProviderResolver({ getConfig: async () => config, resolveSecret: async () => { throw new Error("binding_missing sk-123"); } });
