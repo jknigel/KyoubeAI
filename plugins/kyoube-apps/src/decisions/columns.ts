@@ -7,7 +7,7 @@ import type { AiSourceRow } from "../data/records-service.js";
 import { systemActor, type DataService } from "../data/service.js";
 import {
   advanceWatermark, cellRowIdsAfter, deleteCells, errorRowIds, getCells, listAiColumns, markManual, syncColumn, upsertCells, watermarkCeiling,
-  type AiColumnRef, type CellState, type CellWrite,
+  type AiColumnRef, type CellWrite,
 } from "./cells.js";
 import { canonical, questionFingerprint, reviewThreshold, type DecideResult } from "./contract.js";
 import { runPool, type DecisionService } from "./service.js";
@@ -60,14 +60,12 @@ function lastPerRow<T>(entries: T[], rowId: (entry: T) => string): T[] {
 }
 
 /**
- * Whether a write leaves an AI cell as it was. A form that saves a whole row writes every field
- * back; that must not turn the model's answers into "a person decided".
+ * Whether a write left an AI value as it was. A form that saves a whole row writes every field
+ * back; that must not turn the model's answers into "a person decided", whatever the cell says.
  */
-function unchanged(cell: CellState | undefined, value: unknown): boolean {
-  if (!cell) return value === null;
-  if (cell.status === "review" || cell.status === "error") return value === null;
-  if (cell.status === "auto") return value !== null && String(value) === cell.suggestion;
-  return false;
+function sameValue(before: unknown, after: unknown): boolean {
+  if (before === null || after === null) return before === after;
+  return String(before) === String(after);
 }
 
 export interface FillReport { companyId: string; decided: number; review: number; failed: number; stoppedBy: string | null }
@@ -151,8 +149,8 @@ export class AiColumnService {
       for (const row of rows) {
         const id = String(row.id);
         const value = row[field.name] ?? null;
+        if (sameValue(event.previous.get(id)?.[field.name] ?? null, value)) continue;
         const cell = prior.get(id);
-        if (unchanged(cell, value)) continue;
         if (value === null) {
           if (cell) cleared.push(id);
           continue;

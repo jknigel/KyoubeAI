@@ -18,6 +18,11 @@ export interface AiRowWrite {
   table: TableInfo;
   /** The rows as they are after the write (`RETURNING *`). */
   rows: Array<Record<string, unknown>>;
+  /**
+   * By row id, the AI columns' values the write replaced, read in the write's own statement: a
+   * write that leaves a value as it was changes nothing. Empty for an insert: a new row had none.
+   */
+  previous: Map<string, Record<string, unknown>>;
   /** The fields the write set: every field for an insert, the patch's keys for an update. */
   fields: string[];
   /** Set when a running app made the write on its viewer's behalf (ruling P4-R21). */

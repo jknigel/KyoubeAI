@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { Pool } from "pg";
 import { roleNameFor, schemaNameFor } from "../../src/db/company-scope.js";
 import type { FetchLike } from "../../src/decisions/client.js";
-import { getCells, listAiColumns, markManual } from "../../src/decisions/cells.js";
+import { clearForRefill, getCells, listAiColumns, markManual, resetWatermark } from "../../src/decisions/cells.js";
 import { aiFixture, AGENT, OWNER, refundModel } from "./ai-fixture.js";
 
 const C = "aaaaaaaa-9999-4999-8999-999999999999";
@@ -137,6 +137,70 @@ describe("edits to AI cells", () => {
     expect((await f.data.get(C, OWNER, "tickets", f.maybe))!.refund).toBe(false);
     expect((await f.data.get(C, OWNER, "tickets", f.sure))!.refund).toBe(true);
     expect(await f.cell(f.maybe)).toMatchObject({ status: "manual" });
+  });
+});
+
+// The Data page's form saves every field of a row, so whether a write changed an AI value is
+// measured against the value it replaced, never guessed from the cell.
+describe("whole-row saves", () => {
+  it("leaves a cell Refill cleared to the job when a save writes its old answer back", async () => {
+    const f = await setup();
+    // What Refill does: the cells go, the values stay until the job reaches each row.
+    await clearForRefill(f.db.pool, f.ref.fieldId);
+    await resetWatermark(f.db.pool, f.ref.fieldId);
+    const saved = await f.data.update(C, OWNER, "tickets", { ids: [f.sure] }, { subject: "please refund me", refund: true });
+    // The values the write replaced stay inside the data layer.
+    expect(saved).toEqual({ affected: 1, rows: [await f.data.get(C, OWNER, "tickets", f.sure)] });
+    expect(await f.cell(f.sure)).toBeNull();
+    await f.ai.fillCompany(C);
+    expect(await f.cell(f.sure)).toMatchObject({ status: "auto", suggestion: "true" });
+  });
+
+  it("leaves an error cell to the job when a save writes the old answer back", async () => {
+    const f = await setup();
+    // The sources change and the new decision fails: the column still holds the old answer.
+    await f.data.update(C, AGENT, "tickets", { ids: [f.sure] }, { subject: "please refund me, outage" });
+    await f.ai.fillCompany(C);
+    expect(await f.cell(f.sure)).toMatchObject({ status: "error" });
+    expect((await f.data.get(C, OWNER, "tickets", f.sure))!.refund).toBe(true);
+    await f.data.update(C, OWNER, "tickets", { ids: [f.sure] }, { subject: "please refund me, outage", refund: true });
+    expect(await f.cell(f.sure)).toMatchObject({ status: "error" });
+  });
+
+  it("records nothing when a stale form saves back the value the row still holds", async () => {
+    const f = await setup();
+    const form = (await f.data.get(C, OWNER, "tickets", f.sure))!;
+    // Meanwhile an agent rewrites the sources and the row is decided again.
+    await f.data.update(C, AGENT, "tickets", { ids: [f.sure] }, { subject: "please refund me now" });
+    await f.ai.fillCompany(C);
+    expect(await f.cell(f.sure)).toMatchObject({ status: "auto", suggestion: "true" });
+    await f.data.update(C, OWNER, "tickets", { ids: [f.sure] }, { subject: form.subject, refund: form.refund });
+    expect(await f.cell(f.sure)).toMatchObject({ status: "auto" });
+    expect(await f.outcome(f.sure)).toMatchObject({ outcome: null });
+  });
+
+  it("measures against the value it replaced, even when another write held the row", async () => {
+    const f = await setup();
+    const other = await f.db.pool.connect();
+    try {
+      await other.query("BEGIN");
+      await other.query(`SET LOCAL search_path TO "${schemaNameFor(C)}"`);
+      await other.query(`SET LOCAL ROLE "${roleNameFor(C)}"`);
+      await other.query("UPDATE tickets SET refund = false WHERE id = $1", [f.sure]);
+      // The save starts while the other write holds the row, and waits for it.
+      const save = f.data.update(C, OWNER, "tickets", { ids: [f.sure] }, { refund: false });
+      for (let tries = 0; (await f.db.pool.query<{ n: number }>("SELECT count(*)::int AS n FROM pg_locks WHERE NOT granted")).rows[0]!.n === 0; tries += 1) {
+        if (tries > 300) throw new Error("the save never waited for the row");
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      await other.query("COMMIT");
+      await save;
+    } finally {
+      other.release();
+    }
+    // It replaced false with false: no outcome, the cell as it was.
+    expect(await f.outcome(f.sure)).toMatchObject({ outcome: null });
+    expect(await f.cell(f.sure)).toMatchObject({ status: "auto" });
   });
 });
 

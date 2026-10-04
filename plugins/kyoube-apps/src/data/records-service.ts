@@ -5,7 +5,7 @@ import { DataError, mapPgError } from "./errors.js";
 import { coerceValue, columnType } from "./field-kinds.js";
 import { compileQuery, compileWhere, type QuerySpec } from "./filter.js";
 import { quoteIdent } from "./identifiers.js";
-import type { SchemaService, TableInfo } from "./schema-service.js";
+import type { FieldInfo, SchemaService, TableInfo } from "./schema-service.js";
 import { assertReadOnlySelect } from "./sql-select.js";
 
 export type Row = Record<string, unknown>;
@@ -45,6 +45,9 @@ export interface AiSourceRow { id: string; updatedAt: string; values: Record<str
 
 /** Never a user field name: identifiers start with a letter (identifiers.ts). */
 const SCAN_AT = "_kyoube_scan_at";
+/** The same, for the values an update replaced (`update`'s `previousOf`): the CTE, and its columns' prefix. */
+const BEFORE_CTE = "_kyoube_before";
+const BEFORE = "_kyoube_before_";
 
 export class RecordsService {
   constructor(private readonly pool: Pool, private readonly schema: SchemaService) {}
@@ -113,7 +116,20 @@ export class RecordsService {
     return this.run(scope, async ({ client }) => (await client.query<{ n: number }>(sql, params)).rows[0]!.n, { readOnly: true });
   }
 
-  async update(scope: CompanyScope, table: string, target: RowTarget, patch: Row, audit?: AuditPlan<{ affected: number; rows: Row[] }>): Promise<{ affected: number; rows: Row[] }> {
+  /**
+   * `opts.previousOf` picks patched fields whose values from just before the write come back in
+   * `previous`, by row id. They are read in the same statement, from the rows it locks, so they
+   * are exactly what the write replaced. A patch that sets none of them runs the plain statement
+   * and `previous` is null.
+   */
+  async update(
+    scope: CompanyScope,
+    table: string,
+    target: RowTarget,
+    patch: Row,
+    audit?: AuditPlan<{ affected: number; rows: Row[] }>,
+    opts: { previousOf?: (field: FieldInfo) => boolean } = {},
+  ): Promise<{ affected: number; rows: Row[]; previous: Map<string, Row> | null }> {
     const info = await this.schema.getTable(scope, table);
     const cells = this.coerceRow(info, patch, { requireAll: false });
     const keys = Object.keys(cells);
@@ -123,11 +139,34 @@ export class RecordsService {
     sets.push('"updated_at" = now()');
     const where = this.targetClause(info, target, params);
     assertBindLimit(params);
-    const sql = `UPDATE ${quoteIdent(info.name)} SET ${sets.join(", ")} WHERE "id" IN (SELECT "id" FROM ${quoteIdent(info.name)} WHERE ${where} LIMIT ${MAX_AFFECTED + 1}) RETURNING *`;
+    const name = quoteIdent(info.name);
+    const targets = `SELECT "id" FROM ${name} WHERE ${where} LIMIT ${MAX_AFFECTED + 1}`;
+    const kept = opts.previousOf ? info.fields.filter((field) => keys.includes(field.name) && opts.previousOf!(field)).map((field) => field.name) : [];
+    // The old values travel under positional aliases (`_kyoube_before_0`, …): never a user field
+    // name (identifiers start with a letter) and never too long, whatever the field is called.
+    const before = (index: number) => quoteIdent(`${BEFORE}${index}`);
+    const sql = kept.length === 0
+      ? `UPDATE ${name} SET ${sets.join(", ")} WHERE "id" IN (${targets}) RETURNING *`
+      : `WITH ${quoteIdent(BEFORE_CTE)} AS MATERIALIZED (
+          SELECT "id"${kept.map((field, index) => `, ${quoteIdent(field)} AS ${before(index)}`).join("")} FROM ${name} WHERE "id" IN (${targets}) FOR UPDATE)
+        UPDATE ${name} AS t SET ${sets.join(", ")} FROM ${quoteIdent(BEFORE_CTE)} AS b WHERE t."id" = b."id"
+        RETURNING t.*${kept.map((_, index) => `, b.${before(index)}`).join("")}`;
     return this.run(scope, async ({ client }) => {
       const result = await client.query(sql, params);
       if (result.rowCount !== null && result.rowCount > MAX_AFFECTED) throw new DataError("limit", `update would affect more than ${MAX_AFFECTED} rows; narrow the filter`);
-      return { affected: result.rowCount ?? 0, rows: result.rows.map(normalizeRow) };
+      if (kept.length === 0) return { affected: result.rowCount ?? 0, rows: result.rows.map(normalizeRow), previous: null };
+      const previous = new Map<string, Row>();
+      const rows = result.rows.map((raw: Row) => {
+        const row = { ...raw };
+        const old: Row = {};
+        kept.forEach((field, index) => {
+          old[field] = raw[`${BEFORE}${index}`] ?? null;
+          delete row[`${BEFORE}${index}`];
+        });
+        previous.set(String(row.id), normalizeRow(old));
+        return normalizeRow(row);
+      });
+      return { affected: result.rowCount ?? 0, rows, previous };
     }, { audit });
   }
 
