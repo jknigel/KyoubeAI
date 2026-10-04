@@ -19,7 +19,7 @@ afterAll(async () => {
 describe("runMetaMigrations", () => {
   it("applies the metadata schema once and is idempotent", async () => {
     const first = await runMetaMigrations(db.pool, migrationsDir);
-    expect(first).toEqual(["0001_meta.sql", "0002_apps.sql", "0003_decisions.sql"]);
+    expect(first).toEqual(["0001_meta.sql", "0002_apps.sql", "0003_decisions.sql", "0004_decision_cells.sql"]);
     expect(await runMetaMigrations(db.pool, migrationsDir)).toEqual([]);
     const tables = await db.pool.query<{ table_name: string }>(
       `SELECT table_name FROM information_schema.tables WHERE table_schema = 'kyoube_meta' ORDER BY table_name COLLATE "C"`,
@@ -31,6 +31,8 @@ describe("runMetaMigrations", () => {
       "audit",
       "companies",
       "company_settings",
+      "decision_cells",
+      "decision_columns",
       "decision_usage",
       "decisions",
       "fields",
@@ -92,11 +94,11 @@ describe("runMetaMigrations", () => {
 
       // The upgrade: exactly the migration that was missing, and no attempt to
       // re-apply the one already recorded.
-      expect(await runMetaMigrations(fresh.pool, migrationsDir)).toEqual(["0002_apps.sql", "0003_decisions.sql"]);
+      expect(await runMetaMigrations(fresh.pool, migrationsDir)).toEqual(["0002_apps.sql", "0003_decisions.sql", "0004_decision_cells.sql"]);
       expect(await tableNames()).toEqual(expect.arrayContaining(["apps", "app_versions"]));
 
       const recorded = await fresh.pool.query<{ name: string; checksum: string }>("SELECT name, checksum FROM kyoube_meta.migrations ORDER BY name");
-      expect(recorded.rows.map((row) => row.name)).toEqual(["0001_meta.sql", "0002_apps.sql", "0003_decisions.sql"]);
+      expect(recorded.rows.map((row) => row.name)).toEqual(["0001_meta.sql", "0002_apps.sql", "0003_decisions.sql", "0004_decision_cells.sql"]);
       for (const row of recorded.rows) {
         const sql = await readFile(path.join(migrationsDir, row.name), "utf8");
         expect(row.checksum, row.name).toBe(createHash("sha256").update(sql).digest("hex"));
