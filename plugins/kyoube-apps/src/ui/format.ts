@@ -1,5 +1,10 @@
 export type UiFieldKind = "text" | "long_text" | "integer" | "decimal" | "boolean" | "date" | "datetime" | "json" | "select" | "multi_select" | "relation" | "email" | "url";
-export interface UiField { name: string; displayName: string; description: string | null; kind: UiFieldKind; required: boolean; options: { choices?: string[]; relationTable?: string }; position: number }
+export type UiQuestion =
+  | { type: "choice"; instructions: string; options: Record<string, string | null>; review?: number }
+  | { type: "score"; instructions: string; levels: string[]; review?: number }
+  | { type: "check"; statement: string; review?: number };
+export interface UiAiColumn { question: UiQuestion; sourceFields: string[]; advisory?: boolean }
+export interface UiField { name: string; displayName: string; description: string | null; kind: UiFieldKind; required: boolean; options: { choices?: string[]; relationTable?: string; decision?: UiAiColumn }; position: number }
 export interface UiTable { name: string; displayName: string; description: string | null; fields: UiField[]; createdAt: string; updatedAt: string }
 
 export function formatCell(kind: UiFieldKind | "system", value: unknown): string {

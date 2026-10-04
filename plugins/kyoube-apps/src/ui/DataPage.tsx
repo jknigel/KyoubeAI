@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { PluginPageProps } from "@paperclipai/plugin-sdk/ui";
 import { useHostContext, usePluginAction, usePluginData, usePluginToast } from "@paperclipai/plugin-sdk/ui";
+import { AiColumnEditor, AiColumnHeader, aiDraftToSpec, emptyAiColumnDraft, ReviewCell, rowFormFields, suggestionValue, type AiColumnDraft, type UiCellCounts } from "./AiColumns.js";
 import { errorText, formatCell, emptyRow, nextSelectedAfterDrop, resolveSelectedTable, type UiField, type UiTable } from "./format.js";
-import { button, emptyFieldDraft, FieldEditor, fieldDraftToSpec, input, RowForm, type FieldDraft } from "./forms.js";
+import { button, CellInput, emptyFieldDraft, FieldEditor, fieldDraftToSpec, input, RowForm, type FieldDraft } from "./forms.js";
 
 const PAGE_SIZE = 50;
 type Row = Record<string, unknown>;
@@ -96,6 +97,19 @@ function TableView(props: { companyId: string; userId: string | null; table: UiT
     [companyId, props.userId, table.name, where, page],
   );
   const rows = usePluginData<{ rows: Row[] }>("data.rows", rowsParams);
+  const aiFields = table.fields.filter((field) => field.options.decision);
+  // AI cells are changed only through Accept/Change below: a whole-row form would write every
+  // AI value back and turn the model's answers into "a person decided" (spec section 4).
+  const formFields = rowFormFields(table.fields);
+  const rowIds = (rows.data?.rows ?? []).map((row) => String(row.id)).join(",");
+  const aiParams = useMemo(
+    () => ({ companyId, userId: props.userId, table: table.name, rowIds: aiFields.length > 0 && rowIds ? rowIds.split(",") : [] }),
+    [companyId, props.userId, table.name, aiFields.length, rowIds],
+  );
+  const ai = usePluginData<{ provider: string | null; counts: Record<string, UiCellCounts>; cells: Record<string, Record<string, { status: string; suggestion: string | null; confidence: number | null }>> }>("data.ai_cells", aiParams);
+  const refill = usePluginAction("data.refill_ai_column");
+  const [aiDraft, setAiDraft] = useState<AiColumnDraft | null>(null);
+  const [changing, setChanging] = useState<{ rowId: string; field: string; value: string } | null>(null);
   const countParams = useMemo(
     () => ({ companyId, userId: props.userId, table: table.name, where }),
     [companyId, props.userId, table.name, where],
@@ -107,10 +121,10 @@ function TableView(props: { companyId: string; userId: string | null; table: UiT
   const addField = usePluginAction("data.add_field");
   const removeField = usePluginAction("data.remove_field");
   const dropTable = usePluginAction("data.drop_table");
-  const refresh = () => { rows.refresh(); count.refresh(); };
+  const refresh = () => { rows.refresh(); count.refresh(); ai.refresh(); };
   const run = (promise: Promise<unknown>, success: string) => promise.then(() => { props.notify(success); refresh(); }).catch((err) => props.notify(errorText(err), "error"));
   const total = count.data?.count ?? 0;
-  const columns: Array<{ name: string; kind: UiField["kind"] | "system" }> = [...table.fields.map((field) => ({ name: field.name, kind: field.kind })), { name: "created_at", kind: "system" as const }];
+  const columns: Array<{ name: string; kind: UiField["kind"] | "system"; ai: UiField | null }> = [...table.fields.map((field) => ({ name: field.name, kind: field.kind, ai: field.options.decision ? field : null })), { name: "created_at", kind: "system" as const, ai: null }];
 
   return (
     <div className="flex flex-col gap-3">
@@ -121,6 +135,7 @@ function TableView(props: { companyId: string; userId: string | null; table: UiT
         <span className="flex-1" />
         {props.canWrite && <button type="button" className={button} onClick={() => setAdding(true)}>+ Row</button>}
         {props.canSchema && <button type="button" className={button} onClick={() => setFieldDraft(emptyFieldDraft())}>+ Field</button>}
+        {props.canSchema && <button type="button" className={button} onClick={() => setAiDraft(emptyAiColumnDraft())}>+ AI column</button>}
         {props.canSchema && (confirmDrop
           ? <span className="flex items-center gap-1 text-sm">Drop {table.name}? <button type="button" className={button} onClick={() => { dropTable({ table: table.name }).then(() => { props.notify(`Dropped ${table.name} (recoverable for 30 days)`); props.onDropped(table.name); }).catch((err) => props.notify(errorText(err), "error")); }}>Yes</button><button type="button" className={button} onClick={() => setConfirmDrop(false)}>No</button></span>
           : <button type="button" className={button} onClick={() => setConfirmDrop(true)}>Drop table</button>)}
@@ -131,15 +146,37 @@ function TableView(props: { companyId: string; userId: string | null; table: UiT
           <div className="flex gap-2"><button type="button" className={button} onClick={() => run(addField({ table: table.name, field: fieldDraftToSpec(fieldDraft) }).then(() => { setFieldDraft(null); props.onSchemaChange(); }), "Field added")}>Add</button><button type="button" className={button} onClick={() => setFieldDraft(null)}>Cancel</button></div>
         </div>
       )}
-      {adding && <RowForm fields={table.fields} initial={emptyRow(table.fields)} submitLabel="Insert" onCancel={() => setAdding(false)} onSubmit={async (row) => { await insert({ table: table.name, rows: [row] }); setAdding(false); props.notify("Row inserted"); refresh(); }} />}
-      {editing && <RowForm key={String(editing.id)} fields={table.fields} initial={editing} submitLabel="Save" onCancel={() => setEditing(null)} onSubmit={async (row) => { await update({ table: table.name, ids: [String(editing.id)], patch: row }); setEditing(null); props.notify("Row updated"); refresh(); }} />}
+      {aiDraft && (
+        <div className="flex flex-col gap-2 rounded border p-2">
+          <AiColumnEditor draft={aiDraft} fields={table.fields} onChange={setAiDraft} />
+          <div className="flex gap-2"><button type="button" className={button} onClick={() => run(addField({ table: table.name, field: aiDraftToSpec(aiDraft) }).then(() => { setAiDraft(null); props.onSchemaChange(); }), "AI column added; it fills in the background")}>Add</button><button type="button" className={button} onClick={() => setAiDraft(null)}>Cancel</button></div>
+        </div>
+      )}
+      {adding && <RowForm fields={formFields} initial={emptyRow(formFields)} submitLabel="Insert" onCancel={() => setAdding(false)} onSubmit={async (row) => { await insert({ table: table.name, rows: [row] }); setAdding(false); props.notify("Row inserted"); refresh(); }} />}
+      {editing && <RowForm key={String(editing.id)} fields={formFields} initial={editing} submitLabel="Save" onCancel={() => setEditing(null)} onSubmit={async (row) => { await update({ table: table.name, ids: [String(editing.id)], patch: row }); setEditing(null); props.notify("Row updated"); refresh(); }} />}
       <div className="overflow-x-auto rounded border">
         <table className="w-full text-sm">
-          <thead><tr className="bg-accent/40 text-left">{columns.map((column) => <th key={column.name} className="px-2 py-1 font-medium">{column.name}{props.canSchema && column.kind !== "system" && <button type="button" className="ml-1 text-foreground/40 hover:text-red-600" title="Remove field" onClick={() => run(removeField({ table: table.name, field: column.name }).then(props.onSchemaChange), `Removed ${column.name}`)}>×</button>}</th>)}{props.canWrite && <th />}</tr></thead>
+          <thead><tr className="bg-accent/40 text-left">{columns.map((column) => <th key={column.name} className="px-2 py-1 font-medium">{column.ai ? <AiColumnHeader field={column.ai} provider={ai.data?.provider ?? null} counts={ai.data?.counts[column.name] ?? null} canSchema={props.canSchema} onRefill={() => run(refill({ table: table.name, field: column.name }), `Refilling ${column.name}`)} /> : column.name}{props.canSchema && column.kind !== "system" && <button type="button" className="ml-1 text-foreground/40 hover:text-red-600" title="Remove field" onClick={() => run(removeField({ table: table.name, field: column.name }).then(props.onSchemaChange), `Removed ${column.name}`)}>×</button>}</th>)}{props.canWrite && <th />}</tr></thead>
           <tbody>
             {(rows.data?.rows ?? []).map((row) => (
               <tr key={String(row.id)} className="border-t">
-                {columns.map((column) => <td key={column.name} className="max-w-xs truncate px-2 py-1" title={formatCell(column.kind, row[column.name])}>{formatCell(column.kind, row[column.name])}</td>)}
+                {columns.map((column) => (
+                  <td key={column.name} className="max-w-xs truncate px-2 py-1" title={formatCell(column.kind, row[column.name])}>
+                    {(() => {
+                      const cell = column.ai ? ai.data?.cells[column.name]?.[String(row.id)] : undefined;
+                      if (column.ai && changing && changing.rowId === String(row.id) && changing.field === column.name) {
+                        return <span className="inline-flex items-center gap-1"><CellInput field={column.ai} value={changing.value} onChange={(value) => setChanging({ ...changing, value })} /><button type="button" className="underline" onClick={() => { const value = column.ai!.kind === "boolean" ? changing.value === "true" : changing.value || null; setChanging(null); run(update({ table: table.name, ids: [String(row.id)], patch: { [column.name]: value } }), "Saved"); }}>Save</button></span>;
+                      }
+                      if (column.ai && cell?.status === "review" && cell.suggestion !== null) {
+                        return <ReviewCell suggestion={cell.suggestion} confidence={cell.confidence} canWrite={props.canWrite}
+                          onAccept={() => run(update({ table: table.name, ids: [String(row.id)], patch: { [column.name]: suggestionValue(column.ai!, cell.suggestion!) } }), "Accepted")}
+                          onChange={() => setChanging({ rowId: String(row.id), field: column.name, value: column.ai!.kind === "boolean" ? "false" : "" })} />;
+                      }
+                      return formatCell(column.kind, row[column.name]);
+                    })()}
+                    {column.ai && props.canWrite && ai.data?.cells[column.name]?.[String(row.id)]?.status !== "review" && <button type="button" className="ml-1 text-foreground/40 underline" onClick={() => setChanging({ rowId: String(row.id), field: column.name, value: row[column.name] === null || row[column.name] === undefined ? "" : String(row[column.name]) })}>change</button>}
+                  </td>
+                ))}
                 {props.canWrite && <td className="whitespace-nowrap px-2 py-1"><button type="button" className="underline" onClick={() => setEditing(row)}>edit</button> <button type="button" className="underline" onClick={() => run(remove({ table: table.name, ids: [String(row.id)] }), "Row deleted")}>delete</button></td>}
               </tr>
             ))}

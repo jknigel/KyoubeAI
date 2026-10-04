@@ -43,6 +43,8 @@ export const API_ROUTES: PluginApiRouteDeclaration[] = [
   route("rows.update", "POST", "/tables/:table/rows/update"),
   route("rows.delete", "POST", "/tables/:table/rows/delete"),
   route("sql.select", "POST", "/sql"),
+  route("tables.review", "GET", "/tables/:table/review"),
+  route("fields.refill", "POST", "/tables/:table/fields/:field/refill"),
 ];
 
 const fieldSpec = z.object({
@@ -153,6 +155,12 @@ async function dispatch(service: DataService, input: PluginApiRequestInput, comp
     case "rows.update": { const b = parseBody("rows.update", input.body); return service.update(companyId, actor, param(input, "table"), { ids: b.ids, where: b.where }, b.patch); }
     case "rows.delete": { const b = parseBody("rows.delete", input.body); return service.delete(companyId, actor, param(input, "table"), { ids: b.ids, where: b.where }); }
     case "sql.select": { const b = parseBody("sql.select", input.body); return service.sqlSelect(companyId, actor, b.sql, b.params ?? []); }
+    case "tables.review": {
+      const field = typeof input.query.field === "string" && input.query.field ? input.query.field : null;
+      const number = (key: string) => (typeof input.query[key] === "string" && /^\d+$/.test(input.query[key] as string) ? Number(input.query[key]) : undefined);
+      return service.listReview(companyId, actor, param(input, "table"), { field, limit: number("limit"), offset: number("offset") });
+    }
+    case "fields.refill": return service.refillAiColumn(companyId, actor, param(input, "table"), param(input, "field"));
     default: return undefined;
   }
 }
