@@ -17,6 +17,14 @@ const USES: Array<{ key: Use; label: string; hint: string }> = [
   { key: "guardrail", label: "Guardrail on risky agent actions", hint: "Dropping tables, bulk deletes and app publishing by agents are checked first; anything doubtful waits for a person." },
 ];
 
+/** The cap a blurred box asks for: a whole number of 0 or more that differs from the current one, or null for nothing to save (an emptied box included). */
+export function nextDailyCap(raw: string, current: number): number | null {
+  const text = raw.trim();
+  if (!/^\d+$/.test(text)) return null;
+  const next = Number(text);
+  return Number.isSafeInteger(next) && next !== current ? next : null;
+}
+
 export function DecisionsSettingsView({ view, onChange }: { view: DecisionSettingsViewData; onChange: (patch: Partial<DecisionSettingsViewData["settings"]>) => void }) {
   const { provider, settings, usage } = view;
   return (
@@ -40,7 +48,12 @@ export function DecisionsSettingsView({ view, onChange }: { view: DecisionSettin
       ))}
       <label className="flex items-center gap-2">Daily cap (provider requests per UTC day)
         <input className={input} type="number" min={0} defaultValue={settings.dailyCap} key={settings.dailyCap}
-          onBlur={(event) => { const next = Number(event.target.value); if (Number.isInteger(next) && next >= 0 && next !== settings.dailyCap) onChange({ dailyCap: next }); }} />
+          onBlur={(event) => {
+            const next = nextDailyCap(event.target.value, settings.dailyCap);
+            // Nothing to save: the box shows the cap in force again rather than a value that was never saved.
+            if (next === null) event.target.value = String(settings.dailyCap);
+            else onChange({ dailyCap: next });
+          }} />
       </label>
     </section>
   );
@@ -52,7 +65,7 @@ export function DecisionsSettings({ companyId }: { companyId: string }) {
   const save = usePluginAction("decisions.set_settings");
   const [view, setView] = useState<DecisionSettingsViewData | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const reload = () => load({}).then((result) => setView(result as DecisionSettingsViewData)).catch((err) => setError(errorText(err)));
+  const reload = () => load({}).then((result) => { setError(null); setView(result as DecisionSettingsViewData); }).catch((err) => setError(errorText(err)));
   useEffect(() => { if (companyId) reload().catch(() => {}); }, [companyId]);
   if (error) return <div className="text-red-600">{error}</div>;
   if (!view) return null;

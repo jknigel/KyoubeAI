@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { PluginPageProps } from "@paperclipai/plugin-sdk/ui";
 import { useHostContext, usePluginAction, usePluginData, usePluginToast } from "@paperclipai/plugin-sdk/ui";
-import { AiColumnEditor, AiColumnHeader, aiDraftToSpec, emptyAiColumnDraft, ReviewCell, rowFormFields, suggestionValue, type AiColumnDraft, type UiCellCounts } from "./AiColumns.js";
+import { acceptable, AiColumnEditor, AiColumnHeader, aiDraftToSpec, emptyAiColumnDraft, ReviewCell, rowFormFields, suggestionValue, type AiColumnDraft, type UiCellCounts } from "./AiColumns.js";
 import { errorText, formatCell, emptyRow, nextSelectedAfterDrop, resolveSelectedTable, type UiField, type UiTable } from "./format.js";
 import { button, CellInput, emptyFieldDraft, FieldEditor, fieldDraftToSpec, input, RowForm, type FieldDraft } from "./forms.js";
 
@@ -168,7 +168,7 @@ function TableView(props: { companyId: string; userId: string | null; table: UiT
                         return <span className="inline-flex items-center gap-1"><CellInput field={column.ai} value={changing.value} onChange={(value) => setChanging({ ...changing, value })} /><button type="button" className="underline" onClick={() => { const value = column.ai!.kind === "boolean" ? changing.value === "true" : changing.value || null; setChanging(null); run(update({ table: table.name, ids: [String(row.id)], patch: { [column.name]: value } }), "Saved"); }}>Save</button></span>;
                       }
                       if (column.ai && cell?.status === "review" && cell.suggestion !== null) {
-                        return <ReviewCell suggestion={cell.suggestion} confidence={cell.confidence} canWrite={props.canWrite}
+                        return <ReviewCell suggestion={cell.suggestion} confidence={cell.confidence} canWrite={props.canWrite} canAccept={acceptable(column.ai, cell.suggestion)}
                           onAccept={() => run(update({ table: table.name, ids: [String(row.id)], patch: { [column.name]: suggestionValue(column.ai!, cell.suggestion!) } }), "Accepted")}
                           onChange={() => setChanging({ rowId: String(row.id), field: column.name, value: column.ai!.kind === "boolean" ? "false" : "" })} />;
                       }

@@ -76,4 +76,12 @@ describe("handleAppMessage and typed decisions", () => {
       expect(appErrorPayload({ code: "WORKER_ERROR", message: `${code}: something` }).code).toBe(code);
     }
   });
+
+  it("shows the app the guardrail's error codes too", () => {
+    for (const code of ["held", "rejected_by_person", "guardrail_context_required"]) {
+      expect(appErrorPayload({ code: "WORKER_ERROR", message: `${code}: something` }).code).toBe(code);
+    }
+    // A code named later in the message never wins over the one it starts with.
+    expect(appErrorPayload({ code: "WORKER_ERROR", message: "forbidden: the confirmation was not answered by a person, so the action stays held" }).code).toBe("forbidden");
+  });
 });

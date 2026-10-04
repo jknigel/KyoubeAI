@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { RowForm, rowFromValues } from "../../src/ui/forms.js";
-import { aiDraftToSpec, AiColumnEditor, AiColumnHeader, emptyAiColumnDraft, percent, ReviewCell, rowFormFields, sendsText, suggestionValue } from "../../src/ui/AiColumns.js";
+import { acceptable, aiDraftToSpec, AiColumnEditor, AiColumnHeader, emptyAiColumnDraft, percent, ReviewCell, rowFormFields, sendsText, suggestionValue } from "../../src/ui/AiColumns.js";
 import type { UiField } from "../../src/ui/format.js";
 
 const refund: UiField = { name: "refund", displayName: "Refund", description: null, kind: "boolean", required: false, position: 2,
@@ -27,11 +27,23 @@ describe("AI column UI", () => {
     expect(renderToStaticMarkup(createElement(AiColumnHeader, { field: refund, provider: null, counts: null, canSchema: false, onRefill: () => {} }))).not.toContain("Refill");
   });
   it("renders a review cell with Accept and Change", () => {
-    const html = renderToStaticMarkup(createElement(ReviewCell, { suggestion: "billing", confidence: 0.72, canWrite: true, onAccept: () => {}, onChange: () => {} }));
+    const html = renderToStaticMarkup(createElement(ReviewCell, { suggestion: "billing", confidence: 0.72, canWrite: true, canAccept: true, onAccept: () => {}, onChange: () => {} }));
     expect(html).toContain("Suggested: billing (72%)");
     expect(html).toContain("Accept");
     expect(html).toContain("Change");
-    expect(renderToStaticMarkup(createElement(ReviewCell, { suggestion: "billing", confidence: 0.72, canWrite: false, onAccept: () => {}, onChange: () => {} }))).not.toContain("Accept");
+    expect(renderToStaticMarkup(createElement(ReviewCell, { suggestion: "billing", confidence: 0.72, canWrite: false, canAccept: true, onAccept: () => {}, onChange: () => {} }))).not.toContain("Accept");
+  });
+  it("offers Accept only for a suggestion the column can hold, never for unsure", () => {
+    const queue: UiField = { ...refund, name: "queue", kind: "select", options: { ...refund.options, choices: ["billing", "technical"] } };
+    expect(acceptable(queue, "billing")).toBe(true);
+    expect(acceptable(queue, "unsure")).toBe(false);
+    expect(acceptable(refund, "true")).toBe(true);
+    expect(acceptable(refund, "false")).toBe(true);
+    expect(acceptable(refund, "unsure")).toBe(false);
+    const html = renderToStaticMarkup(createElement(ReviewCell, { suggestion: "unsure", confidence: 0.41, canWrite: true, canAccept: acceptable(queue, "unsure"), onAccept: () => {}, onChange: () => {} }));
+    expect(html).toContain("Suggested: unsure (41%)");
+    expect(html).not.toContain("Accept");
+    expect(html).toContain("Change");
   });
   it("turns a draft into a field spec for each question type", () => {
     const base = { ...emptyAiColumnDraft(), name: "queue", text: "Which team?", sources: ["subject"] };
