@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ensureCompany, resetCompanyCache } from "../../src/db/company-scope.js";
 import { migrationsDirFrom, runMetaMigrations } from "../../src/db/migrate.js";
-import { consumeHold, createHold, findHold, findLiveHold, hasUnreleasedHold, purgeGuardrailHolds } from "../../src/decisions/holds.js";
+import { consumeHold, createHold, findHold, findLiveHold, hasUnreleasedHold, purgeGuardrailHolds, supersedeHold } from "../../src/decisions/holds.js";
 import { createTestDatabase } from "./setup.js";
 
 const C = "77777777-7777-4777-8777-777777777777";
@@ -17,7 +17,7 @@ beforeAll(async () => {
 afterAll(async () => { await db.close(); });
 
 function hold(overrides: Partial<Parameters<typeof createHold>[1]> = {}) {
-  return { id: randomUUID(), companyId: C, agentId: "agent-1", issueId: "issue-1", cardId: `card-${randomUUID()}`, fingerprint: "f".repeat(64), operation: "drop_table", expiresAt: new Date(Date.now() + 86_400_000), ...overrides };
+  return { id: randomUUID(), companyId: C, agentId: "agent-1", issueId: "issue-1", cardId: `card-${randomUUID()}`, fingerprint: "f".repeat(64), operation: "drop_table", affectedRows: 12, expiresAt: new Date(Date.now() + 86_400_000), ...overrides };
 }
 
 describe("guardrail holds", () => {
@@ -76,6 +76,23 @@ describe("guardrail holds", () => {
     expect(await ask({ agentId: "agent-2" })).toBe(false);
     expect(await ask({ fingerprint: "9".repeat(64) })).toBe(false);
     expect(await ask({ now: new Date(Date.now() + 2 * 86_400_000) })).toBe(false);
+  });
+
+  it("hands a superseded hold's place to its successor: never live, never used, never unreleased", async () => {
+    const f = "5".repeat(64);
+    const first = hold({ fingerprint: f, affectedRows: 3 });
+    await createHold(db.pool, first);
+    expect(await findHold(db.pool, C, first.cardId)).toMatchObject({ affectedRows: 3, supersededBy: null });
+    const next = hold({ fingerprint: f, affectedRows: 5 });
+    await createHold(db.pool, next);
+    expect(await supersedeHold(db.pool, first.id, next.cardId)).toBe(true);
+    expect(await supersedeHold(db.pool, first.id, "card-other")).toBe(false);
+    expect(await findHold(db.pool, C, first.cardId)).toMatchObject({ supersededBy: next.cardId, consumedAt: null });
+    expect(await consumeHold(db.pool, first.id)).toBe(false);
+    expect(await findLiveHold(db.pool, { companyId: C, agentId: "agent-1", issueId: "issue-1", fingerprint: f, now: new Date() })).toMatchObject({ id: next.id });
+    expect(await consumeHold(db.pool, next.id)).toBe(true);
+    // The chain ran: the superseded hold no longer counts as an action no person released.
+    expect(await hasUnreleasedHold(db.pool, { companyId: C, agentId: "agent-1", fingerprint: f, now: new Date() })).toBe(false);
   });
 
   it("purges holds a week past their expiry", async () => {

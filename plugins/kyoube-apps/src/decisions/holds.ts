@@ -1,6 +1,10 @@
 import type { Pool } from "pg";
 
-/** One held action, tied to its confirmation card. Used at most once, within 24 hours. */
+/**
+ * One held action, tied to its confirmation card. Used at most once, within 24 hours. `affectedRows`
+ * is the count its card showed (null when the action has none). A hold whose allowed action grew is
+ * `supersededBy` the card that asked the person again: from then on that card's hold counts instead.
+ */
 export interface Hold {
   id: string;
   companyId: string;
@@ -9,6 +13,8 @@ export interface Hold {
   cardId: string;
   fingerprint: string;
   operation: string;
+  affectedRows: number | null;
+  supersededBy: string | null;
   consumedAt: string | null;
   expiresAt: string;
   createdAt: string;
@@ -16,15 +22,15 @@ export interface Hold {
 
 interface HoldRow {
   id: string; company_id: string; agent_id: string; issue_id: string; card_id: string; action_fingerprint: string;
-  operation: string; consumed_at: Date | null; expires_at: Date; created_at: Date;
+  operation: string; affected_rows: number | null; superseded_by: string | null; consumed_at: Date | null; expires_at: Date; created_at: Date;
 }
-const COLUMNS = "id, company_id, agent_id, issue_id, card_id, action_fingerprint, operation, consumed_at, expires_at, created_at";
+const COLUMNS = "id, company_id, agent_id, issue_id, card_id, action_fingerprint, operation, affected_rows, superseded_by, consumed_at, expires_at, created_at";
 
 function fromRow(row: HoldRow): Hold {
   return {
     id: row.id, companyId: row.company_id, agentId: row.agent_id, issueId: row.issue_id, cardId: row.card_id,
-    fingerprint: row.action_fingerprint, operation: row.operation, consumedAt: row.consumed_at ? row.consumed_at.toISOString() : null,
-    expiresAt: row.expires_at.toISOString(), createdAt: row.created_at.toISOString(),
+    fingerprint: row.action_fingerprint, operation: row.operation, affectedRows: row.affected_rows, supersededBy: row.superseded_by,
+    consumedAt: row.consumed_at ? row.consumed_at.toISOString() : null, expiresAt: row.expires_at.toISOString(), createdAt: row.created_at.toISOString(),
   };
 }
 
@@ -34,12 +40,12 @@ function fromRow(row: HoldRow): Hold {
  */
 export async function createHold(
   pool: Pool,
-  input: { id: string; companyId: string; agentId: string; issueId: string; cardId: string; fingerprint: string; operation: string; expiresAt: Date },
+  input: { id: string; companyId: string; agentId: string; issueId: string; cardId: string; fingerprint: string; operation: string; affectedRows: number | null; expiresAt: Date },
 ): Promise<Hold> {
   await pool.query(
-    `INSERT INTO kyoube_meta.guardrail_holds (id, company_id, agent_id, issue_id, card_id, action_fingerprint, operation, expires_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (company_id, card_id) DO NOTHING`,
-    [input.id, input.companyId, input.agentId, input.issueId, input.cardId, input.fingerprint, input.operation, input.expiresAt],
+    `INSERT INTO kyoube_meta.guardrail_holds (id, company_id, agent_id, issue_id, card_id, action_fingerprint, operation, affected_rows, expires_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (company_id, card_id) DO NOTHING`,
+    [input.id, input.companyId, input.agentId, input.issueId, input.cardId, input.fingerprint, input.operation, input.affectedRows, input.expiresAt],
   );
   const hold = await findHold(pool, input.companyId, input.cardId);
   if (!hold) throw new Error("guardrail hold was not stored");
@@ -51,11 +57,11 @@ export async function findHold(pool: Pool, companyId: string, cardId: string): P
   return result.rows[0] ? fromRow(result.rows[0]) : null;
 }
 
-/** The newest unused, unexpired hold for this agent, task and exact action. */
+/** The newest unused, unexpired hold for this agent, task and exact action that no later card replaced. */
 export async function findLiveHold(pool: Pool, input: { companyId: string; agentId: string; issueId: string; fingerprint: string; now: Date }): Promise<Hold | null> {
   const result = await pool.query<HoldRow>(
     `SELECT ${COLUMNS} FROM kyoube_meta.guardrail_holds
-      WHERE company_id = $1 AND agent_id = $2 AND issue_id = $3 AND action_fingerprint = $4 AND consumed_at IS NULL AND expires_at > $5
+      WHERE company_id = $1 AND agent_id = $2 AND issue_id = $3 AND action_fingerprint = $4 AND consumed_at IS NULL AND superseded_by IS NULL AND expires_at > $5
       ORDER BY created_at DESC LIMIT 1`,
     [input.companyId, input.agentId, input.issueId, input.fingerprint, input.now],
   );
@@ -63,13 +69,25 @@ export async function findLiveHold(pool: Pool, input: { companyId: string; agent
 }
 
 /**
- * One atomic statement, so two racing retries cannot both use the same hold, and an expired hold is
- * never used. `now` is the caller's clock, as for `findLiveHold`.
+ * One atomic statement, so two racing retries cannot both use the same hold, and an expired or
+ * superseded hold is never used. `now` is the caller's clock, as for `findLiveHold`.
  */
 export async function consumeHold(pool: Pool, holdId: string, now: Date = new Date()): Promise<boolean> {
   const result = await pool.query(
-    "UPDATE kyoube_meta.guardrail_holds SET consumed_at = now() WHERE id = $1 AND consumed_at IS NULL AND expires_at > $2",
+    "UPDATE kyoube_meta.guardrail_holds SET consumed_at = now() WHERE id = $1 AND consumed_at IS NULL AND superseded_by IS NULL AND expires_at > $2",
     [holdId, now],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+/**
+ * Hands an allowed hold whose action grew over to the card that asks the person again. Once only,
+ * and never for a hold already used.
+ */
+export async function supersedeHold(pool: Pool, holdId: string, cardId: string): Promise<boolean> {
+  const result = await pool.query(
+    "UPDATE kyoube_meta.guardrail_holds SET superseded_by = $2 WHERE id = $1 AND consumed_at IS NULL AND superseded_by IS NULL",
+    [holdId, cardId],
   );
   return (result.rowCount ?? 0) > 0;
 }
@@ -80,12 +98,13 @@ export const HOLD_GRACE_DAYS = 7;
 /**
  * Whether this agent has an unused hold on this exact action that is still kept: unexpired, or
  * expired at most `HOLD_GRACE_DAYS` ago, on any task. Its card never released the action (a used hold
- * means the action ran), so only a person may release it now and the model is not asked again.
+ * means the action ran), so only a person may release it now and the model is not asked again. A
+ * superseded hold does not count: a person allowed it, and the card that replaced it is its own hold.
  */
 export async function hasUnreleasedHold(pool: Pool, input: { companyId: string; agentId: string; fingerprint: string; now: Date }): Promise<boolean> {
   const result = await pool.query(
     `SELECT 1 FROM kyoube_meta.guardrail_holds
-      WHERE company_id = $1 AND agent_id = $2 AND action_fingerprint = $3 AND consumed_at IS NULL
+      WHERE company_id = $1 AND agent_id = $2 AND action_fingerprint = $3 AND consumed_at IS NULL AND superseded_by IS NULL
         AND expires_at > $4::timestamptz - make_interval(days => $5::int)
       LIMIT 1`,
     [input.companyId, input.agentId, input.fingerprint, input.now, HOLD_GRACE_DAYS],

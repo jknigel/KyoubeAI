@@ -247,6 +247,14 @@ export class SchemaService {
     return this.getTable(scope, info.name);
   }
 
+  /**
+   * The table's own id, which a table dropped and made again under the same name does not share.
+   * Only the guardrail's fingerprint uses it; it is never returned to a caller.
+   */
+  async tableId(scope: CompanyScope, name: string): Promise<string> {
+    return (await this.tableRow(scope, assertIdentifier(name, "table name"))).id;
+  }
+
   /** The table and the field's checked name, or the not_found `removeField` gives for either. */
   async tableWithField(scope: CompanyScope, table: string, fieldName: string): Promise<{ info: TableInfo; name: string }> {
     const info = await this.getTable(scope, table);

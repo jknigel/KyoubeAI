@@ -119,6 +119,56 @@ describe("the guard hook in DataService", () => {
     expect([decided.length, cards.length]).toEqual([1, 1]);
   });
 
+  it("binds a hold to the table it was shown and the rows it would touch", async () => {
+    const resolveUserRole = async (_c: string, userId: string) => (userId === "owner-1" ? "owner" : null);
+    const cards: Array<{ id: string; kind: string; issueId: string; status: string; resolvedByUserId: string | null; resolvedByAgentId: string | null; prompt: string }> = [];
+    const guardrail = new Guardrail({
+      pool: db.pool,
+      decisions: {
+        settingsFor: async () => ({ agents: false, columns: false, apps: false, guardrail: true, dailyCap: 100 }),
+        decide: async () => { throw new DataError("provider_unavailable", "down"); },
+      } as never,
+      issues: {
+        get: async (id, companyId) => ({ id, companyId, title: "Tidy the jobs", description: null, assigneeAgentId: "agent-1" }),
+        requestConfirmation: async (issueId, interaction) => {
+          const card = { id: `bind-${cards.length + 1}`, kind: "request_confirmation", issueId, status: "pending", resolvedByUserId: null, resolvedByAgentId: null, prompt: interaction.payload.prompt };
+          cards.push(card);
+          return card;
+        },
+        listInteractions: async () => cards,
+      },
+    });
+    const guarded = new DataService({ pool: db.pool, resolveUserRole });
+    guarded.attach({ guardAgentAction: guardrail.check });
+    const allow = (id: string) => Object.assign(cards.find((card) => card.id === id)!, { status: "accepted", resolvedByUserId: "owner-1" });
+    const task = { issueId: "issue-bind" };
+
+    // Allowed for 3 rows; by the retry 5 match: a new card with the new count, and nothing deleted.
+    await service.createTable(C, OWNER, { name: "jobs", fields: [{ name: "stage", kind: "text" }] });
+    await service.insert(C, OWNER, "jobs", [{ stage: "old" }, { stage: "old" }, { stage: "old" }, { stage: "new" }]);
+    const old = { where: { field: "stage", op: "eq", value: "old" } };
+    await expect(guarded.delete(C, AGENT, "jobs", old, undefined, task)).rejects.toMatchObject({ code: "held", details: { confirmationId: "bind-1" } });
+    expect(cards[0]!.prompt).toContain("delete 3 rows from table `jobs`");
+    allow("bind-1");
+    await service.insert(C, OWNER, "jobs", [{ stage: "old" }, { stage: "old" }]);
+    await expect(guarded.delete(C, AGENT, "jobs", old, undefined, { ...task, confirmationId: "bind-1" })).rejects.toMatchObject({ code: "held", details: { confirmationId: "bind-2" } });
+    expect(cards[1]!.prompt).toContain("delete 5 rows from table `jobs`");
+    expect(await service.count(C, OWNER, "jobs", old.where)).toBe(5);
+    allow("bind-2");
+    expect(await guarded.delete(C, AGENT, "jobs", old, undefined, { ...task, confirmationId: "bind-2" })).toEqual({ affected: 5 });
+
+    // Allowed to drop tmp; tmp is dropped and made again before the retry: the allowance was for
+    // the old table, so it does not match the new one.
+    await service.createTable(C, OWNER, { name: "tmp", fields: [] });
+    await expect(guarded.dropTable(C, AGENT, "tmp", task)).rejects.toMatchObject({ code: "held", details: { confirmationId: "bind-3" } });
+    allow("bind-3");
+    await service.dropTable(C, OWNER, "tmp");
+    await service.createTable(C, OWNER, { name: "tmp", fields: [{ name: "kept", kind: "text" }] });
+    await expect(guarded.dropTable(C, AGENT, "tmp", { ...task, confirmationId: "bind-3" })).rejects.toMatchObject({ code: "invalid" });
+    await expect(guarded.dropTable(C, AGENT, "tmp", task)).rejects.toMatchObject({ code: "held", details: { confirmationId: "bind-4" } });
+    expect((await service.describeTable(C, OWNER, "tmp")).fields.map((field) => field.name)).toContain("kept");
+  });
+
   it("goes ahead when the hook lets it", async () => {
     await service.createTable(C, OWNER, { name: "scratch_3", fields: [] });
     await service.dropTable(C, AGENT, "scratch_3", { issueId: "issue-1" });

@@ -38,6 +38,11 @@ export type GuardAgentAction = (action: GuardedAction) => Promise<void>;
 export const BULK_IDS = 20;
 export const MAX_TASK_TEXT = 8_000;
 export const HOLD_TTL_MS = 24 * 60 * 60 * 1000;
+/**
+ * The provider deadline for a guardrail check: shorter than the 20 s a decision call gets, so the
+ * check, the row count and the action itself all fit in the core's 30 s plugin call.
+ */
+export const GUARD_DEADLINE_MS = 12_000;
 
 export function isBulkTarget(target: RowTarget): boolean {
   const where = target.where;
@@ -125,8 +130,11 @@ function percent(confidence: number): string {
   return `${Math.round(confidence * 100)}%`;
 }
 
-/** Why a card is raised: the check's answers, the check failing, or an earlier hold no person released. */
-export type GuardOutcome = { result: DecideResult } | { failure: string } | { heldBefore: true };
+/**
+ * Why a card is raised: the check's answers, the check failing, an earlier hold no person released,
+ * or an allowed action that would now touch more rows than the person was shown.
+ */
+export type GuardOutcome = { result: DecideResult } | { failure: string } | { heldBefore: true } | { grown: { allowed: number } };
 
 export function confirmationPayload(agentName: string, action: GuardedAction, affectedRows: number | null, outcome: GuardOutcome): ConfirmationPayload {
   let details: string;
@@ -141,6 +149,8 @@ export function confirmationPayload(agentName: string, action: GuardedAction, af
     ].join("\n");
   } else if ("failure" in outcome) {
     details = `The guardrail's automatic check could not run (${outcome.failure}), so a person has to decide.`;
+  } else if ("grown" in outcome) {
+    details = `A person allowed this action when it would have touched ${rowCount(outcome.grown.allowed)}. It would now touch ${affectedRows === null ? "more" : rowCount(affectedRows)}, so it did not run: a person has to decide again.`;
   } else {
     details = "The guardrail held this exact action before and no person allowed it, so the automatic check was not asked again: a person has to decide.";
   }
