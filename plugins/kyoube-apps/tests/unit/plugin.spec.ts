@@ -54,6 +54,9 @@ async function setup() {
     },
   });
   await plugin.definition.setup(harness.ctx);
+  // Setup itself calls the data service once (`attach`, for AI columns); the tests count only
+  // what the actions and reads they make reach.
+  stub.calls.length = 0;
   return { harness, plugin, poolEnds, serviceDeps: serviceDeps as unknown as DataServiceDeps, appDeps: appDeps as unknown as AppServiceDeps, ...stub };
 }
 
@@ -78,6 +81,7 @@ async function setupRaw() {
     createService: () => stub.service,
   });
   await plugin.definition.setup(ctx);
+  stub.calls.length = 0;
   const context = (companyId: string | null): PluginPerformActionContext => ({
     actor: { type: "user", userId: "admin-1", agentId: null, runId: null, companyId },
     companyId,
@@ -490,7 +494,7 @@ describe("kyoube.apps plugin wiring", () => {
       migrationsDir: "/nowhere",
       createPool: () => ({ query: async () => ({ rows: [{ company_id: COMPANY }, { company_id: OTHER_COMPANY }] }), end: async () => {} }) as never,
       migrate: async () => [],
-      createService: () => ({ purgeTrash }) as unknown as DataService,
+      createService: () => ({ purgeTrash, attach: () => {} }) as unknown as DataService,
     });
     await plugin.definition.setup(harness.ctx);
     return harness;
@@ -522,5 +526,13 @@ describe("kyoube.apps plugin wiring", () => {
     expect(failure?.meta).toMatchObject({ companyId: COMPANY });
     expect(String(failure?.meta?.error)).toContain("schema locked");
     expect(harness.logs.filter((entry) => entry.message === "purged trash")).toHaveLength(1);
+  });
+
+  it("declares the AI-column fill job every five minutes and registers its handler", async () => {
+    expect(manifest.jobs?.find((job) => job.jobKey === "fill-ai-columns")?.schedule).toBe("*/5 * * * *");
+    // The fake pool reads every company's settings as "AI columns off", so the run asks nothing.
+    const harness = await setupPurge(async () => ({ droppedTables: [], droppedColumns: [] }));
+    await expect(harness.runJob("fill-ai-columns")).resolves.toBeUndefined();
+    expect(harness.logs.filter((entry) => entry.message === "filled AI columns")).toHaveLength(0);
   });
 });

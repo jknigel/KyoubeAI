@@ -1,8 +1,8 @@
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import { withCompany, type CompanyScope, type ScopedClient, type WithCompanyOptions } from "../db/company-scope.js";
 import type { AuditPlan } from "./audit.js";
 import { DataError, mapPgError } from "./errors.js";
-import { coerceValue } from "./field-kinds.js";
+import { coerceValue, columnType } from "./field-kinds.js";
 import { compileQuery, compileWhere, type QuerySpec } from "./filter.js";
 import { quoteIdent } from "./identifiers.js";
 import type { SchemaService, TableInfo } from "./schema-service.js";
@@ -20,7 +20,7 @@ const MAX_AFFECTED = 1000;
 const SQL_LIMIT = 1000;
 const MAX_TARGET_IDS = 500;
 const MAX_BIND_PARAMS = 5000;
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Ruling P4-R14: the row caps alone do not bound the *statement* — 500 rows on a 100-column
@@ -39,6 +39,12 @@ function normalizeRow(row: Row): Row {
   for (const [key, value] of Object.entries(row)) out[key] = value instanceof Date ? value.toISOString() : value;
   return out;
 }
+
+/** A row as the AI-column fill job reads it: its id, its exact `updated_at` text, and the source fields. */
+export interface AiSourceRow { id: string; updatedAt: string; values: Record<string, unknown> }
+
+/** Never a user field name: identifiers start with a letter (identifiers.ts). */
+const SCAN_AT = "_kyoube_scan_at";
 
 export class RecordsService {
   constructor(private readonly pool: Pool, private readonly schema: SchemaService) {}
@@ -151,6 +157,79 @@ export class RecordsService {
       const truncated = result.rows.length > SQL_LIMIT;
       return { columns: result.fields.map((field) => field.name), rows: result.rows.slice(0, SQL_LIMIT).map(normalizeRow), truncated };
     }, { readOnly: true, statementTimeoutMs: 5000 });
+  }
+
+  // ---- the AI-column fill job (plugin-internal; see DataService.scanForAi) -------------------
+
+  async scanForAi(scope: CompanyScope, table: string, columns: string[], after: { at: string; id: string } | null, limit: number): Promise<AiSourceRow[]> {
+    const info = await this.schema.getTable(scope, table);
+    const names = this.knownColumns(info, columns);
+    // Keyset order on (updated_at, id). updated_at goes back to the caller as text: a JS Date
+    // would drop its microseconds and the next page would re-read (or skip) rows at the boundary.
+    const sql = `SELECT "id", "updated_at"::text AS ${quoteIdent(SCAN_AT)}${names.map((name) => `, ${quoteIdent(name)}`).join("")}
+      FROM ${quoteIdent(info.name)}
+      WHERE $1::timestamptz IS NULL OR ("updated_at", "id") > ($1::timestamptz, $2::uuid)
+      ORDER BY "updated_at", "id" LIMIT $3`;
+    const rows = await this.run(scope, async ({ client }) => (await client.query(sql, [after?.at ?? null, after?.id ?? null, limit])).rows, { readOnly: true });
+    return rows.map((row) => this.sourceRow(row, names));
+  }
+
+  async rowsForAi(scope: CompanyScope, table: string, ids: string[], columns: string[]): Promise<AiSourceRow[]> {
+    if (ids.length === 0) return [];
+    const info = await this.schema.getTable(scope, table);
+    const names = this.knownColumns(info, columns);
+    const sql = `SELECT "id", "updated_at"::text AS ${quoteIdent(SCAN_AT)}${names.map((name) => `, ${quoteIdent(name)}`).join("")} FROM ${quoteIdent(info.name)} WHERE "id" = ANY($1::uuid[])`;
+    const rows = await this.run(scope, async ({ client }) => (await client.query(sql, [ids])).rows, { readOnly: true });
+    return rows.map((row) => this.sourceRow(row, names));
+  }
+
+  async existingIds(scope: CompanyScope, table: string, ids: string[]): Promise<string[]> {
+    if (ids.length === 0) return [];
+    const info = await this.schema.getTable(scope, table);
+    const rows = await this.run(scope, async ({ client }) => (await client.query<{ id: string }>(`SELECT "id" FROM ${quoteIdent(info.name)} WHERE "id" = ANY($1::uuid[])`, [ids])).rows, { readOnly: true });
+    return rows.map((row) => row.id);
+  }
+
+  /**
+   * One statement for a whole batch of AI answers, each row its own value. `inMeta` runs on the
+   * same transaction after `asOwner()`, so the cell bookkeeping commits (or rolls back) with the
+   * values it describes, and so does the caller's audit row.
+   */
+  async setColumnValues(
+    scope: CompanyScope,
+    table: string,
+    field: string,
+    values: Array<{ id: string; value: string | boolean | null }>,
+    opts: { audit?: AuditPlan<{ affected: number }>; inMeta?: (client: PoolClient) => Promise<void> } = {},
+  ): Promise<{ affected: number }> {
+    const info = await this.schema.getTable(scope, table);
+    const spec = info.fields.find((candidate) => candidate.name === field);
+    if (!spec) throw new DataError("not_found", `field "${field}" not found on "${info.name}"`);
+    if (values.some((entry) => !UUID_RE.test(entry.id))) throw new DataError("invalid", "ids must be uuids");
+    const texts = values.map((entry) => { const coerced = coerceValue(spec, entry.value); return coerced === null ? null : String(coerced); });
+    const sql = `UPDATE ${quoteIdent(info.name)} AS t SET ${quoteIdent(spec.name)} = v.value::${columnType(spec.kind)}, "updated_at" = now()
+      FROM (SELECT unnest($1::uuid[]) AS id, unnest($2::text[]) AS value) AS v WHERE t."id" = v.id`;
+    return this.run(scope, async ({ client, asOwner }) => {
+      const result = values.length > 0 ? await client.query(sql, [values.map((entry) => entry.id), texts]) : { rowCount: 0 };
+      if (opts.inMeta) {
+        await asOwner();
+        await opts.inMeta(client);
+      }
+      return { affected: result.rowCount ?? 0 };
+    }, { audit: opts.audit });
+  }
+
+  private knownColumns(info: TableInfo, columns: string[]): string[] {
+    const known = new Set(info.fields.map((field) => field.name));
+    for (const column of columns) {
+      if (!known.has(column)) throw new DataError("invalid", `unknown field "${column}" on "${info.name}"`);
+    }
+    return [...new Set(columns)];
+  }
+
+  private sourceRow(row: Row, names: string[]): AiSourceRow {
+    const normal = normalizeRow(row);
+    return { id: String(row.id), updatedAt: String(row[SCAN_AT]), values: Object.fromEntries(names.map((name) => [name, normal[name] ?? null])) };
   }
 
   private coerceRow(info: TableInfo, raw: unknown, opts: { requireAll: boolean }): Row {

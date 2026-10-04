@@ -7,6 +7,7 @@ import { MAX_APP_NOTES } from "./apps/manifest.js";
 import { AppService, parseRuntimeMethod, type AppServiceDeps } from "./apps/service.js";
 import { registerAppTools } from "./apps/tools.js";
 import { handleDecisionsApiRequest } from "./decisions/api-routes.js";
+import { AiColumnService } from "./decisions/columns.js";
 import { API_KEY_CONFIG_PATH, ProviderResolver, validateDecisionsConfig } from "./decisions/config.js";
 import { DecisionService, type DecisionServiceDeps } from "./decisions/service.js";
 import { purgeDecisionData } from "./decisions/store.js";
@@ -17,7 +18,7 @@ import { DataService, type DataServiceDeps, type MutationEvent } from "./data/se
 import { runMetaMigrations } from "./db/migrate.js";
 import { createPool as defaultCreatePool } from "./db/pool.js";
 import type { KyoubeRuntimeConfig } from "./kyoube-config.js";
-import { APPS_SKILL_KEY, DATA_SKILL_KEY, DECISIONS_SKILL_KEY, PLUGIN_ID, PURGE_JOB_KEY } from "./manifest.js";
+import { APPS_SKILL_KEY, DATA_SKILL_KEY, DECISIONS_SKILL_KEY, FILL_JOB_KEY, PLUGIN_ID, PURGE_JOB_KEY } from "./manifest.js";
 import { RoleResolver } from "./roles.js";
 import { registerTools } from "./tools.js";
 
@@ -181,15 +182,6 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
         onMutationError: dataActivity.onError,
       });
       service = dataService;
-      // The apps service resolves every caller's level through this same
-      // DataService, so an app can only ever narrow its viewer's access.
-      const appService = (deps.createAppService ?? ((appDeps) => new AppService(appDeps)))({
-        pool: dbPool,
-        data: dataService,
-        onMutation: appsActivity.log,
-        onMutationError: appsActivity.onError,
-      });
-      apps = appService;
       const providerResolver = new ProviderResolver({
         getConfig: (companyId) => ctx.config.get(companyId),
         resolveSecret: (ref, companyId) => ctx.secrets.resolve(ref as never, { companyId, configPath: API_KEY_CONFIG_PATH }),
@@ -215,6 +207,25 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
       });
       decisions = decisionService;
       registerDecisionTools(ctx, decisionService);
+      // The apps service resolves every caller's level through this same
+      // DataService, so an app can only ever narrow its viewer's access.
+      const appService = (deps.createAppService ?? ((appDeps) => new AppService(appDeps)))({
+        pool: dbPool,
+        data: dataService,
+        onMutation: appsActivity.log,
+        onMutationError: appsActivity.onError,
+      });
+      apps = appService;
+      // AI columns (docs/decisions.md). DataService gets them late, through attach(), because
+      // DecisionService depends on DataService.
+      const aiColumns = new AiColumnService({
+        pool: dbPool,
+        data: dataService,
+        decisions: decisionService,
+        providerName: async (companyId) => (await providerResolver.settings(companyId).catch(() => null))?.provider ?? null,
+        log: (message, meta) => ctx.logger.warn(message, meta),
+      });
+      dataService.attach({ aiColumns: aiColumns.hooks() });
 
       registerTools(ctx, dataService);
       registerAppTools(ctx, appService);
@@ -358,6 +369,11 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
         } catch (error) {
           ctx.logger.error("decision log purge failed", { error: String(error) });
         }
+      });
+      ctx.jobs.register(FILL_JOB_KEY, async () => {
+        const reports = await aiColumns.runJob();
+        const decided = reports.reduce((sum, report) => sum + report.decided, 0);
+        if (decided > 0) ctx.logger.info("filled AI columns", { companies: reports.length, decided });
       });
 
       ctx.logger.info(`${PLUGIN_ID} worker ready`);

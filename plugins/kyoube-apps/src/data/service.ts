@@ -1,4 +1,4 @@
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import type { AiColumnHooks } from "./ai-hooks.js";
 import { ensureCompany, schemaNameFor, type CompanyScope } from "../db/company-scope.js";
 import { withMeta, type AuditEntry } from "./audit.js";
@@ -6,7 +6,7 @@ import { DataError } from "./errors.js";
 import type { QuerySpec } from "./filter.js";
 import { getAgentLevel, getCompanySettings, listAgentGrants, setAgentGrant, setCompanySettings, type AgentGrant, type CompanySettings } from "./grants.js";
 import { assertLevel, roleToLevel, type AccessLevel, type DataActor, type Operation } from "./permissions.js";
-import { RecordsService, type Row, type RowTarget } from "./records-service.js";
+import { RecordsService, type AiSourceRow, type Row, type RowTarget } from "./records-service.js";
 import { SchemaService, type CreateTableInput, type TableInfo, type UpdateFieldPatch } from "./schema-service.js";
 
 /**
@@ -52,7 +52,7 @@ export interface DataServiceDeps {
 const TRASH_RETENTION_MS = 30 * 86_400_000;
 
 /**
- * The trusted system actor for plugin-internal jobs (currently `purgeTrash`).
+ * The trusted system actor for plugin-internal jobs (`purgeTrash`, the AI-column fill job).
  * `{ kind: "system" }` must only ever be constructed this way, from inside
  * this plugin's own trusted code — never from a request body, a tool call's
  * parameters, model output, or any other external input. See the invariant
@@ -331,6 +331,40 @@ export class DataService {
       await this.notify(companyId, actor, "purge_trash", null, `purged ${result.droppedTables.length} table(s) and ${result.droppedColumns.length} column(s)`);
     }
     return result;
+  }
+
+  // ---- the AI-column fill job (plugin-internal) -------------------------------
+  // These take no actor: like `purgeTrash` they run only from this plugin's own trusted code (the
+  // fill job in src/decisions/columns.ts), never from a request, a tool call or an app.
+
+  async scanForAi(companyId: string, table: string, columns: string[], after: { at: string; id: string } | null, limit: number): Promise<AiSourceRow[]> {
+    return this.records.scanForAi(await this.scope(companyId), table, columns, after, limit);
+  }
+
+  async rowsForAi(companyId: string, table: string, ids: string[], columns: string[]): Promise<AiSourceRow[]> {
+    return this.records.rowsForAi(await this.scope(companyId), table, ids, columns);
+  }
+
+  async existingRowIds(companyId: string, table: string, ids: string[]): Promise<string[]> {
+    return this.records.existingIds(await this.scope(companyId), table, ids);
+  }
+
+  /**
+   * One batch of AI answers: one audit row, no activity line of its own (the decisions summary
+   * is that batch's one line), and — being the fill job's own write — never an edit.
+   */
+  async writeAiValues(
+    companyId: string,
+    table: string,
+    field: string,
+    values: Array<{ id: string; value: string | boolean | null }>,
+    opts: { via: string; inMeta?: (client: PoolClient) => Promise<void> },
+  ): Promise<{ affected: number }> {
+    const actor = systemActor();
+    return this.records.setColumnValues(await this.scope(companyId), table, field, values, {
+      audit: (done) => this.entry(companyId, actor, "ai_fill", table, { field, affected: done.affected, via: opts.via }),
+      inMeta: opts.inMeta,
+    });
   }
 
   // ---- internals --------------------------------------------------------

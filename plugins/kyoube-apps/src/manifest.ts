@@ -20,6 +20,7 @@ export const DATA_SKILL_KEY = "kyoube-data";
 export const APPS_SKILL_KEY = "kyoube-apps";
 export const DECISIONS_SKILL_KEY = "kyoube-decisions";
 export const PURGE_JOB_KEY = "purge-trash";
+export const FILL_JOB_KEY = "fill-ai-columns";
 
 const manifest: PaperclipPluginManifestV1 = {
   id: PLUGIN_ID,
@@ -65,7 +66,10 @@ const manifest: PaperclipPluginManifestV1 = {
   instanceConfigSchema: DECISIONS_CONFIG_SCHEMA,
   tools: [...toolDeclarations(), ...appToolDeclarations(), ...decisionToolDeclarations()],
   apiRoutes: [...API_ROUTES, ...APP_API_ROUTES, ...DECISION_API_ROUTES],
-  jobs: [{ jobKey: PURGE_JOB_KEY, displayName: "Purge trashed tables and fields", description: "Drops tables/fields soft-deleted more than 30 days ago.", schedule: "0 3 * * *" }],
+  jobs: [
+    { jobKey: PURGE_JOB_KEY, displayName: "Purge trashed tables and fields", description: "Drops tables/fields soft-deleted more than 30 days ago.", schedule: "0 3 * * *" },
+    { jobKey: FILL_JOB_KEY, displayName: "Fill AI columns", description: "Asks the company's typed-decision model about new and changed rows of AI columns (docs/decisions.md).", schedule: "*/5 * * * *" },
+  ],
   skills: [
     { skillKey: DATA_SKILL_KEY, displayName: "Kyoube Data", slug: "kyoube-data", description: "Design and use the company's Kyoube organisation database through the kyoube.apps tools.", markdown: skillMarkdown },
     { skillKey: APPS_SKILL_KEY, displayName: "Kyoube Apps", slug: "kyoube-apps", description: "Build and publish single-file apps over the company's Kyoube Data tables.", markdown: appsSkillMarkdown },
