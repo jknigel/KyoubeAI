@@ -1,12 +1,16 @@
 import type { Pool } from "pg";
 import type { AuditEntry } from "../data/audit.js";
 import { DataError } from "../data/errors.js";
+import { coerceValue } from "../data/field-kinds.js";
 import type { QuerySpec } from "../data/filter.js";
 import { assertLevel, levelAllows, type AccessLevel, type DataActor, type Operation } from "../data/permissions.js";
-import type { Row, RowTarget } from "../data/records-service.js";
+import { UUID_RE, type Row, type RowTarget } from "../data/records-service.js";
 import type { TableInfo } from "../data/schema-service.js";
 import type { DataService, MutationEvent } from "../data/service.js";
 import { schemaNameFor } from "../db/company-scope.js";
+import { QUESTION_KEY_RE, type DecideResult, type Question } from "../decisions/contract.js";
+import type { DecisionService } from "../decisions/service.js";
+import { getLoggedDecision, recordOutcome, type Outcome } from "../decisions/store.js";
 import { assertAppSource, decisionSetsChanged, validateAppManifest, type AppManifest } from "./manifest.js";
 import { AppStore, type AppRecord, type AppVersion } from "./store.js";
 
@@ -16,6 +20,8 @@ export interface AppContext {
   viewer: { id: string | null; name: string; level: AccessLevel };
   app: { slug: string; name: string; version: number };
   tables: string[];
+  /** The decision sets this version declares, and whether the company lets apps use them right now. */
+  decisions: { available: boolean; sets: string[] };
 }
 
 export type RuntimeMethod = "query" | "get" | "count" | "describe" | "insert" | "update" | "delete";
@@ -36,8 +42,45 @@ export function parseRuntimeMethod(value: unknown): RuntimeMethod {
 export interface AppServiceDeps {
   pool: Pool;
   data: DataService;
+  /** Typed decisions (docs/decisions.md). Absent, an app's decision calls answer `disabled`. */
+  decisions?: Pick<DecisionService, "decide" | "status">;
   onMutation?: (event: MutationEvent) => Promise<void>;
   onMutationError?: (error: unknown, event: MutationEvent) => void;
+  /** The clock `decideOutcome` measures its 24-hour window with; tests replace it. */
+  now?: () => number;
+}
+
+/** What publishing and rolling back accept besides the version. Milestone 4 adds `guard` here. */
+export interface PublishOptions {
+  /** The publisher reviewed the version's new or changed decision sets and what they send. */
+  decisionsConfirmed?: boolean;
+}
+
+export type DecideInputRef = { rowId: string } | { values: Record<string, unknown> };
+
+/**
+ * Narrows what a running app sent as `input` to one of the two shapes `runtimeDecide` takes. It
+ * arrives from app code through the bridge, so it is checked rather than cast.
+ */
+export function parseDecideInput(raw: unknown): DecideInputRef {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new DataError("invalid", "decide needs { rowId } or { values }");
+  const input = raw as Record<string, unknown>;
+  const keys = Object.keys(input);
+  if (keys.length === 1 && typeof input.rowId === "string" && input.rowId.length > 0) return { rowId: input.rowId };
+  if (keys.length === 1 && input.values && typeof input.values === "object" && !Array.isArray(input.values)) return { values: input.values as Record<string, unknown> };
+  throw new DataError("invalid", "decide needs exactly one of { rowId } or { values }");
+}
+
+/** How long an app may report what its viewer chose for one of its decisions. */
+export const OUTCOME_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+export interface PublishPreview {
+  version: number;
+  /** The version adds or changes decision sets: a person must publish it, with `decisionsConfirmed`. */
+  changed: boolean;
+  provider: string | null;
+  available: boolean;
+  sets: Array<{ key: string; table: string; fields: string[]; advisory: boolean; questions: Array<{ key: string; type: Question["type"]; text: string }> }>;
 }
 
 // ---- runtime parameter shapes ------------------------------------------
@@ -110,16 +153,22 @@ function patch(params: Record<string, unknown>): Row {
  * viewer may do, never widen it.
  */
 export class AppService {
+  private readonly pool: Pool;
   private readonly store: AppStore;
   private readonly data: DataService;
+  private readonly decisions: AppServiceDeps["decisions"];
   private readonly onMutation: AppServiceDeps["onMutation"];
   private readonly onMutationError: AppServiceDeps["onMutationError"];
+  private readonly now: () => number;
 
   constructor(deps: AppServiceDeps) {
+    this.pool = deps.pool;
     this.data = deps.data;
     this.store = new AppStore(deps.pool);
+    this.decisions = deps.decisions;
     this.onMutation = deps.onMutation;
     this.onMutationError = deps.onMutationError;
+    this.now = deps.now ?? Date.now;
   }
 
   /** Live apps for this company: drafts are visible only to those who can edit them. */
@@ -170,16 +219,16 @@ export class AppService {
 
   // Ruling P4-R13: publish, rollback and archive change what every viewer of this company runs,
   // so each takes a fresh role lookup rather than up to 30 s of cached membership.
-  async publish(companyId: string, actor: DataActor, slug: string, version?: number): Promise<AppRecord> {
+  async publish(companyId: string, actor: DataActor, slug: string, version?: number, opts: PublishOptions = {}): Promise<AppRecord> {
     await this.authorize(companyId, actor, "schema", "publish an app", { fresh: true });
-    const published = await this.makeCurrent(companyId, actor, slug, version ?? "latest", "app_publish");
+    const published = await this.makeCurrent(companyId, actor, slug, version ?? "latest", "app_publish", opts);
     await this.notify(companyId, actor, "app_publish", published.app, `published app ${slug} version ${published.version}`);
     return published.app;
   }
 
-  async rollback(companyId: string, actor: DataActor, slug: string, version: number): Promise<AppRecord> {
+  async rollback(companyId: string, actor: DataActor, slug: string, version: number, opts: PublishOptions = {}): Promise<AppRecord> {
     await this.authorize(companyId, actor, "schema", "roll back an app", { fresh: true });
-    const rolled = await this.makeCurrent(companyId, actor, slug, version, "app_rollback");
+    const rolled = await this.makeCurrent(companyId, actor, slug, version, "app_rollback", opts);
     await this.notify(companyId, actor, "app_rollback", rolled.app, `rolled app ${slug} back to version ${rolled.version}`);
     return rolled.app;
   }
@@ -196,12 +245,19 @@ export class AppService {
   /** The published page a viewer runs, plus the context handed to it. */
   async runtime(companyId: string, actor: DataActor, slug: string, viewerName: string): Promise<{ context: AppContext; source: string }> {
     const { app, version, level } = await this.open(companyId, actor, slug);
+    const sets = Object.keys(version.manifest.decisions ?? {});
+    let available = false;
+    if (sets.length > 0 && this.decisions) {
+      // A context is never refused over this: an app that cannot use its sets right now still runs.
+      try { available = (await this.decisions.status(companyId, actor, "apps")).available; } catch { available = false; }
+    }
     return {
       context: {
         companyId,
         viewer: { id: actor.id, name: viewerName, level },
         app: { slug: app.slug, name: app.name, version: version.version },
         tables: version.manifest.tables.map((table) => table.name),
+        decisions: { available, sets },
       },
       source: version.source,
     };
@@ -240,6 +296,95 @@ export class AppService {
     }
   }
 
+  /**
+   * One typed decision from a running app (docs/decisions.md). Four gates, in order: the app must be
+   * published to this viewer, the *current published* version must declare the set, the viewer must
+   * be able to read the set's table, and the company must have decisions switched on for apps (the
+   * decision service checks that last one). The state is built here, from the set's declared fields
+   * and nothing else — read from a stored row under the viewer, or taken from unsaved values checked
+   * against each field's kind — so app code can never send free text or extra data of its own.
+   */
+  async runtimeDecide(companyId: string, actor: DataActor, slug: string, set: string, input: DecideInputRef): Promise<DecideResult> {
+    const { version } = await this.open(companyId, actor, slug);
+    const sets = version.manifest.decisions ?? {};
+    if (!Object.hasOwn(sets, set)) throw new DataError("forbidden", `app "${slug}" does not declare decision set "${set}"`);
+    const declared = sets[set]!;
+    const info = await this.data.describeTable(companyId, actor, declared.table);
+    let state: Record<string, unknown>;
+    if ("rowId" in input) {
+      const row = await this.data.get(companyId, actor, declared.table, input.rowId);
+      if (!row) throw new DataError("not_found", `row ${input.rowId} was not found in "${declared.table}"`);
+      state = Object.fromEntries(declared.fields.map((name) => [name, row[name] ?? null]));
+    } else {
+      const extra = Object.keys(input.values).filter((name) => !declared.fields.includes(name));
+      if (extra.length > 0) throw new DataError("invalid", `decision set "${set}" does not send field(s) ${extra.join(", ")}`);
+      const fields = new Map(info.fields.map((field) => [field.name, field]));
+      state = {};
+      for (const name of declared.fields) {
+        const field = fields.get(name);
+        if (!field) throw new DataError("invalid", `table "${declared.table}" no longer has field "${name}"`);
+        // A form being filled in may leave any field empty, whatever the table requires.
+        state[name] = coerceValue({ ...field, required: false }, input.values[name]);
+      }
+    }
+    if (!this.decisions) throw new DataError("disabled", "typed decisions are not available in this installation");
+    return this.decisions.decide(companyId, actor, "apps", { state, questions: declared.questions }, { via: `${slug}@${version.version}`, advisory: declared.advisory });
+  }
+
+  /**
+   * What the viewer chose in an app's review lane. Only for a decision this app made for this
+   * viewer in the last 24 hours, once; every other case gets the same `not_found`, so the call
+   * cannot be used to probe other people's decisions. Logged as `outcome_via: app`, apart from the
+   * Data page's outcomes, because app code could call this without a person acting.
+   */
+  async decideOutcome(companyId: string, actor: DataActor, slug: string, decisionId: string, question: string, value: unknown): Promise<{ outcome: Outcome }> {
+    await this.open(companyId, actor, slug);
+    if (actor.kind !== "user" || !actor.id) throw new DataError("forbidden", "only the person using an app can record what they chose");
+    if (!UUID_RE.test(decisionId)) throw new DataError("invalid", "decisionId must be a uuid");
+    if (!QUESTION_KEY_RE.test(question)) throw new DataError("invalid", "question must be a question key");
+    if (typeof value !== "string" && typeof value !== "boolean") throw new DataError("invalid", "value must be a string or a boolean");
+    const logged = await getLoggedDecision(this.pool, companyId, decisionId, question);
+    const ours = logged !== null
+      && logged.surface === "apps" && logged.actorKind === "user" && logged.actorId === actor.id
+      && (logged.via ?? "").startsWith(`${slug}@`)
+      && this.now() - Date.parse(logged.createdAt) <= OUTCOME_WINDOW_MS;
+    if (!ours) throw new DataError("not_found", "no decision by this app for you in the last 24 hours matches that id and question");
+    if (logged!.outcome !== null) throw new DataError("conflict", "an outcome is already recorded for this decision");
+    const outcome: Outcome = String(value) === logged!.answer ? "human_confirmed" : "human_changed";
+    await recordOutcome(this.pool, { companyId, decisionId, questionKey: question, outcome, via: "app", by: actor.id });
+    return { outcome };
+  }
+
+  /** What publishing `version` would send, for the publish dialog. Same gate as publishing. */
+  async publishPreview(companyId: string, actor: DataActor, slug: string, version: number | "latest" = "latest"): Promise<PublishPreview> {
+    await this.authorize(companyId, actor, "schema", "publish an app", { fresh: true });
+    const target = await this.store.getVersion(companyId, slug, version);
+    if (!target) throw new DataError("not_found", `app "${slug}" has no version ${version}`);
+    const current = await this.currentManifest(companyId, slug);
+    const sets = target.manifest.decisions ?? {};
+    let provider: string | null = null;
+    let available = false;
+    if (this.decisions && Object.keys(sets).length > 0) {
+      try {
+        const status = await this.decisions.status(companyId, actor, "apps");
+        provider = status.provider;
+        available = status.available;
+      } catch {
+        // The dialog still shows what would be sent; it just cannot name the provider.
+      }
+    }
+    return {
+      version: target.version,
+      changed: decisionSetsChanged(current, target.manifest),
+      provider,
+      available,
+      sets: Object.entries(sets).map(([key, set]) => ({
+        key, table: set.table, fields: set.fields, advisory: set.advisory,
+        questions: Object.entries(set.questions).map(([questionKey, question]) => ({ key: questionKey, type: question.type, text: question.type === "check" ? question.statement : question.instructions })),
+      })),
+    };
+  }
+
   // ---- internals --------------------------------------------------------
 
   /**
@@ -273,14 +418,31 @@ export class AppService {
    * certainly read access — so it never reads anything they could not read
    * themselves.
    */
-  private async makeCurrent(companyId: string, actor: DataActor, slug: string, version: number | "latest", operation: string): Promise<{ app: AppRecord; version: number }> {
+  private async makeCurrent(companyId: string, actor: DataActor, slug: string, version: number | "latest", operation: string, opts: PublishOptions = {}): Promise<{ app: AppRecord; version: number }> {
     const target = await this.store.getVersion(companyId, slug, version);
     if (!target) throw new DataError("not_found", `app "${slug}" has no version ${version}`);
     for (const table of target.manifest.tables) await this.data.describeTable(companyId, actor, table.name);
     await this.assertDecisionFields(companyId, actor, target.manifest, false);
+    // Spec §5: new or changed decision sets change what leaves the server for every viewer, so a
+    // person publishes them, after reviewing what they send — never an agent, whatever its grant.
+    const changed = decisionSetsChanged(await this.currentManifest(companyId, slug), target.manifest);
+    if (changed && actor.kind !== "user") {
+      throw new DataError("forbidden", "decision sets need a person to publish; save the draft and ask a company admin to publish it from the Apps page");
+    }
+    if (changed && opts.decisionsConfirmed !== true) {
+      throw new DataError("invalid", "this version adds or changes decision sets; review what they send, then publish with decisionsConfirmed: true");
+    }
+    const sets = Object.keys(target.manifest.decisions ?? {});
     const app = await this.store.setCurrent(companyId, slug, target.version,
-      (published) => this.entry(companyId, actor, operation, published, { version: target.version }));
+      (published) => this.entry(companyId, actor, operation, published, { version: target.version, ...(sets.length > 0 ? { decisionSets: sets, decisionsConfirmed: changed } : {}) }));
     return { app, version: target.version };
+  }
+
+  /** The manifest viewers run today, or null when the app has never been published. */
+  private async currentManifest(companyId: string, slug: string): Promise<AppManifest | null> {
+    const app = await this.store.get(companyId, slug);
+    if (!app || app.currentVersion === null) return null;
+    return (await this.store.getVersion(app, "current"))?.manifest ?? null;
   }
 
   /**
