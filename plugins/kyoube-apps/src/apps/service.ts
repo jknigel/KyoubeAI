@@ -349,9 +349,12 @@ export class AppService {
       && (logged.via ?? "").startsWith(`${slug}@`)
       && this.now() - Date.parse(logged.createdAt) <= OUTCOME_WINDOW_MS;
     if (!ours) throw new DataError("not_found", "no decision by this app for you in the last 24 hours matches that id and question");
-    if (logged!.outcome !== null) throw new DataError("conflict", "an outcome is already recorded for this decision");
     const outcome: Outcome = String(value) === logged!.answer ? "human_confirmed" : "human_changed";
-    await recordOutcome(this.pool, { companyId, decisionId, questionKey: question, outcome, via: "app", by: actor.id });
+    // The write itself refuses a decision that already has an outcome, so of two reports racing for
+    // one decision exactly one is recorded and the other is told so.
+    if (!(await recordOutcome(this.pool, { companyId, decisionId, questionKey: question, outcome, via: "app", by: actor.id }))) {
+      throw new DataError("conflict", "an outcome is already recorded for this decision");
+    }
     return { outcome };
   }
 

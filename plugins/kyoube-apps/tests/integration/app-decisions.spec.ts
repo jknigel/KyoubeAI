@@ -195,6 +195,49 @@ describe("decideOutcome", () => {
     expect(row.rows[0]).toEqual({ outcome_via: "app", outcome_by: "viewer-1" });
   });
 
+  /**
+   * The database pool, except that each read of a logged decision waits until `parties` reads have
+   * happened: simultaneous reports then all see "no outcome yet" before any of them writes, every
+   * time, so only the write itself can settle which one counts.
+   */
+  function readBarrier(parties: number): typeof db.pool {
+    let waiting: Array<() => void> = [];
+    return new Proxy(db.pool, {
+      get(target, prop) {
+        if (prop !== "query") {
+          const value = Reflect.get(target, prop);
+          return typeof value === "function" ? value.bind(target) : value;
+        }
+        return async (...args: unknown[]) => {
+          const result = await Reflect.apply(target.query, target, args);
+          if (typeof args[0] === "string" && /^\s*SELECT[\s\S]*FROM kyoube_meta\.decisions WHERE/.test(args[0])) {
+            await new Promise<void>((release) => {
+              waiting.push(release);
+              if (waiting.length === parties) { waiting.forEach((go) => go()); waiting = []; }
+            });
+          }
+          return result;
+        };
+      },
+    });
+  }
+
+  it("records one outcome when two reports for the same decision arrive at once", async () => {
+    const service = new AppService({ pool: readBarrier(2), data, decisions: stubDecisions().decisions, now: () => clock });
+    const id = await logged();
+    const settled = await Promise.allSettled([
+      service.decideOutcome(C, VIEWER, "outcomes", id, "urgent", true),
+      service.decideOutcome(C, VIEWER, "outcomes", id, "urgent", false),
+    ]);
+    const kept = settled.filter((result) => result.status === "fulfilled");
+    const refused = settled.filter((result): result is PromiseRejectedResult => result.status === "rejected");
+    expect(kept).toHaveLength(1);
+    expect(refused).toHaveLength(1);
+    expect(refused[0]!.reason).toMatchObject({ code: "conflict" });
+    const row = await db.pool.query("SELECT outcome FROM kyoube_meta.decisions WHERE decision_id = $1", [id]);
+    expect(row.rows[0]!.outcome).toBe((kept[0] as PromiseFulfilledResult<{ outcome: string }>).value.outcome);
+  });
+
   it("refuses another viewer's, another app's, a stale or a non-app decision alike", async () => {
     const service = new AppService({ pool: db.pool, data, decisions: stubDecisions().decisions, now: () => clock });
     for (const overrides of [{ actorId: "owner-1" }, { via: "other-app@1" }, { surface: "agents", actorKind: "agent" }]) {
