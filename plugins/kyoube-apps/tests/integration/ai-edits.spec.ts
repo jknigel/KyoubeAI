@@ -44,13 +44,17 @@ function interposing() {
   return { calls, fetch, whileDeciding: (step: () => Promise<unknown>) => { pending = step; } };
 }
 
-/** One statement as the company's own role: a row write the edit bookkeeping has not seen yet. */
-async function asCompany(pool: Pool, sql: string, params: unknown[]) {
+/**
+ * One statement as the company's own role: a row write the edit bookkeeping has not seen yet.
+ * `lockTimeoutMs` makes it fail instead of waiting that long for a row lock.
+ */
+async function asCompany(pool: Pool, sql: string, params: unknown[], opts: { lockTimeoutMs?: number } = {}) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     await client.query(`SET LOCAL search_path TO "${schemaNameFor(C)}"`);
     await client.query(`SET LOCAL ROLE "${roleNameFor(C)}"`);
+    if (opts.lockTimeoutMs !== undefined) await client.query(`SET LOCAL lock_timeout = ${Math.floor(opts.lockTimeoutMs)}`);
     await client.query(sql, params);
     await client.query("COMMIT");
   } catch (error) {
@@ -58,6 +62,14 @@ async function asCompany(pool: Pool, sql: string, params: unknown[]) {
     throw error;
   } finally {
     client.release();
+  }
+}
+
+/** Resolves once some statement is waiting for a lock. */
+async function untilWaiting(pool: Pool) {
+  for (let tries = 0; (await pool.query<{ n: number }>("SELECT count(*)::int AS n FROM pg_locks WHERE NOT granted")).rows[0]!.n === 0; tries += 1) {
+    if (tries > 300) throw new Error("nothing ever waited for a lock");
+    await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
 
@@ -189,10 +201,7 @@ describe("whole-row saves", () => {
       await other.query("UPDATE tickets SET refund = false WHERE id = $1", [f.sure]);
       // The save starts while the other write holds the row, and waits for it.
       const save = f.data.update(C, OWNER, "tickets", { ids: [f.sure] }, { refund: false });
-      for (let tries = 0; (await f.db.pool.query<{ n: number }>("SELECT count(*)::int AS n FROM pg_locks WHERE NOT granted")).rows[0]!.n === 0; tries += 1) {
-        if (tries > 300) throw new Error("the save never waited for the row");
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      }
+      await untilWaiting(f.db.pool);
       await other.query("COMMIT");
       await save;
     } finally {
@@ -201,6 +210,28 @@ describe("whole-row saves", () => {
     // It replaced false with false: no outcome, the cell as it was.
     expect(await f.outcome(f.sure)).toMatchObject({ outcome: null });
     expect(await f.cell(f.sure)).toMatchObject({ status: "auto" });
+  });
+
+  it("never holds up a row in another table that refers to the one being saved", async () => {
+    const f = await setup();
+    await f.data.createTable(C, OWNER, { name: "replies", fields: [{ name: "ticket", kind: "relation", options: { relationTable: "tickets" } }] });
+    const audit = await f.db.pool.connect();
+    let save: Promise<unknown> | undefined;
+    try {
+      // Holding the audit table keeps the save open just after it has written, and locked, the ticket.
+      await audit.query("BEGIN");
+      await audit.query("LOCK TABLE kyoube_meta.audit IN SHARE MODE");
+      save = f.data.update(C, OWNER, "tickets", { ids: [f.sure] }, { refund: false });
+      await untilWaiting(f.db.pool);
+      // A reply's foreign key check takes FOR KEY SHARE on the ticket, which a plain update allows.
+      await asCompany(f.db.pool, "INSERT INTO replies (ticket) VALUES ($1)", [f.sure], { lockTimeoutMs: 2_000 });
+    } finally {
+      await audit.query("COMMIT");
+      audit.release();
+      await save;
+    }
+    expect(await f.data.count(C, OWNER, "replies")).toBe(1);
+    expect(await f.cell(f.sure)).toMatchObject({ status: "manual" });
   });
 });
 
