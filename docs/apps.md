@@ -34,10 +34,12 @@ people who cannot see drafts at all, which is why a draft never writes to it.
 `access` is `read` (default) or `readwrite`. A call on an undeclared table is rejected. The viewer's own
 level still applies: a `viewer` can never write, whatever the app declares.
 
+An optional `decisions` key declares typed-decision sets; see [Typed decisions](#typed-decisions).
+
 ## window.kyoube (injected before your code runs)
 
 ```ts
-await kyoube.ready()                       // → { companyId, viewer: { id, name, level }, app: { slug, name, version }, tables }
+await kyoube.ready()                       // → { companyId, viewer: { id, name, level }, app: { slug, name, version }, tables, decisions: { available, sets } }
 kyoube.data.query(table, { where?, orderBy?, limit?, offset?, fields? })   // → { rows, limit, offset }
 kyoube.data.get(table, id)                 // → row | null
 kyoube.data.count(table, where?)           // → { count }
@@ -47,15 +49,75 @@ kyoube.data.update(table, { ids } | { where }, patch)   // → { affected, rows 
 kyoube.data.delete(table, { ids } | { where })          // → { affected }
 kyoube.ui.toast(title, "info" | "success" | "warn" | "error")
 kyoube.ui.openApp(slug)
+kyoube.decide(set, { rowId } | { values })                 // → { decisionId, model, answers: { [q]: { type, value, confidence, status } } }
+kyoube.decideOutcome(decisionId, question, value)          // → { outcome: "human_confirmed" | "human_changed" }
 ```
 `where` grammar: `{ field, op, value }` with `eq neq gt gte lt lte in contains starts_with is_null is_not_null`,
 combined with `{ and: [...] }`, `{ or: [...] }`, `{ not: {...} }`. Errors are thrown as `kyoube.Error` with
-`code` (`forbidden`, `invalid`, `not_found`, `conflict`, `limit`). Every row has `id`, `created_at`, `updated_at`.
+`code` (`forbidden`, `invalid`, `not_found`, `conflict`, `limit`, `disabled`, `budget_exceeded`, `too_large`, `provider_rejected`, `provider_unavailable`, `timeout`). Every row has `id`, `created_at`, `updated_at`.
 
 `viewer.name` is always `""` in v1 — the host gives the worker ids, not display names — so greet the
 viewer with `viewer.id` or with nothing at all, and never print `viewer.name` expecting a person's name.
 `viewer.level` (`read`, `write`, `schema`) is the one worth branching on: hide the controls a viewer
 cannot use.
+
+## Typed decisions
+
+An app can put closed questions to the company's typed-decision model (see [Typed decisions](decisions.md))
+about a row or a form. The questions are declared in the manifest, so the person who publishes the app
+sees exactly what will be sent.
+
+```json
+"decisions": {
+  "triage": {
+    "table": "tickets", "fields": ["subject", "body"],
+    "questions": {
+      "queue":   { "type": "choice", "instructions": "Which team owns this ticket?", "options": { "billing": null, "technical": null } },
+      "urgency": { "type": "score", "instructions": "How soon does this need a reply?", "levels": ["This week", "Today", "Within the hour"] }
+    }
+  }
+}
+```
+
+An app has at most 10 sets, and a set sends at most 20 fields of one table the manifest declares. The
+questions follow the limits in [decisions.md](decisions.md): at most 20 per set, keys of lower-case
+letters, digits and underscores, 2 to 254 options per choice and 2 to 10 levels per score.
+
+**The two calls.**
+
+- `kyoube.decide(set, { rowId })` reads the row under the viewer's own access and sends only the set's
+  fields. If the viewer cannot read the row, the call fails.
+- `kyoube.decide(set, { values })` is for a form the person has not saved. Each value is checked
+  against its field's kind, and `values` may only name the set's fields.
+
+In both cases the host builds the state; the app cannot add text of its own. The result is the
+`decisionId`, the `model`, and one answer per question with its `value`, `confidence` and `status`
+(`auto` or `review`). Compute dates, totals and comparisons in code; ask the model only the judgment.
+
+**The review lane.** An answer with status `review` is a suggestion, not a result: show it to the person
+and let them confirm or change it. `kyoube.decideOutcome(decisionId, question, value)` records what they
+chose (`human_confirmed` when it matches the suggestion, otherwise `human_changed`). It only works for
+this app's own decisions for the same viewer, within 24 hours, and once per question; a second call is a
+`conflict`. The outcome is logged with `outcome_via: app`.
+
+**Availability.** `ctx.decisions.available` from `kyoube.ready()` is false until the company has
+switched Kyoube Apps on under Data access, Typed decisions, and a provider is configured. `ctx.decisions.sets`
+lists the declared sets. An app should hide its decision controls when `available` is false; a call
+made anyway fails with `disabled`.
+
+**Limits.** Besides the 60 requests per 10 seconds each frame may make, a frame may make at most 10
+decisions per 10 seconds; the eleventh fails with `limit`. The daily budget for the company applies as
+well (`budget_exceeded`).
+
+**Publishing.** A version that adds or changes decision sets must be published by a person, never by an
+agent whatever its grant, and rolling back to such a version follows the same rule. Before publishing,
+the Apps page shows what each set sends (table, fields and questions) and the person confirms it (the
+REST body carries `decisionsConfirmed: true`; without it the publish fails with `invalid`). An agent
+that has changed the sets saves the draft and asks the person to publish. Removing sets needs no
+person, and publishing a version whose sets did not change needs no confirmation. A set that judges
+anything about a person's employment, credit, housing, health, education or legal status must be
+`"advisory": true`, so that every answer is a `review`. See [decisions.md](decisions.md#in-kyoube-apps)
+for what leaves the server and what is logged.
 
 ## Rules for the source
 

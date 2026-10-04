@@ -10,6 +10,8 @@ Typed decisions (`docs/decisions.md`): agents can ask a Jev-class model closed q
 
 AI columns: Data fields that the company's typed-decision model fills in from other fields of the row, in the background, with a review lane on the Data page, `GET /tables/:table/review`, `data_list_review` and Refill. `kyoube.apps` 0.6.0 adds the `fill-ai-columns` job (every 5 minutes).
 
+Typed decisions in Kyoube Apps (`kyoube.apps` 0.7.0): apps declare decision sets in their manifest and call `kyoube.decide` and `kyoube.decideOutcome`; a version that adds or changes sets needs a person to publish it, after a disclosure of what it sends.
+
 ## 1.3.0 - 2026-10-03
 
 ### Added

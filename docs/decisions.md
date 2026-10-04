@@ -51,8 +51,8 @@ Until a provider is set, typed decisions stay off for that company.
 A company admin opens Company Settings, then Data access, then Typed decisions. There are four
 switches, one per use: Agents, AI columns, Kyoube Apps, and the guardrail on risky agent actions. All
 are off by default. The page also shows the provider, the model, whether the key resolves, and how many
-requests have been used today. Agents and AI columns work in this release; the other two switches are
-there for the features that follow and do nothing yet.
+requests have been used today. Agents, AI columns and Kyoube Apps work in this release; the guardrail switch is
+there for the feature that follows and does nothing yet.
 
 Turning AI columns off pauses filling and keeps every value already written. Cells waiting for review
 stay where they are, and filling carries on when the switch goes back on.
@@ -74,11 +74,33 @@ Nothing is sent while a use is switched off. Per use:
 - AI columns: for every row, the values of the column's source fields, as one JSON object, each time a
   source changes or someone presses Refill. Nothing else from the row, and nothing while AI columns are
   switched off.
-- Apps and the guardrail: later releases fill these in, and this page will list what each sends when
-  they land.
+- Apps: for each call, the fields the decision set declares, from one row (read under the viewer's own
+  access) or from the values the person typed, plus the set's questions. Nothing else from the app
+  reaches the provider.
+- The guardrail: a later release fills this in, and this page will list what it sends when it lands.
 
 Each request goes to the provider you configured, over HTTPS, through the core's own HTTP client. A
 request is at most 96 KB.
+
+## In Kyoube Apps
+
+Apps declare decision sets in their manifest and call `kyoube.decide` and `kyoube.decideOutcome`; the
+details are in [Typed decisions](apps.md#typed-decisions). Every call passes four gates, in this order:
+
+1. The app is published to the viewer.
+2. The version the viewer is running declares the set.
+3. The viewer can read the set's table. The host then builds the state from the set's own fields, a
+   row read under the viewer's access or values checked per field kind; the app cannot send anything
+   else.
+4. The company has switched Kyoube Apps on, a provider is configured, and the daily budget has room.
+
+Each frame may also make at most 10 decisions per 10 seconds.
+
+Publish rules: a version that adds or changes decision sets needs a person to publish it, after the
+Apps page has shown what the sets send, and the request carries `decisionsConfirmed`. Rollback follows
+the same rule; removing sets needs no person. Sets that judge a person's employment, credit, housing,
+health, education or legal status are marked `advisory`, so every answer goes to review. The publish is
+recorded in the activity feed with the set names, never with the questions or any row values.
 
 ## Provider data terms (as of 2026-10-04)
 

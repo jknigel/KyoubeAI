@@ -26,7 +26,7 @@ or `"companyId"` in every `POST` body.
 | Read an app | `GET /apps/{slug}?version=latest` (or `current`, or a number) | — |
 | Create (draft v1) | `POST /apps` | `manifest`, `source`, `notes?` |
 | Update (new draft) | `POST /apps/{slug}` | `manifest`, `source`, `notes?` |
-| Publish | `POST /apps/{slug}/publish` | `version?` (default: latest draft) |
+| Publish | `POST /apps/{slug}/publish` | `version?` (default: latest draft); a version that adds or changes decision sets needs a person to publish it |
 | Roll back | `POST /apps/{slug}/rollback` | `version` |
 | Archive | `POST /apps/{slug}/archive` | — |
 
@@ -36,6 +36,54 @@ piped to `curl -fsS -H "$A" -H 'Content-Type: application/json' -X POST "$K/apps
 
 If your harness lists tools named `kyoube.apps:apps_*` (`apps_create`, `apps_update`, `apps_publish`,
 `apps_rollback`, …), they are these same operations; use whichever you have.
+
+## Typed decisions in an app
+
+An app can ask the company's typed-decision model closed questions about one of its rows, or about a
+form the person is filling in. Declare each set of questions in the manifest under `"decisions"`:
+the table (one the manifest declares), the fields the set may send, and the questions (the same
+`choice` / `score` / `check` shapes as the kyoube-decisions skill). At most 10 sets.
+
+```json
+"decisions": {
+  "triage": {
+    "table": "tickets", "fields": ["subject", "body"],
+    "questions": {
+      "queue":   { "type": "choice", "instructions": "Which team owns this ticket?", "options": { "billing": null, "technical": null } },
+      "urgency": { "type": "score", "instructions": "How soon does this need a reply?", "levels": ["This week", "Today", "Within the hour"] }
+    }
+  }
+}
+```
+
+```js
+const ctx = await kyoube.ready();
+if (ctx.decisions.available) {                       // false when the company has not switched apps on
+  const r = await kyoube.decide("triage", { rowId: ticket.id });            // or { values: { subject, body } }
+  if (r.answers.queue.status === "review") showReviewLane(ticket, r);        // never act on review alone
+  else await kyoube.data.update("tickets", { ids: [ticket.id] }, { queue: r.answers.queue.value });
+}
+// In the review lane, once the person picks a value:
+await kyoube.decideOutcome(r.decisionId, "queue", chosenQueue);
+```
+
+Rules:
+
+- The app never sends text of its own: the host builds the question's state from the set's fields.
+  `values` may only name the set's fields, and each must fit its field kind.
+- Every choice gets an `unsure` option, and an `unsure` answer is always `review`. Build a review lane
+  that shows the suggestion to the person and calls `kyoube.decideOutcome` with what they chose.
+- Compute dates, totals, counts and comparisons in code; ask the model only the judgment.
+- A set that decides anything about a person's employment, credit, housing, health, education or
+  legal status must be `"advisory": true`: every answer is then `review`.
+- A version that adds or changes decision sets needs a person to publish it. Save the draft with
+  `apps_update` and ask the person who started the task to publish it from the Apps page, where they
+  see what the sets send. You can still publish versions whose sets did not change.
+- Ship a small fixture table with the app (a few rows covering each answer and `review`) so its
+  branches can be checked without a browser, and say in the version notes how to use it.
+- Errors arrive as `kyoube.Error` with `code` `disabled`, `budget_exceeded`, `too_large`,
+  `provider_unavailable`, `timeout` or `limit` (more than 10 decisions in 10 seconds). Show a short
+  message and let the person carry on by hand.
 
 ## Workflow
 

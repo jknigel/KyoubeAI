@@ -756,6 +756,37 @@ curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/companies/$COMPANY_ID
   | jq -e 'tostring | contains("smoke-not-a-real-key") | not' >/dev/null || { echo "the activity log leaked the decisions key" >&2; exit 1; }
 echo "    decisions: config, secret, switch and budget release ok"
 
+echo "==> decisions in apps: declared sets, a person confirms them at publish, the runtime reports them"
+TRIAGE_SOURCE='<!doctype html><html><body><script>kyoube.ready().then(c=>console.log(c.decisions.sets))</script></body></html>'
+TRIAGE_MANIFEST='{"name":"Smoke Triage","slug":"smoke-triage","tables":[{"name":"smoke_contacts"}],"decisions":{"triage":{"table":"smoke_contacts","fields":["name","stage"],"questions":{"customer":{"type":"check","statement":"This contact is a customer."}}}}}'
+api_post "/apps" "$(jq -cn --arg c "$COMPANY_ID" --arg s "$TRIAGE_SOURCE" --argjson m "$TRIAGE_MANIFEST" '{companyId:$c, manifest:$m, source:$s}')" \
+  | jq -e '.app.status == "draft"' >/dev/null
+STATUS="$(curl -sS -o "$TMP/publish-unconfirmed.json" -w '%{http_code}' -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -X POST "$API/apps/smoke-triage/publish" --data "{\"companyId\":\"$COMPANY_ID\"}")"
+if ! { [[ "$STATUS" == "400" ]] && jq -e '.code == "invalid" and (.error | contains("decisionsConfirmed"))' "$TMP/publish-unconfirmed.json" >/dev/null; }; then echo "publishing new decision sets without the confirmation must fail, got $STATUS $(cat "$TMP/publish-unconfirmed.json")" >&2; exit 1; fi
+api_post "/apps/smoke-triage/publish" "{\"companyId\":\"$COMPANY_ID\",\"decisionsConfirmed\":true}" | jq -e '.status == "published"' >/dev/null
+apps_bridge apps.runtime "{\"companyId\":\"$COMPANY_ID\",\"params\":{\"slug\":\"smoke-triage\"}}" \
+  | jq -e '.data.context.decisions == {"available": false, "sets": ["triage"]}' >/dev/null \
+  || { echo "the runtime context did not report the decision set as unavailable" >&2; exit 1; }
+# smoke_contacts still holds exactly one row here (Grace): the AI-columns block below uses smoke_tickets.
+GRACE_ID="$(api_post "/tables/smoke_contacts/rows/query" "{\"companyId\":\"$COMPANY_ID\"}" | jq -r '.rows[0].id')"
+DECIDE_PARAMS="{\"companyId\":\"$COMPANY_ID\",\"params\":{\"slug\":\"smoke-triage\",\"set\":\"triage\",\"input\":{\"rowId\":\"$GRACE_ID\"}}}"
+# Worker errors reach the action bridge as HTTP 502 WORKER_ERROR carrying "<code>: <text>" (see the apps block above).
+STATUS="$(curl -sS -o "$TMP/app-decide-off.json" -w '%{http_code}' -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -X POST "$BASE_URL/api/plugins/kyoube.apps/actions/apps.decide" --data "$DECIDE_PARAMS")"
+if ! { [[ "$STATUS" == "502" ]] && jq -e '.message | contains("disabled")' "$TMP/app-decide-off.json" >/dev/null; }; then echo "expected disabled while apps are switched off, got $STATUS $(cat "$TMP/app-decide-off.json")" >&2; exit 1; fi
+apps_bridge decisions.set_settings "{\"companyId\":\"$COMPANY_ID\",\"params\":{\"apps\":true}}" | jq -e '.data.apps == true' >/dev/null
+apps_bridge apps.runtime "{\"companyId\":\"$COMPANY_ID\",\"params\":{\"slug\":\"smoke-triage\"}}" | jq -e '.data.context.decisions.available == true' >/dev/null
+if [[ -n "${KYOUBE_SMOKE_DECISIONS_KEY:-}" ]]; then
+  apps_bridge apps.decide "$DECIDE_PARAMS" | jq -e '.data.answers.customer.type == "check" and (.data.answers.customer.value | type) == "boolean"' >/dev/null \
+    || { echo "expected a real app decision" >&2; exit 1; }
+else
+  STATUS="$(curl -sS -o "$TMP/app-decide.json" -w '%{http_code}' -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+    -X POST "$BASE_URL/api/plugins/kyoube.apps/actions/apps.decide" --data "$DECIDE_PARAMS")"
+  if ! { [[ "$STATUS" == "502" ]] && jq -e '.message | contains("provider_unavailable")' "$TMP/app-decide.json" >/dev/null; }; then echo "expected provider_unavailable from the unreachable provider, got $STATUS $(cat "$TMP/app-decide.json")" >&2; exit 1; fi
+fi
+echo "    decisions in apps: publish confirmation, runtime context and app decide ok"
+
 echo "==> AI columns: off until switched on, sources checked, fill runs without spending budget on failures"
 api_post "/tables" "{\"companyId\":\"$COMPANY_ID\",\"name\":\"smoke_tickets\",\"fields\":[{\"name\":\"subject\",\"kind\":\"text\"}]}" >/dev/null
 api_post "/tables/smoke_tickets/rows" "{\"companyId\":\"$COMPANY_ID\",\"rows\":[{\"subject\":\"Please refund my order\"},{\"subject\":\"Thanks for the quick fix\"}]}" >/dev/null
