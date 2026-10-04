@@ -278,6 +278,15 @@ export class DataService {
     return settings;
   }
 
+  /**
+   * The Data-access admin gate, for company settings another module keeps beside Kyoube's own
+   * (typed decisions, docs/decisions.md). Same rule as grants and settings: a person with schema
+   * access, checked fresh.
+   */
+  async assertAdmin(companyId: string, actor: DataActor): Promise<void> {
+    await this.authorizeAdmin(companyId, actor);
+  }
+
   async purgeTrash(companyId: string): Promise<{ droppedTables: string[]; droppedColumns: string[] }> {
     const scope = await this.scope(companyId);
     const actor = systemActor();
