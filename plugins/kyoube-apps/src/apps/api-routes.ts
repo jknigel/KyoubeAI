@@ -33,8 +33,8 @@ export const APP_API_ROUTES: PluginApiRouteDeclaration[] = [
 // these fields. The manifest itself is the shared strict schema, so a typo
 // inside it is rejected rather than silently dropped.
 const writeBody = z.object({ manifest: APP_MANIFEST_SCHEMA, source: z.string().min(1), notes: z.string().max(MAX_APP_NOTES).nullable().optional() });
-const publishBody = z.object({ version: z.number().int().optional() });
-const rollbackBody = z.object({ version: z.number().int() });
+const publishBody = z.object({ version: z.number().int().optional(), decisionsConfirmed: z.boolean().optional() });
+const rollbackBody = z.object({ version: z.number().int(), decisionsConfirmed: z.boolean().optional() });
 
 function parse<T>(schema: z.ZodType<T>, body: unknown): T {
   const parsed = schema.safeParse(body ?? {});
@@ -87,8 +87,8 @@ export async function handleAppsApiRequest(
       case "apps.create": { const b = parse(writeBody, input.body); body = await apps.create(companyId, actor, b.manifest, b.source, b.notes ?? null); break; }
       case "apps.get": body = await apps.get(companyId, actor, slugOf(input), versionOf(input)); break;
       case "apps.update": { const b = parse(writeBody, input.body); body = await apps.update(companyId, actor, slugOf(input), b.manifest, b.source, b.notes ?? null); break; }
-      case "apps.publish": { const b = parse(publishBody, input.body); body = await apps.publish(companyId, actor, slugOf(input), b.version); break; }
-      case "apps.rollback": { const b = parse(rollbackBody, input.body); body = await apps.rollback(companyId, actor, slugOf(input), b.version); break; }
+      case "apps.publish": { const b = parse(publishBody, input.body); body = await apps.publish(companyId, actor, slugOf(input), b.version, { decisionsConfirmed: b.decisionsConfirmed === true }); break; }
+      case "apps.rollback": { const b = parse(rollbackBody, input.body); body = await apps.rollback(companyId, actor, slugOf(input), b.version, { decisionsConfirmed: b.decisionsConfirmed === true }); break; }
       case "apps.archive": body = await apps.archive(companyId, actor, slugOf(input)); break;
       default: return { status: 404, body: { error: `unknown route ${input.routeKey}`, code: "not_found" } };
     }

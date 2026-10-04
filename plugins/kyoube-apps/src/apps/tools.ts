@@ -35,13 +35,15 @@ function withoutSource<T extends WithSource | WithVersion>(result: T, includeSou
   return result.version ? { ...result, version: summarise(result.version) } : result;
 }
 
+const decisionsConfirmed = z.boolean().optional().describe("set true only after the person reviewed what the version's new or changed decision sets send; agents cannot publish such a version");
+
 export const APP_TOOL_DEFINITIONS: ToolDefinition<AppService>[] = [
   { name: "apps_list", displayName: "List apps", description: "List this company's apps (published apps, plus drafts if you have write access).", schema: z.object({}), run: (s, c, a) => s.list(c, a) },
   { name: "apps_get", displayName: "Get app", description: "Get an app and one of its versions (default latest). Set includeSource to read the HTML.", schema: z.object({ slug, version: versionRef.optional(), includeSource: z.boolean().optional() }), run: async (s, c, a, p) => withoutSource(await s.get(c, a, p.slug, p.version ?? "latest"), p.includeSource ?? false) },
   { name: "apps_create", displayName: "Create app", description: "Create a new app as a draft (version 1) from a manifest and a single-file HTML source. Publish it with apps_publish. Requires write access.", schema: z.object({ manifest: manifestSchema, source, notes }), run: async (s, c, a, p) => withoutSource(await s.create(c, a, p.manifest, p.source, p.notes ?? null)) },
   { name: "apps_update", displayName: "Update app", description: "Save a new draft version of an existing app (manifest + full source). The published version is unchanged until apps_publish. Requires write access.", schema: z.object({ slug, manifest: manifestSchema, source, notes }), run: async (s, c, a, p) => withoutSource(await s.update(c, a, p.slug, p.manifest, p.source, p.notes ?? null)) },
-  { name: "apps_publish", displayName: "Publish app", description: "Publish a version (default: latest) so company members can open it. Declared tables must exist. Requires schema access.", schema: z.object({ slug, version: z.number().int().optional() }), run: (s, c, a, p) => s.publish(c, a, p.slug, p.version) },
-  { name: "apps_rollback", displayName: "Roll back app", description: "Point the published app at an earlier version. Requires schema access.", schema: z.object({ slug, version: z.number().int() }), run: (s, c, a, p) => s.rollback(c, a, p.slug, p.version) },
+  { name: "apps_publish", displayName: "Publish app", description: "Publish a version (default: latest) so company members can open it. Declared tables must exist. Requires schema access. A version that adds or changes decision sets needs a person to publish it: save the draft and ask the person who started the task.", schema: z.object({ slug, version: z.number().int().optional(), decisionsConfirmed }), run: (s, c, a, p) => s.publish(c, a, p.slug, p.version, { decisionsConfirmed: p.decisionsConfirmed === true }) },
+  { name: "apps_rollback", displayName: "Roll back app", description: "Point the published app at an earlier version. Requires schema access. Rolling back to a version with different decision sets needs a person.", schema: z.object({ slug, version: z.number().int(), decisionsConfirmed }), run: (s, c, a, p) => s.rollback(c, a, p.slug, p.version, { decisionsConfirmed: p.decisionsConfirmed === true }) },
   { name: "apps_archive", displayName: "Archive app", description: "Hide an app from the gallery (its versions are kept). Requires schema access.", schema: z.object({ slug }), run: (s, c, a, p) => s.archive(c, a, p.slug) },
 ];
 
