@@ -51,8 +51,11 @@ Until a provider is set, typed decisions stay off for that company.
 A company admin opens Company Settings, then Data access, then Typed decisions. There are four
 switches, one per use: Agents, AI columns, Kyoube Apps, and the guardrail on risky agent actions. All
 are off by default. The page also shows the provider, the model, whether the key resolves, and how many
-requests have been used today. Only Agents is wired up in this release; the other three switches are
+requests have been used today. Agents and AI columns work in this release; the other two switches are
 there for the features that follow and do nothing yet.
+
+Turning AI columns off pauses filling and keeps every value already written. Cells waiting for review
+stay where they are, and filling carries on when the switch goes back on.
 
 The daily cap limits provider requests per company per UTC day. The default is 10,000, and one row
 counts as one request. A request that fails at the provider does not use up budget.
@@ -68,8 +71,11 @@ Nothing is sent while a use is switched off. Per use:
 - Agents: whatever state the agent sends, or the fields of the Data rows it names. Rows are read under
   the agent's own access, so an agent cannot send a row it could not read. At most 50 row ids go in one
   call, and `fields` narrows what is sent.
-- AI columns, apps and the guardrail: later releases fill these in, and this page will list what each
-  sends when they land.
+- AI columns: for every row, the values of the column's source fields, as one JSON object, each time a
+  source changes or someone presses Refill. Nothing else from the row, and nothing while AI columns are
+  switched off.
+- Apps and the guardrail: later releases fill these in, and this page will list what each sends when
+  they land.
 
 Each request goes to the provider you configured, over HTTPS, through the core's own HTTP client. A
 request is at most 96 KB.
@@ -100,6 +106,49 @@ The same two operations are the tools `decisions_status` and `decisions_decide`.
 them: closed judgments over many items, never maths or dates, and never in place of a person's
 approval. Every choice question gets an `unsure` option added, and `unsure` always comes back as
 `review`.
+
+## AI columns
+
+An AI column is an ordinary Data field with a `decision` block in its options: one question and the
+fields of the same row it reads (`sourceFields`, 1 to 20; relations and other AI columns are not
+allowed, and a column cannot read itself). The question sets the kind of field: a choice or a score
+makes a `select` whose options come from the question (a choice's `unsure` is never an option), and a
+check makes a `boolean`. An AI column cannot be required, because a cell waiting for review is empty.
+Creating one needs schema access and the AI columns switch; removing one needs only schema access.
+Removing a source field is refused while an AI column reads it.
+
+**How filling works.** The `fill-ai-columns` job runs every 5 minutes, and a column also fills in the
+background straight after it is created or its question changes, and after new or edited rows. A run
+handles at most 2,000 rows per company. It stops at the daily cap, at a provider error, or after
+4 minutes, and carries on in the next run. A row whose source values have not changed is never asked
+again. Cells that failed are retried after new and changed rows, with whatever is left of the 2,000.
+The scan lags the database clock by 2 minutes, so a row committed late is still picked up.
+
+**Cells.** Each cell has a status:
+
+- `auto`: the model was confident, so the value is written.
+- `review`: below the threshold, `unsure`, or any answer in an `advisory` column. The value stays
+  empty and the model's suggestion and confidence are kept.
+- `manual`: a person (or an agent) set the value. The model never overwrites it.
+- `error`: the provider failed for that row. The cell stays empty and is retried.
+
+**On the Data page.** An AI column shows an AI marker in its header and, under it, "Sends *fields* to
+*provider*", the number of cells "N to review" and a Refill button (schema access). A cell waiting for
+review reads "Suggested: *value* (72%)" with Accept and Change. The row forms (add and edit) leave AI
+columns out; an AI cell changes through Accept and Change only.
+
+**Edits.** Writing a different value into an AI cell makes it `manual`. Writing the value it already
+has changes nothing. A person's Accept or Change on a suggested cell is logged as confirmed or changed,
+which is the human outcome kept in the decision log. Writing null hands the cell back to the model,
+which asks again on the next run. Refill discards every cell that is not manual and asks again.
+
+**Advisory columns.** Set `"advisory": true` on a column that judges anything about a person
+(employment, credit, housing, health, education, legal status). Every answer then waits for a person,
+however confident.
+
+**Review route and tool.** `GET /tables/:table/review?field=&limit=&offset=` (tool `data_list_review`,
+read access) lists the cells waiting for review: `rowId`, `field`, `suggestion`, `confidence`,
+`decisionId` and `updatedAt`. `POST /tables/:table/fields/:field/refill` asks again.
 
 ## What is logged
 

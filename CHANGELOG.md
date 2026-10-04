@@ -8,6 +8,8 @@ building on it. The format is loosely [Keep a Changelog](https://keepachangelog.
 
 Typed decisions (`docs/decisions.md`): agents can ask a Jev-class model closed questions over `POST /decisions/decide` and the `decisions_*` tools, with a per-company provider, key secret, switches and daily cap. `kyoube.apps` 0.5.0 gains `http.outbound` and `secrets.read-ref`; `ensure-plugins` grants them on upgrade, and nothing is sent until an instance admin sets a provider and a company admin switches a use on.
 
+AI columns: Data fields that the company's typed-decision model fills in from other fields of the row, in the background, with a review lane on the Data page, `GET /tables/:table/review`, `data_list_review` and Refill. `kyoube.apps` 0.6.0 adds the `fill-ai-columns` job (every 5 minutes).
+
 ## 1.3.0 - 2026-10-03
 
 ### Added
