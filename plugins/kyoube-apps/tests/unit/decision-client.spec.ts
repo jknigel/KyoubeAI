@@ -125,12 +125,23 @@ describe("callSystemOne", () => {
   });
 
   it("never puts the key into an error message", async () => {
-    for (const step of [response(401, {}), response(503, {}), response(200, "not json")]) {
+    const testCases: Array<{ step: FetchResponse; code: string }> = [
+      { step: response(401, {}), code: "provider_rejected" },
+      { step: response(503, {}), code: "provider_unavailable" },
+      { step: response(200, "not json"), code: "provider_unavailable" },
+    ];
+    for (const { step, code } of testCases) {
       const { fetch } = scripted(step, step, step);
-      await expect(callSystemOne({ fetch, ...instant }, target, "hello", questions)).rejects.toThrow();
-      try { await callSystemOne({ fetch, ...instant }, target, "hello", questions); } catch (error) {
-        expect(String((error as Error).message)).not.toContain("sk-secret-123");
-      }
+      const error = await callSystemOne({ fetch, ...instant }, target, "hello", questions).catch((e) => e);
+      expect(error).toBeInstanceOf(DataError);
+      expect((error as DataError).code).toBe(code);
+      expect(String((error as Error).message)).not.toContain("sk-secret-123");
     }
+  });
+
+  it("times out reading the response body", async () => {
+    const hangingBody: FetchResponse = { status: 200, headers: { get: () => null }, text: async () => new Promise<string>(() => {}) };
+    const { fetch } = scripted(hangingBody);
+    expect(await codeOf(callSystemOne({ fetch, ...instant }, target, "hello", questions, 30))).toBe("timeout");
   });
 });

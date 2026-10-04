@@ -147,7 +147,10 @@ export async function callSystemOne(
       const response = await within(deps.fetch(systemOneUrl(target.baseUrl), init), remaining);
       if (response.status >= 200 && response.status < 300) {
         let parsed: unknown;
-        try { parsed = JSON.parse(await response.text()); } catch { throw new DataError("provider_unavailable", "the provider returned an unreadable response"); }
+        try { parsed = JSON.parse(await within(response.text(), deadline - now())); } catch (error) {
+          if (error instanceof Deadline) throw error;
+          throw new DataError("provider_unavailable", "the provider returned an unreadable response");
+        }
         return { ...fromWireResponse(questions, parsed, target.model), latencyMs: now() - started };
       }
       if (response.status === 413) throw new DataError("too_large", "the provider says the request is too large, so send less state");
