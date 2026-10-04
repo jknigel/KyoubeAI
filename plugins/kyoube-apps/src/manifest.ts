@@ -1,6 +1,8 @@
 import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
 import { API_ROUTES } from "./api-routes.js";
 import { APP_API_ROUTES } from "./apps/api-routes.js";
+import { DECISION_API_ROUTES } from "./decisions/api-routes.js";
+import { decisionToolDeclarations } from "./decisions/tools.js";
 import { APPS_PAGE_ROUTE } from "./apps/page-route.js";
 import { appToolDeclarations } from "./apps/tools.js";
 import { DECISIONS_CONFIG_SCHEMA } from "./decisions/config.js";
@@ -59,8 +61,8 @@ const manifest: PaperclipPluginManifestV1 = {
   ],
   entrypoints: { worker: "./dist/worker.js", ui: "./dist/ui" },
   instanceConfigSchema: DECISIONS_CONFIG_SCHEMA,
-  tools: [...toolDeclarations(), ...appToolDeclarations()],
-  apiRoutes: [...API_ROUTES, ...APP_API_ROUTES],
+  tools: [...toolDeclarations(), ...appToolDeclarations(), ...decisionToolDeclarations()],
+  apiRoutes: [...API_ROUTES, ...APP_API_ROUTES, ...DECISION_API_ROUTES],
   jobs: [{ jobKey: PURGE_JOB_KEY, displayName: "Purge trashed tables and fields", description: "Drops tables/fields soft-deleted more than 30 days ago.", schedule: "0 3 * * *" }],
   skills: [
     { skillKey: DATA_SKILL_KEY, displayName: "Kyoube Data", slug: "kyoube-data", description: "Design and use the company's Kyoube organisation database through the kyoube.apps tools.", markdown: skillMarkdown },

@@ -7,7 +7,7 @@ import type { DataService } from "./data/service.js";
 
 type Method = "GET" | "POST";
 
-function route(routeKey: string, method: Method, path: string, auth: PluginApiRouteDeclaration["auth"] = "board-or-agent"): PluginApiRouteDeclaration {
+export function route(routeKey: string, method: Method, path: string, auth: PluginApiRouteDeclaration["auth"] = "board-or-agent"): PluginApiRouteDeclaration {
   return {
     routeKey,
     method,
