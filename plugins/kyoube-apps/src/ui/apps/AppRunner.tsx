@@ -9,6 +9,8 @@ export interface AppRunnerProps {
   onData: (method: string, params: Record<string, unknown>) => Promise<unknown>;
   onToast: (title: string, tone: string) => void;
   onOpenApp: (slug: string) => void;
+  onDecide?: (set: string, input: Record<string, unknown>) => Promise<unknown>;
+  onDecisionOutcome?: (decisionId: string, question: string, value: string | boolean) => Promise<unknown>;
 }
 
 /**
@@ -101,6 +103,8 @@ function AppFrame(props: AppRunnerProps) {
         onData: (method, params) => latest.current.onData(method, params),
         onToast: (title, tone) => { latest.current.onToast(title, tone); },
         onOpenApp: (slug) => { latest.current.onOpenApp(slug); },
+        onDecide: (set, input) => latest.current.onDecide ? latest.current.onDecide(set, input) : Promise.reject(new Error("disabled: typed decisions are not available here")),
+        onDecisionOutcome: (decisionId, question, value) => latest.current.onDecisionOutcome ? latest.current.onDecisionOutcome(decisionId, question, value) : Promise.reject(new Error("disabled: typed decisions are not available here")),
         isLive: () => live.current,
         guard,
       });
