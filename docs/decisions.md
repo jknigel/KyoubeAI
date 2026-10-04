@@ -51,8 +51,7 @@ Until a provider is set, typed decisions stay off for that company.
 A company admin opens Company Settings, then Data access, then Typed decisions. There are four
 switches, one per use: Agents, AI columns, Kyoube Apps, and the guardrail on risky agent actions. All
 are off by default. The page also shows the provider, the model, whether the key resolves, and how many
-requests have been used today. Agents, AI columns and Kyoube Apps work in this release; the guardrail switch is
-there for the feature that follows and does nothing yet.
+requests have been used today. All four uses work in this release.
 
 Turning AI columns off pauses filling and keeps every value already written. Cells waiting for review
 stay where they are, and filling carries on when the switch goes back on.
@@ -63,6 +62,48 @@ counts as one request. A request that fails at the provider does not use up budg
 The worker keeps a resolved key in memory for up to 60 seconds per company, because the core limits
 secret lookups to 30 a minute. It is dropped when the plugin config is saved, so a new key takes effect
 at once. The key is never logged or stored anywhere else.
+
+## The guardrail
+
+With **Guardrail on risky agent actions** switched on, Kyoube checks these calls when an agent makes
+them, over REST or tools: dropping or renaming a table, removing a field, updating or deleting rows
+with a `where` filter or more than 20 ids (the bulk rule), and publishing, rolling back or archiving an
+app. People are never checked.
+
+The check only ever adds friction. It runs after the agent's own access level has allowed the call,
+and a pass lets the call go ahead exactly as it would have without the guardrail. A call whose table,
+field or app does not exist answers `not_found` and raises no card. The model is asked two fixed
+questions about the action and the agent's task: whether the action is something the task asks for or
+clearly needs, and how risky it is (`routine`, `notable`, `dangerous`). The action goes ahead only when
+both answers clear the review threshold, the action matches the task and it is not dangerous.
+
+Anything else, including a check that cannot run because the provider is down, the budget is used up
+or no provider is set (it fails closed), raises a confirmation card on the agent's task. The card is
+people-only: `resolverPolicy: "human_only"`, and Kyoube also refuses an answer that came from an agent.
+"Allow once" lets the agent send exactly the same call again with the `confirmationId`, once, within 24
+hours. "Don't allow" ends it, and the agent is told `rejected_by_person`. The agent has to name its task
+(`issueId`, which its run has as `$PAPERCLIP_TASK_ID`); a call without one, or naming a task that is
+not assigned to it, is refused with `guardrail_context_required`.
+
+The `held` answer (409) carries the confirmation id in `details` and in its message. A plain identical
+retry that matches a live hold is treated as the same retry. A hold is bound to the app's and version's
+identity for app actions, so an allowance for one app does not carry to another.
+
+Only a person can release a held action. Once an agent's action has been held, the same agent's
+identical action is never re-checked by the model while an unconsumed hold exists within the holds'
+retention: it goes straight to a new card. Closing a card, or waiting out a rejection, does not let the
+agent ask the model again.
+
+An agent's bulk update or delete through a running app (`apps.data`) cannot carry an `issueId`, so it
+is refused with `guardrail_context_required` while the guardrail is on. Agents use the REST routes or
+tools with `issueId` instead.
+
+| Agent sees | HTTP | Meaning |
+|---|---|---|
+| `guardrail_context_required` | 428 | Pass `issueId`, the agent's own task |
+| `held` + `confirmationId` | 409 | Waiting for a person on the card |
+| `rejected_by_person` | 403 | A person declined |
+| `conflict` | 409 | The confirmation was already used, or expired |
 
 ## What leaves the server
 
@@ -77,7 +118,9 @@ Nothing is sent while a use is switched off. Per use:
 - Apps: for each call, the fields the decision set declares, from one row (read under the viewer's own
   access) or from the values the person typed, plus the set's questions. Nothing else from the app
   reaches the provider.
-- The guardrail: a later release fills this in, and this page will list what it sends when it lands.
+- The guardrail: the operation (for example `drop_table`), the table, field and app names it touches,
+  the number of affected rows, and the agent's task title and description (up to 8,000 characters). It
+  never sends row values, filters, patches or ids.
 
 Each request goes to the provider you configured, over HTTPS, through the core's own HTTP client. A
 request is at most 96 KB.

@@ -148,3 +148,7 @@ curl -fsS -H "$A" -H 'Content-Type: application/json' -X POST "$K/tables/tickets
 - Writing a value into an AI column yourself makes that cell `manual`: the model never overwrites
   it. Writing null hands it back to the model.
 - `POST $K/tables/tickets/fields/queue/refill` asks again for every cell that is not manual.
+
+If the company's guardrail is on, dropping, renaming or removing from a table and bulk updates or
+deletes need `"issueId": "$PAPERCLIP_TASK_ID"` in the body (or the tool's `issueId`). A `held` answer
+means stop and wait for the person; see the kyoube-decisions skill.
