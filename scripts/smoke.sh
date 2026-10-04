@@ -1335,7 +1335,9 @@ grep -Eq "^ok +skills .* ${COMPANY_COUNT}/${COMPANY_COUNT} companies" "$TMP/doct
 # upgrade case: the entrypoint's ensure-plugins pass must have asked the worker
 # to install the skills there (the worker cannot do it from its own start-up).
 for i in $(seq 1 60); do
-  compose logs --no-color app 2>/dev/null | grep -q "Kyoube skills ensured in ${COMPANY_COUNT}/${COMPANY_COUNT} companies" && break
+  # The whole log first: piped, `grep -q` stops reading at the line, `compose logs` dies of SIGPIPE
+  # once the app has logged more after it, and pipefail then fails the check that just matched.
+  grep -q "Kyoube skills ensured in ${COMPANY_COUNT}/${COMPANY_COUNT} companies" <<<"$(compose logs --no-color app 2>/dev/null)" && break
   sleep 2
   [[ $i -eq 60 ]] && { echo "the entrypoint's ensure-plugins never reported the Kyoube skills ensured after the restore:" >&2; compose logs --no-color app 2>/dev/null | grep 'kyoube:' >&2; exit 1; }
 done
