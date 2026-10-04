@@ -5,6 +5,7 @@ import { DataService } from "../../src/data/service.js";
 import { resetCompanyCache } from "../../src/db/company-scope.js";
 import { migrationsDirFrom, runMetaMigrations } from "../../src/db/migrate.js";
 import type { GuardedAction } from "../../src/decisions/guardrail.js";
+import { Guardrail } from "../../src/decisions/guardrail-service.js";
 import { createTestDatabase } from "./setup.js";
 
 const C = "12121212-1212-4121-8121-121212121212";
@@ -74,6 +75,48 @@ describe("the guard hook in DataService", () => {
     await expect(service.removeField(C, AGENT, "tickets", "stage", { issueId: "issue-1" })).rejects.toThrow("held");
     await expect(service.renameTable(C, AGENT, "tickets", "old_tickets", { issueId: "issue-1" })).rejects.toThrow("held");
     expect(seen.map((action) => [action.operation, action.field ?? action.newName])).toEqual([["remove_field", "stage"], ["rename_table", "old_tickets"]]);
+  });
+
+  it("refuses a missing table or field with the same not_found as without the guardrail, before any check or card", async () => {
+    const resolveUserRole = async (_c: string, userId: string) => (userId === "owner-1" ? "owner" : null);
+    const decided: unknown[] = [];
+    const cards: unknown[] = [];
+    const guardrail = new Guardrail({
+      pool: db.pool,
+      decisions: {
+        settingsFor: async () => ({ agents: false, columns: false, apps: false, guardrail: true, dailyCap: 100 }),
+        decide: async (...args: unknown[]) => { decided.push(args); throw new DataError("provider_unavailable", "down"); },
+      } as never,
+      issues: {
+        get: async (id, companyId) => ({ id, companyId, title: "Tidy the tickets", description: null, assigneeAgentId: "agent-1" }),
+        requestConfirmation: async (_issueId, interaction) => { cards.push(interaction); return { id: `card-${cards.length}` }; },
+        listInteractions: async () => [],
+      },
+    });
+    const guarded = new DataService({ pool: db.pool, resolveUserRole });
+    guarded.attach({ guardAgentAction: guardrail.check });
+    const unguarded = new DataService({ pool: db.pool, resolveUserRole });
+    const many = ids.slice(5, 26);
+    const calls: Array<[string, (s: DataService) => Promise<unknown>]> = [
+      ["drop a missing table", (s) => s.dropTable(C, AGENT, "nope", { issueId: "issue-1" })],
+      ["rename a missing table", (s) => s.renameTable(C, AGENT, "nope", "still_nope", { issueId: "issue-1" })],
+      ["remove a field of a missing table", (s) => s.removeField(C, AGENT, "nope", "stage", { issueId: "issue-1" })],
+      ["remove a missing field", (s) => s.removeField(C, AGENT, "tickets", "nope", { issueId: "issue-1" })],
+      ["bulk delete from a missing table", (s) => s.delete(C, AGENT, "nope", { where: { field: "stage", op: "eq", value: "old" } }, undefined, { issueId: "issue-1" })],
+      ["bulk update a missing table by ids", (s) => s.update(C, AGENT, "nope", { ids: many }, { stage: "closed" }, undefined, { issueId: "issue-1" })],
+      // Without issueId too: the missing target is reported, not the missing task.
+      ["drop a missing table without issueId", (s) => s.dropTable(C, AGENT, "nope")],
+    ];
+    for (const [what, call] of calls) {
+      const withGuardrail = await call(guarded).catch((error: unknown) => error);
+      const without = await call(unguarded).catch((error: unknown) => error);
+      expect(withGuardrail, what).toMatchObject({ code: "not_found" });
+      expect((withGuardrail as DataError).message, what).toBe((without as DataError).message);
+    }
+    expect([decided.length, cards.length]).toEqual([0, 0]);
+    // The table and its field are still there for an existing target, which goes on to the check.
+    await expect(guarded.removeField(C, AGENT, "tickets", "stage", { issueId: "issue-1" })).rejects.toMatchObject({ code: "held" });
+    expect([decided.length, cards.length]).toEqual([1, 1]);
   });
 
   it("goes ahead when the hook lets it", async () => {
