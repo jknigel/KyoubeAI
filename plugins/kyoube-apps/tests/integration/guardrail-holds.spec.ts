@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ensureCompany, resetCompanyCache } from "../../src/db/company-scope.js";
 import { migrationsDirFrom, runMetaMigrations } from "../../src/db/migrate.js";
-import { consumeHold, createHold, findHold, findLiveHold, purgeGuardrailHolds } from "../../src/decisions/holds.js";
+import { consumeHold, createHold, findHold, findLiveHold, hasUnreleasedHold, purgeGuardrailHolds } from "../../src/decisions/holds.js";
 import { createTestDatabase } from "./setup.js";
 
 const C = "77777777-7777-4777-8777-777777777777";
@@ -60,6 +60,22 @@ describe("guardrail holds", () => {
     expect((await findHold(db.pool, C, lapsed.cardId))!.consumedAt).toBeNull();
     expect((await findHold(db.pool, C, live.cardId))!.consumedAt).toBeNull();
     expect(await consumeHold(db.pool, live.id, new Date())).toBe(true);
+  });
+
+  it("finds an unused hold on the same agent and action, on any task, until it is due for purging", async () => {
+    const f = "e".repeat(64);
+    const ask = (overrides: Partial<{ agentId: string; fingerprint: string; now: Date }> = {}) =>
+      hasUnreleasedHold(db.pool, { companyId: C, agentId: "agent-1", fingerprint: f, now: new Date(), ...overrides });
+    expect(await ask()).toBe(false);
+    const used = hold({ fingerprint: f });
+    await createHold(db.pool, used);
+    await consumeHold(db.pool, used.id);
+    expect(await ask()).toBe(false);
+    await createHold(db.pool, hold({ fingerprint: f, issueId: "issue-9", expiresAt: new Date(Date.now() - 6 * 86_400_000) }));
+    expect(await ask()).toBe(true);
+    expect(await ask({ agentId: "agent-2" })).toBe(false);
+    expect(await ask({ fingerprint: "9".repeat(64) })).toBe(false);
+    expect(await ask({ now: new Date(Date.now() + 2 * 86_400_000) })).toBe(false);
   });
 
   it("purges holds a week past their expiry", async () => {
