@@ -35,6 +35,11 @@ export function declarationsFor<S>(definitions: ToolDefinition<S>[]): PluginTool
   return definitions.map((tool) => ({ name: tool.name, displayName: tool.displayName, description: tool.description, parametersSchema: jsonSchemaFor(tool.schema) }));
 }
 
+/** A `DataError` as an agent sees it: its message, then any caller-safe details as JSON. */
+export function toolErrorText(error: DataError): string {
+  return error.details && Object.keys(error.details).length > 0 ? `${error.message} ${JSON.stringify(error.details)}` : error.message;
+}
+
 export function registerToolHandlers<S>(ctx: PluginContext, definitions: ToolDefinition<S>[], service: S): void {
   for (const tool of definitions) {
     ctx.tools.register(tool.name, { displayName: tool.displayName, description: tool.description, parametersSchema: jsonSchemaFor(tool.schema) }, async (params, runCtx) => {
@@ -70,7 +75,7 @@ export function registerToolHandlers<S>(ctx: PluginContext, definitions: ToolDef
         ctx.logger.warn("tool failed", { tool: tool.name, agentId: runCtx.agentId, message, ...cause });
         // Never echo a raw JS/driver error message back to the agent; only a
         // `DataError`'s own message (already considered caller-safe) is.
-        return { error: error instanceof DataError ? error.message : "error: internal error" };
+        return { error: error instanceof DataError ? toolErrorText(error) : "error: internal error" };
       }
     });
   }

@@ -1,6 +1,6 @@
 import type { PluginApiRequestInput, PluginApiResponse, PluginApiRouteDeclaration } from "@paperclipai/plugin-sdk";
 import { z } from "zod";
-import { actorFromRequest, statusForError } from "../api-routes.js";
+import { actorFromRequest, errorBody, statusForError } from "../api-routes.js";
 import { DataError } from "../data/errors.js";
 import { APP_MANIFEST_SCHEMA, MAX_APP_NOTES } from "./manifest.js";
 import type { AppService } from "./service.js";
@@ -94,7 +94,7 @@ export async function handleAppsApiRequest(
     }
     return { status: 200, body };
   } catch (error) {
-    if (error instanceof DataError) return { status: statusForError(error), body: { error: error.message, code: error.code } };
+    if (error instanceof DataError) return { status: statusForError(error), body: errorBody(error) };
     // Ruling P2-R24: never echo a raw JS/driver error message to the caller.
     // Log the real error for operators instead (never the request body, which
     // carries an app's whole source).
