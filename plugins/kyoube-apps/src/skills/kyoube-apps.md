@@ -82,8 +82,10 @@ Rules:
 - Ship a small fixture table with the app (a few rows covering each answer and `review`) so its
   branches can be checked without a browser, and say in the version notes how to use it.
 - Errors arrive as `kyoube.Error` with `code` `disabled`, `budget_exceeded`, `too_large`,
-  `provider_unavailable`, `timeout` or `limit` (more than 10 decisions in 10 seconds). Show a short
-  message and let the person carry on by hand.
+  `provider_rejected`, `provider_unavailable`, `timeout`, `limit` (more than 10 decisions in 10
+  seconds), `forbidden` (the viewer cannot read the set's table, or the running version does not
+  declare the set) or `not_found` (the row is gone). Show a short message and let the person carry
+  on by hand.
 
 ## Workflow
 

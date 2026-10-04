@@ -71,7 +71,9 @@ The tools are the same: `decisions_status` and `decisions_decide` (`state` or `r
 
 `disabled` (switched off or no provider), `budget_exceeded` (today's cap is used up; stop and tell
 the person), `too_large` (send less state), `provider_unavailable` or `timeout` (try once more later),
-`provider_rejected` (the company's key or model is wrong; tell the person).
+`provider_rejected` (the company's key or model is wrong; tell the person), `invalid` (fix the
+questions or the request), `forbidden` (you cannot read that table) and `not_found` (no such table,
+or, in `rows` mode, reported per row for an id that does not exist).
 
 For answers kept in a Data table and refreshed automatically, use an AI column (kyoube-data skill, "AI columns").
 
@@ -94,11 +96,17 @@ The tools take the same `issueId` parameter. What can come back:
 - `not_found`: the table, field or app does not exist. No card is raised.
 - `held` (409) with a `confirmationId`: a person has to allow this call. A card is on your task.
   Stop working on this step and wait; you are woken when they answer. Then send exactly the same
-  call again with `"confirmationId"` added. An allowed call runs once.
+  call again with `"confirmationId"` added. An allowed call runs once. If it would now touch more
+  rows than the person was shown, it does not run: you get `held` again with a new card's id, and
+  wait again.
 - `rejected_by_person` (403): the person declined. Never try the same thing another way (a
   different filter, smaller batches, another route). Ask them what they want instead.
 - `conflict` (409) on a retry: that confirmation was used or is more than 24 hours old. Send the
   call without `confirmationId` to have it checked again.
+- `invalid` (400) on a retry: that `confirmationId` belongs to a different call or task, or to a
+  table that has since been dropped and made again. Send the call without it.
+- `forbidden` (403) on a retry: the card was not answered by a person, so the call stays held. Wait
+  for a person.
 
 Only a person can release a held call. You cannot answer the card, and once a call of yours has
 been held, the same call is never re-checked by the model while the hold is still unused: it goes

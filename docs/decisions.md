@@ -56,8 +56,16 @@ requests have been used today. All four uses work in this release.
 Turning AI columns off pauses filling and keeps every value already written. Cells waiting for review
 stay where they are, and filling carries on when the switch goes back on.
 
-The daily cap limits provider requests per company per UTC day. The default is 10,000, and one row
-counts as one request. A request that fails at the provider does not use up budget.
+The daily cap limits provider requests per company per UTC day, and all four uses share it. The
+default is 10,000, and one row counts as one request. A request that fails at the provider does not
+use up budget.
+
+AI columns keep out of the last tenth of the cap: the fill stops once the day's usage reaches 90% of
+it, rounded down (a cap of 10,000 gives the fill 9,000; under a cap of 10 the fill gets nothing). A
+large backfill therefore always leaves room for agents, apps and the guardrail, which can use the cap
+in full. When the cap is reached, agents and apps get `budget_exceeded` (429) until midnight UTC, the
+fill carries on the next day, and the guardrail cannot run its check, so every covered agent action
+waits on a card for a person.
 
 The worker keeps a resolved key in memory for up to 60 seconds per company, because the core limits
 secret lookups to 30 a minute. It is dropped when the plugin config is saved, so a new key takes effect
@@ -86,8 +94,18 @@ hours. "Don't allow" ends it, and the agent is told `rejected_by_person`. The ag
 not assigned to it, is refused with `guardrail_context_required`.
 
 The `held` answer (409) carries the confirmation id in `details` and in its message. A plain identical
-retry that matches a live hold is treated as the same retry. A hold is bound to the app's and version's
-identity for app actions, so an allowance for one app does not carry to another.
+retry that matches a live hold is treated as the same retry.
+
+A hold binds to what the person was shown on the card:
+
+- The exact call, including the table's own identity. A table dropped and made again under the same
+  name is a different table, so an allowance for the old one does not match it (`invalid`). For app
+  actions it is the app's and version's identity, so an allowance for one app does not carry to another.
+- The number of rows the card showed. If an allowed call would now touch more rows (a `where` filter
+  that matches more than it did, or a table that has grown), it does not run: a new card asks the person
+  again with the new count, without asking the model, and the agent gets `held` with the new card's
+  id. The old `confirmationId` leads to the new card. A call that now touches the same or fewer rows
+  runs.
 
 Only a person can release a held action. Once an agent's action has been held, the same agent's
 identical action is never re-checked by the model while an unconsumed hold exists within the holds'
@@ -100,10 +118,15 @@ tools with `issueId` instead.
 
 | Agent sees | HTTP | Meaning |
 |---|---|---|
-| `guardrail_context_required` | 428 | Pass `issueId`, the agent's own task |
+| `guardrail_context_required` | 428 | Pass `issueId`, the agent's own task (also: the call carries no agent id) |
 | `held` + `confirmationId` | 409 | Waiting for a person on the card |
 | `rejected_by_person` | 403 | A person declined |
+| `forbidden` | 403 | The card was answered by an agent, not a person, so the action stays held |
+| `invalid` | 400 | The `confirmationId` is from a different call, agent or task, or for a table since dropped and made again |
 | `conflict` | 409 | The confirmation was already used, or expired |
+
+The guardrail's check gives the provider 12 seconds rather than the usual 20, so the check, the row
+count and the action itself fit in the core's 30 second limit for plugin requests.
 
 ## What leaves the server
 
@@ -182,10 +205,11 @@ check makes a `boolean`. An AI column cannot be required, because a cell waiting
 Creating one needs schema access and the AI columns switch; removing one needs only schema access.
 Removing a source field is refused while an AI column reads it.
 
-**How filling works.** The `fill-ai-columns` job runs every 5 minutes, and a column also fills in the
-background straight after it is created or its question changes, and after new or edited rows. A run
-handles at most 2,000 rows per company. It stops at the daily cap, at a provider error, or after
-4 minutes, and carries on in the next run. A row whose source values have not changed is never asked
+**How filling works.** The `fill-ai-columns` job runs every 5 minutes. Creating a column, changing its
+question and pressing Refill each start a fill in the background at once; new and edited rows wait for
+the next scheduled run. A run handles at most 2,000 rows per company. It stops at its share of the
+daily cap (90%, see [Switching uses on](#switching-uses-on)), at a provider error, or after 4 minutes,
+and carries on in the next run. A row whose source values have not changed is never asked
 again. Cells that failed are retried after new and changed rows, with whatever is left of the 2,000.
 The scan lags the database clock by 2 minutes, so a row committed late is still picked up.
 
@@ -206,6 +230,8 @@ columns out; an AI cell changes through Accept and Change only.
 has changes nothing. A person's Accept or Change on a suggested cell is logged as confirmed or changed,
 which is the human outcome kept in the decision log. Writing null hands the cell back to the model,
 which asks again on the next run. Refill discards every cell that is not manual and asks again.
+Changing a choice or score column's question empties every value the new options no longer include,
+`manual` ones too, and those rows are asked again.
 
 **Advisory columns.** Set `"advisory": true` on a column that judges anything about a person
 (employment, credit, housing, health, education, legal status). Every answer then waits for a person,
