@@ -258,7 +258,7 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
 
       action("data.create_table", (c, a, p) => dataService.createTable(c, a, { name: str(p, "name"), displayName: p.displayName as string | undefined, description: p.description as string | undefined, fields: Array.isArray(p.fields) ? p.fields : [] }));
       action("data.add_field", (c, a, p) => dataService.addField(c, a, str(p, "table"), p.field));
-      action("data.update_field", (c, a, p) => dataService.updateField(c, a, str(p, "table"), str(p, "field"), { displayName: p.displayName as string | undefined, description: p.description as string | null | undefined, required: p.required as boolean | undefined, choices: p.choices as string[] | undefined }));
+      action("data.update_field", (c, a, p) => dataService.updateField(c, a, str(p, "table"), str(p, "field"), { displayName: p.displayName as string | undefined, description: p.description as string | null | undefined, required: p.required as boolean | undefined, choices: p.choices as string[] | undefined, decision: p.decision }));
       action("data.remove_field", (c, a, p) => dataService.removeField(c, a, str(p, "table"), str(p, "field")));
       action("data.drop_table", (c, a, p) => dataService.dropTable(c, a, str(p, "table")));
       action("data.rename_table", (c, a, p) => dataService.renameTable(c, a, str(p, "table"), str(p, "newName")));

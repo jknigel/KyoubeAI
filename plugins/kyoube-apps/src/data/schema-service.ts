@@ -2,7 +2,7 @@ import type { Pool, PoolClient } from "pg";
 import { withCompany, type CompanyScope, type ScopedClient } from "../db/company-scope.js";
 import type { AuditPlan } from "./audit.js";
 import { DataError, mapPgError } from "./errors.js";
-import { choicesConstraint, choicesConstraintName, columnDefinition, normalizeFieldSpec, type FieldSpec } from "./field-kinds.js";
+import { aiColumnChoices, choicesConstraint, choicesConstraintName, columnDefinition, isAiColumn, normalizeAiColumn, normalizeFieldSpec, type FieldSpec } from "./field-kinds.js";
 import type { FieldTypeMap } from "./filter.js";
 import { assertIdentifier, quoteIdent, SYSTEM_COLUMNS } from "./identifiers.js";
 
@@ -31,10 +31,27 @@ export interface UpdateFieldPatch {
   description?: string | null;
   required?: boolean;
   choices?: string[];
+  decision?: unknown;
 }
 
 interface TableRow { id: string; name: string; display_name: string; description: string | null; created_at: Date; updated_at: Date }
 interface FieldRow { name: string; display_name: string; description: string | null; kind: FieldSpec["kind"]; required: boolean; options: FieldSpec["options"]; position: number }
+
+/** Spec §4: an AI column reads live, non-relation, non-AI fields of its own table; decisions never chain. */
+function assertAiSources(column: FieldSpec, fields: FieldSpec[], tableName: string): void {
+  const decision = column.options.decision;
+  if (!decision) return;
+  for (const source of decision.sourceFields) {
+    const field = fields.find((candidate) => candidate.name === source);
+    if (!field) throw new DataError("invalid", `AI column "${column.name}" reads "${source}", which is not a field of "${tableName}"`);
+    if (field.kind === "relation") throw new DataError("invalid", `AI column "${column.name}" cannot read relation field "${source}"`);
+    if (isAiColumn(field)) throw new DataError("invalid", `AI column "${column.name}" cannot read AI column "${source}"; decisions never chain`);
+  }
+}
+
+function sameChoices(a: string[] | undefined, b: string[] | undefined): boolean {
+  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+}
 
 const SYSTEM_DDL = '"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(), "created_at" timestamptz NOT NULL DEFAULT now(), "updated_at" timestamptz NOT NULL DEFAULT now(), "created_by_kind" text, "created_by_id" text';
 
@@ -123,6 +140,7 @@ export class SchemaService {
       if (seen.has(field.name)) throw new DataError("conflict", `duplicate field "${field.name}"`);
       seen.add(field.name);
     }
+    for (const field of fields) assertAiSources(field, fields, name);
     const existing = await this.pool.query("SELECT 1 FROM kyoube_meta.tables WHERE company_id = $1 AND name = $2 AND status = 'active'", [scope.companyId, name]);
     if (existing.rowCount) throw new DataError("conflict", `table "${name}" already exists`);
     for (const field of fields) {
@@ -146,6 +164,7 @@ export class SchemaService {
     const info = await this.getTable(scope, table);
     const field = normalizeFieldSpec(rawField);
     if (info.fields.some((existing) => existing.name === field.name)) throw new DataError("conflict", `field "${field.name}" already exists on "${info.name}"`);
+    assertAiSources(field, info.fields, info.name);
     if (field.kind === "relation") await this.tableRow(scope, field.options.relationTable!);
     const row = await this.tableRow(scope, info.name);
     await this.run(scope, async ({ client, asOwner }) => {
@@ -167,22 +186,41 @@ export class SchemaService {
     const name = assertIdentifier(fieldName, "field name");
     const current = info.fields.find((field) => field.name === name);
     if (!current) throw new DataError("not_found", `field "${name}" not found on "${info.name}"`);
+    if (isAiColumn(current)) {
+      if (patch.choices) throw new DataError("invalid", `the choices of AI column "${name}" come from its question; change its question instead`);
+      if (patch.required) throw new DataError("invalid", `AI column "${name}" cannot be required: a cell waiting for review is empty`);
+    } else if (patch.decision !== undefined) {
+      throw new DataError("invalid", `only an AI column has a question; add a new AI column instead of changing "${name}"`);
+    }
+    let options = patch.choices ? { ...current.options, choices: [...new Set(patch.choices)] } : current.options;
+    if (patch.decision !== undefined) {
+      const decision = normalizeAiColumn(name, current.kind, false, undefined, patch.decision);
+      const choices = aiColumnChoices(decision.question);
+      options = { ...current.options, decision, ...(choices ? { choices } : {}) };
+    }
     const next: FieldSpec = {
       ...current,
       displayName: patch.displayName?.trim() || current.displayName,
       description: patch.description !== undefined ? patch.description : current.description,
       required: patch.required ?? current.required,
-      options: patch.choices ? { ...current.options, choices: [...new Set(patch.choices)] } : current.options,
+      options,
     };
     if (patch.choices && current.kind !== "select" && current.kind !== "multi_select") throw new DataError("invalid", `field "${name}" has no choices`);
     if (patch.choices && patch.choices.length === 0) throw new DataError("invalid", "choices must not be empty");
+    if (patch.decision !== undefined) assertAiSources(next, info.fields.filter((field) => field.name !== name), info.name);
+    const choicesChanged = !sameChoices(current.options.choices, next.options.choices);
     const row = await this.tableRow(scope, info.name);
     await this.run(scope, async ({ client, asOwner }) => {
       const t = quoteIdent(info.name);
       if (patch.required !== undefined && patch.required !== current.required) {
         await client.query(`ALTER TABLE ${t} ALTER COLUMN ${quoteIdent(name)} ${patch.required ? "SET" : "DROP"} NOT NULL`);
       }
-      if (patch.choices) {
+      if (choicesChanged && next.options.choices) {
+        // A changed question can drop options that rows still hold; those cells become empty
+        // (the fill job decides them again) rather than blocking the new constraint.
+        if (isAiColumn(current)) {
+          await client.query(`UPDATE ${t} SET ${quoteIdent(name)} = NULL WHERE ${quoteIdent(name)} IS NOT NULL AND NOT (${quoteIdent(name)} = ANY($1::text[]))`, [next.options.choices]);
+        }
         await client.query(`ALTER TABLE ${t} DROP CONSTRAINT IF EXISTS ${quoteIdent(choicesConstraintName(info.name, name))}`);
         await client.query(`ALTER TABLE ${t} ADD ${choicesConstraint(next, info.name)}`);
       }
@@ -200,6 +238,8 @@ export class SchemaService {
     const info = await this.getTable(scope, table);
     const name = assertIdentifier(fieldName, "field name");
     if (!info.fields.some((field) => field.name === name)) throw new DataError("not_found", `field "${name}" not found on "${info.name}"`);
+    const fed = info.fields.find((field) => field.options.decision?.sourceFields.includes(name));
+    if (fed) throw new DataError("invalid", `field "${name}" feeds AI column "${fed.name}"; remove that column or change its sources first`);
     const row = await this.tableRow(scope, info.name);
     await this.run(scope, async ({ client, asOwner }) => {
       const t = quoteIdent(info.name);

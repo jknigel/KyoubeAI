@@ -1,4 +1,5 @@
 import type { Pool } from "pg";
+import type { AiColumnHooks } from "./ai-hooks.js";
 import { ensureCompany, schemaNameFor, type CompanyScope } from "../db/company-scope.js";
 import { withMeta, type AuditEntry } from "./audit.js";
 import { DataError } from "./errors.js";
@@ -61,7 +62,23 @@ export function systemActor(): DataActor {
   return { kind: "system", id: null, runId: null };
 }
 
+/**
+ * Behaviour other modules add after construction (docs/decisions.md). `DecisionService` depends
+ * on this service, so the AI-column code cannot be a constructor dependency; plugin.ts attaches
+ * it once everything exists. Absent hooks mean the feature is unavailable, never "anything goes".
+ */
+export interface DataServiceHooks {
+  aiColumns?: AiColumnHooks;
+}
+
+function declaresAiColumn(raw: unknown): boolean {
+  if (typeof raw !== "object" || raw === null) return false;
+  const options = (raw as { options?: unknown }).options;
+  return typeof options === "object" && options !== null && (options as { decision?: unknown }).decision !== undefined;
+}
+
 export class DataService {
+  private hooks: DataServiceHooks = {};
   private readonly schema: SchemaService;
   private readonly records: RecordsService;
   private readonly pool: Pool;
@@ -90,6 +107,18 @@ export class DataService {
    */
   scope(companyId: string): Promise<CompanyScope> {
     return ensureCompany(this.pool, companyId);
+  }
+
+  attach(hooks: Partial<DataServiceHooks>): void {
+    this.hooks = { ...this.hooks, ...hooks };
+  }
+
+  /** Creating or changing an AI column needs schema access (checked first) and the AI columns use on. */
+  private async requireAiColumns(companyId: string): Promise<AiColumnHooks> {
+    const hook = this.hooks.aiColumns;
+    if (!hook) throw new DataError("disabled", "AI columns are not available in this worker");
+    await hook.assertEnabled(companyId);
+    return hook;
   }
 
   /**
@@ -139,25 +168,31 @@ export class DataService {
 
   async createTable(companyId: string, actor: DataActor, input: CreateTableInput): Promise<TableInfo> {
     const scope = await this.authorize(companyId, actor, "schema", "create a table");
+    const ai = input.fields.some(declaresAiColumn) ? await this.requireAiColumns(companyId) : null;
     const table = await this.schema.createTable(scope, input, { kind: actor.kind, id: actor.id },
       (created) => this.entry(companyId, actor, "create_table", created.name, { fields: created.fields }));
     await this.notify(companyId, actor, "create_table", table.name, `created table ${table.name}`);
+    ai?.changed(companyId);
     return table;
   }
 
   async addField(companyId: string, actor: DataActor, table: string, field: unknown): Promise<TableInfo> {
     const scope = await this.authorize(companyId, actor, "schema", "add a field");
+    const ai = declaresAiColumn(field) ? await this.requireAiColumns(companyId) : null;
     const info = await this.schema.addField(scope, table, field,
       (name) => this.entry(companyId, actor, "add_field", name, { field }));
     await this.notify(companyId, actor, "add_field", info.name, `added a field to ${info.name}`);
+    ai?.changed(companyId);
     return info;
   }
 
   async updateField(companyId: string, actor: DataActor, table: string, field: string, patch: UpdateFieldPatch): Promise<TableInfo> {
     const scope = await this.authorize(companyId, actor, "schema", "update a field");
+    const ai = patch.decision !== undefined ? await this.requireAiColumns(companyId) : null;
     const info = await this.schema.updateField(scope, table, field, patch,
       (name) => this.entry(companyId, actor, "update_field", name, { field, patch }));
     await this.notify(companyId, actor, "update_field", info.name, `updated field ${field} on ${info.name}`);
+    ai?.changed(companyId);
     return info;
   }
 
