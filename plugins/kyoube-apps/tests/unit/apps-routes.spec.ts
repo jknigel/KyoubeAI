@@ -47,7 +47,7 @@ describe("apps API routes", () => {
     const bad = await handleAppsApiRequest(service, request("apps.create", { body: { companyId: COMPANY, manifest: {} } }));
     expect(bad?.status).toBe(400);
     await handleAppsApiRequest(service, request("apps.rollback", { params: { slug: "crm" }, body: { companyId: COMPANY, version: 1 } }));
-    expect(calls.at(-1)).toEqual({ method: "rollback", args: [COMPANY, USER, "crm", 1] });
+    expect(calls.at(-1)).toEqual({ method: "rollback", args: [COMPANY, USER, "crm", 1, { decisionsConfirmed: false }] });
   });
 
   it("covers the whole lifecycle with the host's actor and company", async () => {
@@ -61,7 +61,7 @@ describe("apps API routes", () => {
     await handleAppsApiRequest(service, request("apps.update", { params: { slug: "crm" }, body: { companyId: COMPANY, manifest: MANIFEST, source: SOURCE } }));
     expect(calls.at(-1)).toEqual({ method: "update", args: [COMPANY, USER, "crm", MANIFEST, SOURCE, null] });
     await handleAppsApiRequest(service, request("apps.publish", { params: { slug: "crm" }, body: { companyId: COMPANY } }));
-    expect(calls.at(-1)).toEqual({ method: "publish", args: [COMPANY, USER, "crm", undefined] });
+    expect(calls.at(-1)).toEqual({ method: "publish", args: [COMPANY, USER, "crm", undefined, { decisionsConfirmed: false }] });
     // "latest" is the default version, and the UI's string versions stay valid.
     await handleAppsApiRequest(service, request("apps.get", { params: { slug: "crm" } }));
     expect(calls.at(-1)).toEqual({ method: "get", args: [COMPANY, USER, "crm", "latest"] });

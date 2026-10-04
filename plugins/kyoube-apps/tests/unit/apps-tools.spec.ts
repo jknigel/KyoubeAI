@@ -40,7 +40,7 @@ describe("app tools", () => {
     expect(created.error).toBeUndefined();
     expect(calls[0]).toEqual({ method: "create", args: [RUN.companyId, AGENT, MANIFEST, SOURCE, "v1"] });
     await harness.executeTool("apps_publish", { slug: "crm" }, RUN);
-    expect(calls[1]).toEqual({ method: "publish", args: [RUN.companyId, AGENT, "crm", undefined] });
+    expect(calls[1]).toEqual({ method: "publish", args: [RUN.companyId, AGENT, "crm", undefined, { decisionsConfirmed: false }] });
     const invalid = await harness.executeTool("apps_rollback", { slug: "crm" }, RUN);
     expect(invalid.error).toContain("version");
     const badSlug = await harness.executeTool("apps_archive", { slug: "Not A Slug" }, RUN);
