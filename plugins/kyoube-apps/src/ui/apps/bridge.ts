@@ -28,7 +28,10 @@ const MAX_TOAST_TITLE = 200;
 const DATA_METHODS = new Set(["query", "get", "count", "describe", "insert", "update", "delete"]);
 
 /** The `DataError` codes the worker throws, as `<code>: <text>` (see `src/data/errors.ts`). */
-const KNOWN_CODES = ["invalid", "forbidden", "not_found", "conflict", "limit", "disabled", "budget_exceeded", "too_large", "provider_rejected", "provider_unavailable", "timeout"] as const;
+const KNOWN_CODES = [
+  "invalid", "forbidden", "not_found", "conflict", "limit", "disabled", "budget_exceeded", "too_large", "provider_rejected", "provider_unavailable", "timeout",
+  "held", "rejected_by_person", "guardrail_context_required",
+] as const;
 
 /**
  * Keys that mean something to the JavaScript object model rather than to the

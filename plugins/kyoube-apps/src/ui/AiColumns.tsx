@@ -32,11 +32,20 @@ export function AiColumnHeader(props: { field: UiField; provider: string | null;
   );
 }
 
-export function ReviewCell(props: { suggestion: string; confidence: number | null; canWrite: boolean; onAccept: () => void; onChange: () => void }) {
+/**
+ * Whether Accept can write the suggestion as it stands: `true`/`false` for a check, one of the
+ * column's choices otherwise. `unsure` is never a choice, so it only ever offers Change.
+ */
+export function acceptable(field: UiField, suggestion: string): boolean {
+  if (field.kind === "boolean") return suggestion === "true" || suggestion === "false";
+  return (field.options.choices ?? []).includes(suggestion);
+}
+
+export function ReviewCell(props: { suggestion: string; confidence: number | null; canWrite: boolean; canAccept: boolean; onAccept: () => void; onChange: () => void }) {
   return (
     <span className="inline-flex items-center gap-1 text-amber-800">
       Suggested: {props.suggestion} ({percent(props.confidence)})
-      {props.canWrite && <><button type="button" className="underline" onClick={props.onAccept}>Accept</button><button type="button" className="underline" onClick={props.onChange}>Change</button></>}
+      {props.canWrite && <>{props.canAccept && <button type="button" className="underline" onClick={props.onAccept}>Accept</button>}<button type="button" className="underline" onClick={props.onChange}>Change</button></>}
     </span>
   );
 }
