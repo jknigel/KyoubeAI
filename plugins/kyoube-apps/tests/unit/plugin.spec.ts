@@ -487,14 +487,36 @@ describe("kyoube.apps plugin wiring", () => {
     expect(serviceDeps.onMutation).not.toBe(appDeps.onMutation);
   });
 
-  async function setupPurge(purgeTrash: (companyId: string) => Promise<{ droppedTables: string[]; droppedColumns: string[] }>) {
+  const AI_FIELD = "33333333-3333-4333-8333-333333333333";
+  const ROW_KEPT = "44444444-4444-4444-8444-444444444444";
+  const ROW_GONE = "55555555-5555-4555-8555-555555555555";
+
+  /**
+   * `aiCells`: COMPANY has one AI column whose cells name `rowIds`, of which only `existing` are
+   * still rows; the deletes the orphan purge makes land in `deleted`. Without it, no AI columns.
+   */
+  async function setupPurge(
+    purgeTrash: (companyId: string) => Promise<{ droppedTables: string[]; droppedColumns: string[] }>,
+    aiCells?: { rowIds: string[]; existing: string[]; deleted: unknown[][] },
+  ) {
     const harness = createTestHarness({ manifest });
+    const query = async (sql: string, params: unknown[] = []) => {
+      if (sql.includes("FROM kyoube_meta.fields")) {
+        return { rows: aiCells && params[0] === COMPANY ? [{ field_id: AI_FIELD, table_id: AI_FIELD, table_name: "tickets", field_name: "refund", kind: "boolean", decision: {} }] : [] };
+      }
+      if (sql.startsWith("SELECT row_id FROM kyoube_meta.decision_cells")) return { rows: (aiCells?.rowIds ?? []).map((id) => ({ row_id: id })) };
+      if (sql.startsWith("DELETE FROM kyoube_meta.decision_cells")) {
+        aiCells?.deleted.push(params);
+        return { rows: [] };
+      }
+      return { rows: [{ company_id: COMPANY }, { company_id: OTHER_COMPANY }] };
+    };
     const plugin = createAppsPlugin({
       loadKyoubeConfig: async () => KYOUBE_CONFIG,
       migrationsDir: "/nowhere",
-      createPool: () => ({ query: async () => ({ rows: [{ company_id: COMPANY }, { company_id: OTHER_COMPANY }] }), end: async () => {} }) as never,
+      createPool: () => ({ query, end: async () => {} }) as never,
       migrate: async () => [],
-      createService: () => ({ purgeTrash, attach: () => {} }) as unknown as DataService,
+      createService: () => ({ purgeTrash, attach: () => {}, existingRowIds: async () => aiCells?.existing ?? [] }) as unknown as DataService,
     });
     await plugin.definition.setup(harness.ctx);
     return harness;
@@ -511,6 +533,16 @@ describe("kyoube.apps plugin wiring", () => {
     const logged = harness.logs.filter((entry) => entry.message === "purged trash");
     expect(logged).toHaveLength(1);
     expect(logged[0]?.meta).toMatchObject({ companyId: COMPANY, droppedTables: ["old"] });
+    expect(harness.logs.filter((entry) => entry.level === "error")).toEqual([]);
+  });
+
+  it("purges the AI cells of deleted rows on the same job", async () => {
+    const deleted: unknown[][] = [];
+    const harness = await setupPurge(async () => ({ droppedTables: [], droppedColumns: [] }), { rowIds: [ROW_KEPT, ROW_GONE], existing: [ROW_KEPT], deleted });
+    await harness.runJob("purge-trash");
+    expect(deleted).toEqual([[AI_FIELD, [ROW_GONE]]]);
+    expect(harness.logs.filter((entry) => entry.message === "purged AI cells of deleted rows").map((entry) => entry.meta)).toEqual([{ companyId: COMPANY, cells: 1 }]);
+    expect(harness.logs.filter((entry) => entry.level === "error")).toEqual([]);
   });
 
   it("keeps sweeping after one company's purge fails", async () => {

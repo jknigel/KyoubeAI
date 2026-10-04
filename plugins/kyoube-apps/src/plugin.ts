@@ -359,6 +359,8 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
             // `systemActor()` in data/service.ts); no external actor reaches it.
             const result = await dataService.purgeTrash(row.company_id);
             if (result.droppedTables.length + result.droppedColumns.length > 0) ctx.logger.info("purged trash", { companyId: row.company_id, ...result });
+            const orphans = await aiColumns.purgeOrphans(row.company_id);
+            if (orphans > 0) ctx.logger.info("purged AI cells of deleted rows", { companyId: row.company_id, cells: orphans });
           } catch (error) {
             ctx.logger.error("purge failed", { companyId: row.company_id, error: String(error) });
           }

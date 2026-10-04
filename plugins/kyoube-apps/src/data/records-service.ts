@@ -191,16 +191,19 @@ export class RecordsService {
   }
 
   /**
-   * One statement for a whole batch of AI answers, each row its own value. `inMeta` runs on the
-   * same transaction after `asOwner()`, so the cell bookkeeping commits (or rolls back) with the
-   * values it describes, and so does the caller's audit row.
+   * One statement for a whole batch of AI answers, each row its own value. Each value carries the
+   * row's `updated_at` as the fill job read it (`AiSourceRow.updatedAt`), and a row written since
+   * is left alone: the answer was about what the row said then, and the newer write may be a
+   * person's value. `inMeta` runs on the same transaction after `asOwner()`, with the ids that
+   * were written, so the cell bookkeeping commits (or rolls back) with the values it describes,
+   * and so does the caller's audit row.
    */
   async setColumnValues(
     scope: CompanyScope,
     table: string,
     field: string,
-    values: Array<{ id: string; value: string | boolean | null }>,
-    opts: { audit?: AuditPlan<{ affected: number }>; inMeta?: (client: PoolClient) => Promise<void> } = {},
+    values: Array<{ id: string; value: string | boolean | null; at: string }>,
+    opts: { audit?: AuditPlan<{ affected: number }>; inMeta?: (client: PoolClient, written: string[]) => Promise<void> } = {},
   ): Promise<{ affected: number }> {
     const info = await this.schema.getTable(scope, table);
     const spec = info.fields.find((candidate) => candidate.name === field);
@@ -208,14 +211,17 @@ export class RecordsService {
     if (values.some((entry) => !UUID_RE.test(entry.id))) throw new DataError("invalid", "ids must be uuids");
     const texts = values.map((entry) => { const coerced = coerceValue(spec, entry.value); return coerced === null ? null : String(coerced); });
     const sql = `UPDATE ${quoteIdent(info.name)} AS t SET ${quoteIdent(spec.name)} = v.value::${columnType(spec.kind)}, "updated_at" = now()
-      FROM (SELECT unnest($1::uuid[]) AS id, unnest($2::text[]) AS value) AS v WHERE t."id" = v.id`;
+      FROM unnest($1::uuid[], $2::text[], $3::timestamptz[]) AS v(id, value, at) WHERE t."id" = v.id AND t."updated_at" = v.at
+      RETURNING t."id"`;
     return this.run(scope, async ({ client, asOwner }) => {
-      const result = values.length > 0 ? await client.query(sql, [values.map((entry) => entry.id), texts]) : { rowCount: 0 };
+      const written = values.length > 0
+        ? (await client.query<{ id: string }>(sql, [values.map((entry) => entry.id), texts, values.map((entry) => entry.at)])).rows.map((row) => row.id)
+        : [];
       if (opts.inMeta) {
         await asOwner();
-        await opts.inMeta(client);
+        await opts.inMeta(client, written);
       }
-      return { affected: result.rowCount ?? 0 };
+      return { affected: written.length };
     }, { audit: opts.audit });
   }
 

@@ -1,8 +1,9 @@
 import type { Pool, PoolClient } from "pg";
-import type { AiColumnHooks } from "./ai-hooks.js";
+import type { AiColumnHooks, AiRowWrite } from "./ai-hooks.js";
 import { ensureCompany, schemaNameFor, type CompanyScope } from "../db/company-scope.js";
 import { withMeta, type AuditEntry } from "./audit.js";
 import { DataError } from "./errors.js";
+import { isAiColumn } from "./field-kinds.js";
 import type { QuerySpec } from "./filter.js";
 import { getAgentLevel, getCompanySettings, listAgentGrants, setAgentGrant, setCompanySettings, type AgentGrant, type CompanySettings } from "./grants.js";
 import { assertLevel, roleToLevel, type AccessLevel, type DataActor, type Operation } from "./permissions.js";
@@ -239,6 +240,7 @@ export class DataService {
     const inserted = await this.records.insert(scope, table, rows, { kind: actor.kind, id: actor.id },
       (created) => this.entry(companyId, actor, "insert", table, { count: created.length, ids: created.map((row) => row.id) }, via));
     await this.notify(companyId, actor, "insert", table, `inserted ${inserted.length} row(s) into ${table}`);
+    await this.afterRowWrite(companyId, actor, scope, table, inserted, null, via);
     return inserted;
   }
 
@@ -247,6 +249,7 @@ export class DataService {
     const result = await this.records.update(scope, table, target, patch,
       (done) => this.entry(companyId, actor, "update", table, { affected: done.affected, fields: Object.keys(patch) }, via));
     await this.notify(companyId, actor, "update", table, `updated ${result.affected} row(s) in ${table}`);
+    await this.afterRowWrite(companyId, actor, scope, table, result.rows, Object.keys(patch), via);
     return result;
   }
 
@@ -351,14 +354,15 @@ export class DataService {
 
   /**
    * One batch of AI answers: one audit row, no activity line of its own (the decisions summary
-   * is that batch's one line), and — being the fill job's own write — never an edit.
+   * is that batch's one line), and — being the fill job's own write — never an edit. A row
+   * written since the job read it (`at`) is skipped; `inMeta` hears which rows were written.
    */
   async writeAiValues(
     companyId: string,
     table: string,
     field: string,
-    values: Array<{ id: string; value: string | boolean | null }>,
-    opts: { via: string; inMeta?: (client: PoolClient) => Promise<void> },
+    values: Array<{ id: string; value: string | boolean | null; at: string }>,
+    opts: { via: string; inMeta?: (client: PoolClient, written: string[]) => Promise<void> },
   ): Promise<{ affected: number }> {
     const actor = systemActor();
     return this.records.setColumnValues(await this.scope(companyId), table, field, values, {
@@ -403,6 +407,25 @@ export class DataService {
     // blob carries; the row still names the viewer as the actor (ruling P4-R21).
     const withVia = via ? { ...details, via: { app: via.app, version: via.version } } : details;
     return { companyId, actor, operation, table, details: withVia };
+  }
+
+  /**
+   * AI-cell bookkeeping after a row write by anyone but the fill job (spec §4, "Edits and
+   * outcomes"). It runs after the write committed, like the activity summariser, so a failure here
+   * is reported, never thrown: the caller's write already happened.
+   */
+  private async afterRowWrite(companyId: string, actor: DataActor, scope: CompanyScope, table: string, rows: Row[], patchKeys: string[] | null, via?: ViaApp): Promise<void> {
+    const hook = this.hooks.aiColumns;
+    if (!hook || rows.length === 0) return;
+    try {
+      const info = await this.schema.getTable(scope, table);
+      const fields = patchKeys ?? info.fields.map((field) => field.name);
+      if (!info.fields.some((field) => isAiColumn(field) && fields.includes(field.name))) return;
+      const event: AiRowWrite = { companyId, actor, table: info, rows, fields, via: via ?? null };
+      await hook.rowsWritten(event);
+    } catch (error) {
+      this.onMutationError?.(error, { companyId, actor, operation: "ai_cells", table, summary: "AI column bookkeeping failed" });
+    }
   }
 
   /**

@@ -1,13 +1,17 @@
 import { createHash } from "node:crypto";
 import type { Pool } from "pg";
-import type { AiColumnHooks } from "../data/ai-hooks.js";
+import type { AiColumnHooks, AiRowWrite } from "../data/ai-hooks.js";
 import { DataError } from "../data/errors.js";
-import type { AiColumnDefinition } from "../data/field-kinds.js";
+import { isAiColumn, type AiColumnDefinition } from "../data/field-kinds.js";
 import type { AiSourceRow } from "../data/records-service.js";
 import { systemActor, type DataService } from "../data/service.js";
-import { advanceWatermark, deleteCells, errorRowIds, getCells, listAiColumns, syncColumn, upsertCells, watermarkCeiling, type AiColumnRef, type CellWrite } from "./cells.js";
+import {
+  advanceWatermark, cellRowIdsAfter, deleteCells, errorRowIds, getCells, listAiColumns, markManual, syncColumn, upsertCells, watermarkCeiling,
+  type AiColumnRef, type CellState, type CellWrite,
+} from "./cells.js";
 import { canonical, questionFingerprint, reviewThreshold, type DecideResult } from "./contract.js";
 import { runPool, type DecisionService } from "./service.js";
+import { recordOutcome, type Outcome } from "./store.js";
 
 /**
  * AI columns (docs/decisions.md, spec §4): the fill engine behind the `fill-ai-columns` job
@@ -53,6 +57,17 @@ export function sourceHash(fingerprint: string, values: Record<string, unknown>,
  */
 function lastPerRow<T>(entries: T[], rowId: (entry: T) => string): T[] {
   return [...new Map(entries.map((entry) => [rowId(entry), entry])).values()];
+}
+
+/**
+ * Whether a write leaves an AI cell as it was. A form that saves a whole row writes every field
+ * back; that must not turn the model's answers into "a person decided".
+ */
+function unchanged(cell: CellState | undefined, value: unknown): boolean {
+  if (!cell) return value === null;
+  if (cell.status === "review" || cell.status === "error") return value === null;
+  if (cell.status === "auto") return value !== null && String(value) === cell.suggestion;
+  return false;
 }
 
 export interface FillReport { companyId: string; decided: number; review: number; failed: number; stoppedBy: string | null }
@@ -102,12 +117,77 @@ export class AiColumnService {
     return {
       assertEnabled: async (companyId) => { await this.deps.decisions.assertEnabled(companyId, "columns"); },
       changed: (companyId) => this.startBackground(companyId),
-      rowsWritten: async () => {},
+      rowsWritten: (event) => this.rowsWritten(event),
       counts: async () => ({}),
       listReview: async () => [],
       refill: async () => {},
       cells: async () => ({ provider: null, counts: {}, cells: {} }),
     };
+  }
+
+  /**
+   * Writes to AI columns by anyone but the fill job (spec §4, "Edits and outcomes"): a new value
+   * makes the cell `manual`, and a person's on a `review` or `auto` cell is logged as confirming
+   * or changing that decision; an empty value hands the cell back to the job; a value left as it
+   * was changes nothing.
+   */
+  async rowsWritten(event: AiRowWrite): Promise<void> {
+    const fields = event.table.fields.filter((field) => isAiColumn(field) && event.fields.includes(field.name));
+    if (fields.length === 0) return;
+    const refs = await listAiColumns(this.deps.pool, event.companyId, event.table.name);
+    // `markManual` refuses a call that names one row twice: one entry per row, the last one wins.
+    const rows = lastPerRow(event.rows, (row) => String(row.id));
+    const ids = rows.map((row) => String(row.id));
+    // Only a person working in Kyoube itself confirms or changes a decision; an app's code could
+    // write without anyone looking, so its writes never count as a human outcome.
+    const person = event.actor.kind === "user" && event.actor.id && !event.via ? event.actor.id : null;
+    for (const field of fields) {
+      const ref = refs.find((candidate) => candidate.field === field.name);
+      if (!ref) continue;
+      const prior = await getCells(this.deps.pool, ref.fieldId, ids);
+      const manual: string[] = [];
+      const cleared: string[] = [];
+      const outcomes: Array<{ decisionId: string; outcome: Outcome }> = [];
+      for (const row of rows) {
+        const id = String(row.id);
+        const value = row[field.name] ?? null;
+        const cell = prior.get(id);
+        if (unchanged(cell, value)) continue;
+        if (value === null) {
+          if (cell) cleared.push(id);
+          continue;
+        }
+        manual.push(id);
+        if (cell && (cell.status === "review" || cell.status === "auto") && cell.decisionId) {
+          outcomes.push({ decisionId: cell.decisionId, outcome: String(value) === cell.suggestion ? "human_confirmed" : "human_changed" });
+        }
+      }
+      await markManual(this.deps.pool, ref, manual);
+      await deleteCells(this.deps.pool, ref.fieldId, cleared);
+      if (!person) continue;
+      for (const entry of outcomes) {
+        await recordOutcome(this.deps.pool, { companyId: event.companyId, decisionId: entry.decisionId, questionKey: AI_QUESTION_KEY, outcome: entry.outcome, via: "data_page", by: person });
+      }
+    }
+  }
+
+  /** Nightly: cells whose rows were deleted. Returns how many cells went. */
+  async purgeOrphans(companyId: string): Promise<number> {
+    let removed = 0;
+    for (const ref of await listAiColumns(this.deps.pool, companyId)) {
+      let after: string | null = null;
+      for (;;) {
+        const ids = await cellRowIdsAfter(this.deps.pool, ref.fieldId, after, SCAN_PAGE);
+        if (ids.length === 0) break;
+        const existing = new Set(await this.deps.data.existingRowIds(companyId, ref.table, ids));
+        const gone = ids.filter((id) => !existing.has(id));
+        await deleteCells(this.deps.pool, ref.fieldId, gone);
+        removed += gone.length;
+        if (ids.length < SCAN_PAGE) break;
+        after = ids[ids.length - 1]!;
+      }
+    }
+    return removed;
   }
 
   /** One company, under its lock; a second request while it runs makes it run once more after. */
@@ -267,7 +347,7 @@ export class AiColumnService {
       }
     });
 
-    const values: Array<{ id: string; value: string | boolean | null }> = [];
+    const values: Array<{ id: string; value: string | boolean | null; at: string }> = [];
     const writes: CellWrite[] = [];
     const results: DecideResult[] = [];
     let failed = 0;
@@ -282,14 +362,27 @@ export class AiColumnService {
       }
       const answer = outcome.result.answers[AI_QUESTION_KEY]!;
       results.push(outcome.result);
-      values.push({ id: candidate.row.id, value: answer.status === "auto" ? answer.value : null });
+      values.push({ id: candidate.row.id, value: answer.status === "auto" ? answer.value : null, at: candidate.row.updatedAt });
       writes.push({ rowId: candidate.row.id, status: answer.status, suggestion: String(answer.value), confidence: answer.confidence, decisionId: outcome.result.decisionId, sourceHash: candidate.hash });
     });
     const cellWrites = lastPerRow(writes, (write) => write.rowId);
-    if (values.length > 0) {
-      await this.deps.data.writeAiValues(ref.companyId, ref.table, ref.field, lastPerRow(values, (entry) => entry.id), { via, inMeta: (client) => upsertCells(client, ref, cellWrites) });
-    } else if (cellWrites.length > 0) {
-      await upsertCells(this.deps.pool, ref, cellWrites);
+    const answered = lastPerRow(values, (entry) => entry.id);
+    // A write made while a row was being decided wins over the answer, which was about the row as
+    // it was. A cell that turned `manual` since the scan (an edit whose bookkeeping landed late) is
+    // passed over here; a row written since the scan is skipped by the write itself (its
+    // `updated_at` no longer matches `at`). Neither gets the answer's cell: a manual cell keeps
+    // its own, and a row written since is read again by the next run.
+    const settled = await getCells(this.deps.pool, ref.fieldId, answered.map((entry) => entry.id));
+    const pending = answered.filter((entry) => settled.get(entry.id)?.status !== "manual");
+    const answeredIds = new Set(answered.map((entry) => entry.id));
+    const cellsFor = (written: string[]): CellWrite[] => {
+      const kept = new Set(written);
+      return cellWrites.filter((write) => !answeredIds.has(write.rowId) || kept.has(write.rowId));
+    };
+    if (pending.length > 0) {
+      await this.deps.data.writeAiValues(ref.companyId, ref.table, ref.field, pending, { via, inMeta: (client, written) => upsertCells(client, ref, cellsFor(written)) });
+    } else {
+      await upsertCells(this.deps.pool, ref, cellsFor([]));
     }
 
     if (results.length + failed > 0) {
