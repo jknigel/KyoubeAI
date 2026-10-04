@@ -116,3 +116,6 @@ Example `POST /tables` body:
 
 Summarise what changed (tables/fields/row counts), link the Data page (`/<company>/data`), and
 never paste more than a handful of rows into an issue comment — point to the table instead.
+
+To classify, score or check rows with the company's typed-decision model, see the kyoube-decisions
+skill (`POST /decisions/decide` with `rows`).

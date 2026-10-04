@@ -1,7 +1,7 @@
 // tests/unit/plugin-decisions.spec.ts
 import { describe, expect, it, vi } from "vitest";
 import { createTestHarness } from "@paperclipai/plugin-sdk/testing";
-import manifest from "../../src/manifest.js";
+import manifest, { DECISIONS_SKILL_KEY, PLUGIN_VERSION } from "../../src/manifest.js";
 import { createAppsPlugin } from "../../src/plugin.js";
 import type { DecisionServiceDeps } from "../../src/decisions/service.js";
 import { createStubService } from "../stub-service.js";
@@ -89,5 +89,19 @@ describe("plugin wiring for typed decisions", () => {
     } finally {
       globalFetch.mockRestore();
     }
+  });
+});
+
+describe("the kyoube-decisions skill", () => {
+  it("ships as a third managed skill and installs with the other two", async () => {
+    expect(PLUGIN_VERSION).toBe("0.5.0");
+    expect(manifest.skills?.map((skill) => skill.skillKey)).toEqual(["kyoube-data", "kyoube-apps", DECISIONS_SKILL_KEY]);
+    const { harness, plugin } = await setup();
+    await plugin.definition.onApiRequest!({ routeKey: "skills.install", method: "POST", path: "/skills/install", params: {}, query: {}, body: { companyId: COMPANY }, actor: { actorType: "user", actorId: "admin-1", userId: "admin-1" }, companyId: COMPANY, headers: {} });
+    expect((await harness.ctx.skills.managed.get(DECISIONS_SKILL_KEY, COMPANY)).status).toBe("resolved");
+  });
+  it("teaches the rules that keep decisions safe", () => {
+    const markdown = manifest.skills!.find((skill) => skill.skillKey === DECISIONS_SKILL_KEY)!.markdown;
+    for (const phrase of ["/decisions/decide", "decisions_status", "unsure", "review", "never instead of", "compute"]) expect(markdown).toContain(phrase);
   });
 });

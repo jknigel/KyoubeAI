@@ -7,16 +7,18 @@ import { APPS_PAGE_ROUTE } from "./apps/page-route.js";
 import { appToolDeclarations } from "./apps/tools.js";
 import { DECISIONS_CONFIG_SCHEMA } from "./decisions/config.js";
 import appsSkillMarkdown from "./skills/kyoube-apps.md";
+import decisionsSkillMarkdown from "./skills/kyoube-decisions.md";
 import skillMarkdown from "./skills/kyoube-data.md";
 import { toolDeclarations } from "./tools.js";
 
 export const PLUGIN_ID = "kyoube.apps";
-export const PLUGIN_VERSION = "0.4.3";
+export const PLUGIN_VERSION = "0.5.0";
 export const DATA_PAGE_ROUTE = "data";
 export const DATA_ACCESS_SETTINGS_ROUTE = "data-access";
 export { APPS_PAGE_ROUTE };
 export const DATA_SKILL_KEY = "kyoube-data";
 export const APPS_SKILL_KEY = "kyoube-apps";
+export const DECISIONS_SKILL_KEY = "kyoube-decisions";
 export const PURGE_JOB_KEY = "purge-trash";
 
 const manifest: PaperclipPluginManifestV1 = {
@@ -67,6 +69,7 @@ const manifest: PaperclipPluginManifestV1 = {
   skills: [
     { skillKey: DATA_SKILL_KEY, displayName: "Kyoube Data", slug: "kyoube-data", description: "Design and use the company's Kyoube organisation database through the kyoube.apps tools.", markdown: skillMarkdown },
     { skillKey: APPS_SKILL_KEY, displayName: "Kyoube Apps", slug: "kyoube-apps", description: "Build and publish single-file apps over the company's Kyoube Data tables.", markdown: appsSkillMarkdown },
+    { skillKey: DECISIONS_SKILL_KEY, displayName: "Kyoube Decisions", slug: "kyoube-decisions", description: "Ask the company's typed-decision model closed questions about text, JSON or Data rows; never instead of a person's approval.", markdown: decisionsSkillMarkdown },
   ],
   ui: {
     slots: [
