@@ -119,3 +119,32 @@ never paste more than a handful of rows into an issue comment — point to the t
 
 To classify, score or check rows with the company's typed-decision model, see the kyoube-decisions
 skill (`POST /decisions/decide` with `rows`).
+
+## AI columns
+
+An AI column is a field the company's typed-decision model fills in from other fields of the same
+row (see the kyoube-decisions skill for how questions work). It needs `schema` access and the
+company's "AI columns" switch on. Add one like any field, with a `decision` block:
+
+```sh
+curl -fsS -H "$A" -H 'Content-Type: application/json' -X POST "$K/tables/tickets/fields" -d '{
+  "companyId": "'"$PAPERCLIP_COMPANY_ID"'",
+  "field": {"name": "queue", "kind": "select", "options": {"decision": {
+    "question": {"type": "choice", "instructions": "Which team owns this ticket?",
+                 "options": {"billing": "Payments, invoices, refunds", "technical": "Bugs and outages"}},
+    "sourceFields": ["subject", "body"]}}}
+}'
+```
+
+- Choice and score questions make a `select` field; a check makes a `boolean`. Leave
+  `options.choices` out: they come from the question.
+- `sourceFields` are 1 to 20 fields of the same table; not relations and not other AI columns.
+  Every row's source values are sent to the provider.
+- Mark a column `"advisory": true` when it judges anything about a person (employment, credit,
+  housing, health, education, legal status): every answer then waits for a person.
+- The column fills in the background within minutes. Confident answers are written; the rest stay
+  empty with a suggestion. List them with `GET $K/tables/tickets/review?companyId=…&field=queue`
+  (or `data_list_review`) and bring them to the person who started the task.
+- Writing a value into an AI column yourself makes that cell `manual`: the model never overwrites
+  it. Writing null hands it back to the model.
+- `POST $K/tables/tickets/fields/queue/refill` asks again for every cell that is not manual.

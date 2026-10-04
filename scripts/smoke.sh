@@ -652,7 +652,7 @@ api_post "/tables/smoke_contacts/rows/delete" "{\"companyId\":\"$COMPANY_ID\",\"
 api_post "/tables/smoke_contacts/rows/count" "{\"companyId\":\"$COMPANY_ID\"}" | jq -e '.count == 1' >/dev/null
 echo "    data round-trip ok"
 
-# The 17 data_*, 7 apps_* and 2 decisions_* tools (both registered under the "kyoube.apps:"
+# The 18 data_*, 7 apps_* and 2 decisions_* tools (both registered under the "kyoube.apps:"
 # prefix, since Phase 3 added the Apps tools to the same plugin) are what an
 # agent actually calls, through the core's tool gateway. Executing one from
 # here is not possible without a live agent run: POST
@@ -663,10 +663,10 @@ echo "    data round-trip ok"
 # that the host registered the whole tool surface (Step 3 of the task brief
 # covers real agent execution manually).
 curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/plugins/tools" >"$TMP/tools.json"
-jq -e '[.[] | select(.name | startswith("kyoube.apps:"))] | length == 26' "$TMP/tools.json" >/dev/null \
-  || { echo "expected 26 kyoube.apps tools (17 data_* + 7 apps_* + 2 decisions_*), got: $(jq -c '[.[] | select(.name | startswith("kyoube.apps:")) | .name]' "$TMP/tools.json")" >&2; exit 1; }
-jq -e 'map(.name) | index("kyoube.apps:data_sql_select") != null and index("kyoube.apps:data_insert") != null and index("kyoube.apps:apps_create") != null and index("kyoube.apps:apps_publish") != null and index("kyoube.apps:decisions_decide") != null' "$TMP/tools.json" >/dev/null
-echo "    26 kyoube.apps:data_*/apps_*/decisions_* tools registered with the host tool dispatcher"
+jq -e '[.[] | select(.name | startswith("kyoube.apps:"))] | length == 27' "$TMP/tools.json" >/dev/null \
+  || { echo "expected 27 kyoube.apps tools (18 data_* + 7 apps_* + 2 decisions_*), got: $(jq -c '[.[] | select(.name | startswith("kyoube.apps:")) | .name]' "$TMP/tools.json")" >&2; exit 1; }
+jq -e 'map(.name) | index("kyoube.apps:data_sql_select") != null and index("kyoube.apps:data_insert") != null and index("kyoube.apps:apps_create") != null and index("kyoube.apps:apps_publish") != null and index("kyoube.apps:decisions_decide") != null and index("kyoube.apps:data_list_review") != null' "$TMP/tools.json" >/dev/null
+echo "    27 kyoube.apps:data_*/apps_*/decisions_* tools registered with the host tool dispatcher"
 
 echo "==> the activity log summarises the data mutations but never the rows"
 curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/companies/$COMPANY_ID/activity?limit=200" \
@@ -755,6 +755,51 @@ fi
 curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/companies/$COMPANY_ID/activity?limit=200" \
   | jq -e 'tostring | contains("smoke-not-a-real-key") | not' >/dev/null || { echo "the activity log leaked the decisions key" >&2; exit 1; }
 echo "    decisions: config, secret, switch and budget release ok"
+
+echo "==> AI columns: off until switched on, sources checked, fill runs without spending budget on failures"
+api_post "/tables" "{\"companyId\":\"$COMPANY_ID\",\"name\":\"smoke_tickets\",\"fields\":[{\"name\":\"subject\",\"kind\":\"text\"}]}" >/dev/null
+api_post "/tables/smoke_tickets/rows" "{\"companyId\":\"$COMPANY_ID\",\"rows\":[{\"subject\":\"Please refund my order\"},{\"subject\":\"Thanks for the quick fix\"}]}" >/dev/null
+AI_FIELD='{"name":"refund","kind":"boolean","options":{"decision":{"question":{"type":"check","statement":"The ticket asks for a refund."},"sourceFields":["subject"]}}}'
+STATUS="$(curl -sS -o "$TMP/ai-off.json" -w '%{http_code}' -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -X POST "$API/tables/smoke_tickets/fields" --data "{\"companyId\":\"$COMPANY_ID\",\"field\":$AI_FIELD}")"
+if [[ "$STATUS" != "403" ]] || ! jq -e '.code == "disabled"' "$TMP/ai-off.json" >/dev/null; then
+  echo "expected 403 disabled for an AI column before the switch, got $STATUS $(cat "$TMP/ai-off.json")" >&2; exit 1
+fi
+apps_bridge decisions.set_settings "{\"companyId\":\"$COMPANY_ID\",\"params\":{\"columns\":true}}" | jq -e '.data.columns == true' >/dev/null
+api_post "/tables/smoke_tickets/fields" "{\"companyId\":\"$COMPANY_ID\",\"field\":$AI_FIELD}" \
+  | jq -e '[.fields[] | select(.name == "refund" and .kind == "boolean" and .options.decision.sourceFields == ["subject"])] | length == 1' >/dev/null
+STATUS="$(curl -sS -o "$TMP/ai-source.json" -w '%{http_code}' -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -X POST "$API/tables/smoke_tickets/fields/subject/remove" --data "{\"companyId\":\"$COMPANY_ID\"}")"
+if [[ "$STATUS" != "400" ]] || ! jq -e '.error | contains("feeds AI column \"refund\"")' "$TMP/ai-source.json" >/dev/null; then
+  echo "removing an AI column's source must be refused, got $STATUS $(cat "$TMP/ai-source.json")" >&2; exit 1
+fi
+# The column fills in the background straight after it is created.
+AI_DONE=""
+for _ in $(seq 1 30); do
+  api_get "/tables/smoke_tickets" >"$TMP/ai-table.json"
+  if [[ -n "${KYOUBE_SMOKE_DECISIONS_KEY:-}" ]]; then
+    jq -e '(.aiColumns.refund.auto + .aiColumns.refund.review) == 2' "$TMP/ai-table.json" >/dev/null && { AI_DONE=1; break; }
+  else
+    jq -e '.aiColumns.refund.error >= 1' "$TMP/ai-table.json" >/dev/null && { AI_DONE=1; break; }
+  fi
+  sleep 1
+done
+[[ -n "$AI_DONE" ]] || { echo "the AI column did not fill: $(cat "$TMP/ai-table.json")" >&2; exit 1; }
+# The review lane holds exactly the cells counted as review; each entry has the documented shape.
+api_get "/tables/smoke_tickets/review" >"$TMP/ai-review.json"
+jq -e --slurpfile table "$TMP/ai-table.json" '
+  (.rows | length) == $table[0].aiColumns.refund.review
+  and (.rows | all(.field == "refund" and (.rowId | type) == "string" and has("suggestion") and has("confidence") and has("decisionId") and has("updatedAt")))' "$TMP/ai-review.json" >/dev/null \
+  || { echo "the review lane does not match the cell counts: $(cat "$TMP/ai-review.json") vs $(jq -c .aiColumns "$TMP/ai-table.json")" >&2; exit 1; }
+if [[ -z "${KYOUBE_SMOKE_DECISIONS_KEY:-}" ]]; then
+  jq -e '.rows == []' "$TMP/ai-review.json" >/dev/null || { echo "an unreachable provider must leave nothing to review" >&2; exit 1; }
+  api_post "/tables/smoke_tickets/rows/query" "{\"companyId\":\"$COMPANY_ID\"}" | jq -e '[.rows[] | select(.refund != null)] | length == 0' >/dev/null \
+    || { echo "an unreachable provider must leave AI cells empty" >&2; exit 1; }
+  api_get "/decisions/status" | jq -e '.budget.used == 0' >/dev/null || { echo "failed AI fills must not use budget" >&2; exit 1; }
+fi
+curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/companies/$COMPANY_ID/activity?limit=200" \
+  | jq -e 'tostring | test("Please refund my order") | not' >/dev/null || { echo "the activity log leaked an AI column's source value" >&2; exit 1; }
+echo "    AI columns: switch, source check, background fill and budget ok"
 
 echo "==> files: a project's folder is browsable and editable from the action bridge"
 # kyoube.files adds a Files tab to the project page. It has no board-API routes

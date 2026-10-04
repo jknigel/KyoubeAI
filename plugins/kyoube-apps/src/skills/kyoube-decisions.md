@@ -72,3 +72,5 @@ The tools are the same: `decisions_status` and `decisions_decide` (`state` or `r
 `disabled` (switched off or no provider), `budget_exceeded` (today's cap is used up; stop and tell
 the person), `too_large` (send less state), `provider_unavailable` or `timeout` (try once more later),
 `provider_rejected` (the company's key or model is wrong; tell the person).
+
+For answers kept in a Data table and refreshed automatically, use an AI column (kyoube-data skill, "AI columns").
