@@ -752,8 +752,10 @@ else
   api_get "/decisions/status" | jq -e '.available == true and .budget.used == 0' >/dev/null \
     || { echo "a failed provider call must not use budget" >&2; exit 1; }
 fi
+# The key actually in use, the operator's real one included; an empty key would match everything.
+[[ -n "$DECISIONS_KEY" ]] || { echo "the decisions key is empty" >&2; exit 1; }
 curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/companies/$COMPANY_ID/activity?limit=200" \
-  | jq -e 'tostring | contains("smoke-not-a-real-key") | not' >/dev/null || { echo "the activity log leaked the decisions key" >&2; exit 1; }
+  | jq -e --arg key "$DECISIONS_KEY" 'tostring | contains($key) | not' >/dev/null || { echo "the activity log leaked the decisions key" >&2; exit 1; }
 echo "    decisions: config, secret, switch and budget release ok"
 
 echo "==> decisions in apps: declared sets, a person confirms them at publish, the runtime reports them"
