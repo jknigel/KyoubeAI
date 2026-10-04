@@ -63,17 +63,24 @@ export function PublishDisclosure(props: { preview: PublishPreviewData; appName:
   );
 }
 
-/** The dialog around the disclosure: publishes or rolls back once the person has confirmed. */
-export function PublishDialog(props: { slug: string; appName: string; mode: "publish" | "rollback"; version: number | "latest"; preview: PublishPreviewData; onDone: () => void; onCancel: () => void }) {
+/**
+ * The dialog around the disclosure: publishes or rolls back once the person has confirmed. It always
+ * names the version the disclosure was built from, never "latest", so a draft saved while the dialog
+ * is open cannot be published under this confirmation. The tick belongs to one mode and version: shown
+ * anything else, the dialog asks again.
+ */
+export function PublishDialog(props: { slug: string; appName: string; mode: "publish" | "rollback"; preview: PublishPreviewData; onDone: () => void; onCancel: () => void }) {
   const toast = usePluginToast();
   const publish = usePluginAction("apps.publish");
   const rollback = usePluginAction("apps.rollback");
-  const [confirmed, setConfirmed] = useState(false);
+  const shown = `${props.mode}:${props.preview.version}`;
+  const [confirmedFor, setConfirmedFor] = useState<string | null>(null);
+  const confirmed = confirmedFor === shown;
   const [busy, setBusy] = useState(false);
   const ready = !props.preview.changed || confirmed;
   const go = () => {
     setBusy(true);
-    const params = { slug: props.slug, decisionsConfirmed: props.preview.changed && confirmed, ...(props.version === "latest" ? {} : { version: props.version }) };
+    const params = { slug: props.slug, version: props.preview.version, decisionsConfirmed: props.preview.changed && confirmed };
     (props.mode === "publish" ? publish(params) : rollback(params))
       .then(() => { toast({ title: props.mode === "publish" ? `Published v${props.preview.version}` : "Rolled back", tone: "success" }); props.onDone(); })
       .catch((err: unknown) => { toast({ title: errorText(err), tone: "error" }); })
@@ -82,7 +89,7 @@ export function PublishDialog(props: { slug: string; appName: string; mode: "pub
   return (
     <div className="flex flex-col gap-2 rounded border p-3 text-sm">
       <div className="font-medium">{props.mode === "publish" ? `Publish version ${props.preview.version}?` : `Roll back to version ${props.preview.version}?`}</div>
-      <PublishDisclosure preview={props.preview} appName={props.appName} confirmed={confirmed} onConfirmedChange={setConfirmed} />
+      <PublishDisclosure preview={props.preview} appName={props.appName} confirmed={confirmed} onConfirmedChange={(next) => setConfirmedFor(next ? shown : null)} />
       <div className="flex gap-2">
         <button type="button" className={button} disabled={!ready || busy} onClick={go}>{props.mode === "publish" ? "Publish" : "Roll back"}</button>
         <button type="button" className={button} onClick={props.onCancel}>Cancel</button>
