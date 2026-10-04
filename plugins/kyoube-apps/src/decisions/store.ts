@@ -103,13 +103,18 @@ export async function recordDecisions(pool: Pool, rows: DecisionLogRow[]): Promi
 
 export type Outcome = "human_confirmed" | "human_changed";
 
+/**
+ * Records what a person did with one answer, once. False when no such decision is logged or it
+ * already has an outcome: the guard is in the statement itself, so two reports racing for the same
+ * decision cannot both land — the row lock makes the second one re-check and find it taken.
+ */
 export async function recordOutcome(
   pool: Pool,
   input: { companyId: string; decisionId: string; questionKey: string; outcome: Outcome; via: "data_page" | "app"; by: string },
 ): Promise<boolean> {
   const result = await pool.query(
     `UPDATE kyoube_meta.decisions SET outcome = $4, outcome_via = $5, outcome_by = $6, outcome_at = now()
-     WHERE company_id = $1 AND decision_id = $2 AND question_key = $3`,
+     WHERE company_id = $1 AND decision_id = $2 AND question_key = $3 AND outcome IS NULL`,
     [input.companyId, input.decisionId, input.questionKey, input.outcome, input.via, input.by],
   );
   return (result.rowCount ?? 0) > 0;

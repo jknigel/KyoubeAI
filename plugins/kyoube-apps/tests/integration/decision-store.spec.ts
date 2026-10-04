@@ -66,6 +66,9 @@ describe("decision log", () => {
     expect(await getLoggedDecision(db.pool, C, row.decisionId, "urgency")).toMatchObject({ answer: "today", status: "review", outcome: null, surface: "agents" });
     expect(await recordOutcome(db.pool, { companyId: C, decisionId: row.decisionId, questionKey: "urgency", outcome: "human_changed", via: "data_page", by: "user-1" })).toBe(true);
     expect(await getLoggedDecision(db.pool, C, row.decisionId, "urgency")).toMatchObject({ outcome: "human_changed" });
+    // An outcome is recorded once: a second one changes nothing and says so.
+    expect(await recordOutcome(db.pool, { companyId: C, decisionId: row.decisionId, questionKey: "urgency", outcome: "human_confirmed", via: "app", by: "user-2" })).toBe(false);
+    expect(await getLoggedDecision(db.pool, C, row.decisionId, "urgency")).toMatchObject({ outcome: "human_changed" });
     expect(await recordOutcome(db.pool, { companyId: C, decisionId: randomUUID(), questionKey: "queue", outcome: "human_confirmed", via: "app", by: "u" })).toBe(false);
   });
   it("purges rows older than 90 days, both log and usage", async () => {
