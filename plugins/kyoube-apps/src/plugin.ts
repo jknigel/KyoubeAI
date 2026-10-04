@@ -6,6 +6,11 @@ import { handleAppsApiRequest } from "./apps/api-routes.js";
 import { MAX_APP_NOTES } from "./apps/manifest.js";
 import { AppService, parseRuntimeMethod, type AppServiceDeps } from "./apps/service.js";
 import { registerAppTools } from "./apps/tools.js";
+import { handleDecisionsApiRequest } from "./decisions/api-routes.js";
+import { API_KEY_CONFIG_PATH, ProviderResolver, validateDecisionsConfig } from "./decisions/config.js";
+import { DecisionService, type DecisionServiceDeps } from "./decisions/service.js";
+import { purgeDecisionData } from "./decisions/store.js";
+import { registerDecisionTools } from "./decisions/tools.js";
 import { DataError } from "./data/errors.js";
 import { parseLevel, type DataActor } from "./data/permissions.js";
 import { DataService, type DataServiceDeps, type MutationEvent } from "./data/service.js";
@@ -23,6 +28,7 @@ export interface AppsPluginDeps {
   migrate?: (pool: Pool, dir: string) => Promise<unknown>;
   createService?: (deps: DataServiceDeps) => DataService;
   createAppService?: (deps: AppServiceDeps) => AppService;
+  createDecisionService?: (deps: DecisionServiceDeps) => DecisionService;
 }
 
 type Params = Record<string, unknown>;
@@ -109,12 +115,28 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
   // closure — never in a module-level `currentApps`, which two plugin
   // instances in one process would share.
   let apps: AppService | null = null;
+  // The decision service and the provider resolver live in this closure for the same reason the
+  // other services do (ruling P2-R5); `onConfigChanged` drops the resolver's cached keys.
+  let decisions: DecisionService | null = null;
+  let providers: ProviderResolver | null = null;
   let logger: PluginLogger | null = null;
   // The skill import the `skills.install` route runs; lives here for the same
   // reason the services do (`onApiRequest` runs outside `setup`).
   let installSkillsForCompany: ((companyId: string) => Promise<unknown>) | null = null;
 
   return definePlugin({
+    // One worker serves every company's config (typed-decisions provider per company).
+    multiCompanyConfig: true,
+
+    async onConfigChanged(_config, context) {
+      // Config is read per call; only the cached key has to go so a rotated key is used at once.
+      providers?.invalidate(context?.companyId ?? null);
+    },
+
+    async onValidateConfig(config) {
+      return validateDecisionsConfig(config);
+    },
+
     async setup(ctx: PluginContext) {
       const config = await deps.loadKyoubeConfig();
       const dbPool = (deps.createPool ?? defaultCreatePool)(config.dataDatabaseUrl);
@@ -168,6 +190,31 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
         onMutationError: appsActivity.onError,
       });
       apps = appService;
+      const providerResolver = new ProviderResolver({
+        getConfig: (companyId) => ctx.config.get(companyId),
+        resolveSecret: (ref, companyId) => ctx.secrets.resolve(ref as never, { companyId, configPath: API_KEY_CONFIG_PATH }),
+      });
+      providers = providerResolver;
+      const decisionService = (deps.createDecisionService ?? ((decisionDeps) => new DecisionService(decisionDeps)))({
+        pool: dbPool,
+        data: dataService,
+        providers: providerResolver,
+        // Host-side fetch: the core resolves DNS, refuses private addresses and traces the call.
+        fetch: (url, init) => ctx.http.fetch(url, init),
+        onActivity: async (event) => {
+          await ctx.activity.log({
+            companyId: event.companyId,
+            message: `Kyoube decisions: ${event.summary}`,
+            entityType: "kyoube_decision",
+            entityId: event.entityId,
+            metadata: { surface: event.surface, via: event.via, actorKind: event.actor.kind, actorId: event.actor.id, runId: event.actor.runId ?? null },
+          });
+        },
+        onActivityError: (error, event) => ctx.logger.warn("decisions activity log failed", { companyId: event.companyId, surface: event.surface, error: String(error) }),
+        log: (message, meta) => ctx.logger.warn(message, meta),
+      });
+      decisions = decisionService;
+      registerDecisionTools(ctx, decisionService);
 
       registerTools(ctx, dataService);
       registerAppTools(ctx, appService);
@@ -281,6 +328,14 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
       // AppService checks against the app's declared tables.
       action("apps.data", (c, a, p) => appService.runtimeData(c, a, str(p, "slug"), parseRuntimeMethod(p.method), (p.params ?? {}) as Params));
 
+      // ---- typed decisions (same actor rules; DecisionService checks the admin gate) ----
+      action("decisions.settings", (c, a) => decisionService.getSettings(c, a));
+      // Only the five settings are passed on: the host adds its own keys (`companyId`, and possibly
+      // others) to every action's params, and the service's schema is strict.
+      const DECISION_SETTING_KEYS = ["agents", "columns", "apps", "guardrail", "dailyCap"] as const;
+      action("decisions.set_settings", (c, a, p) => decisionService.setSettings(c, a,
+        Object.fromEntries(DECISION_SETTING_KEYS.filter((key) => p[key] !== undefined).map((key) => [key, p[key]]))));
+
       // ---- maintenance ----
       ctx.jobs.register(PURGE_JOB_KEY, async () => {
         const companies = await dbPool.query<{ company_id: string }>("SELECT company_id FROM kyoube_meta.companies");
@@ -296,6 +351,12 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
             ctx.logger.error("purge failed", { companyId: row.company_id, error: String(error) });
           }
         }
+        try {
+          const purged = await purgeDecisionData(dbPool);
+          if (purged.decisions + purged.usage > 0) ctx.logger.info("purged old decision log rows", purged);
+        } catch (error) {
+          ctx.logger.error("decision log purge failed", { error: String(error) });
+        }
       });
 
       ctx.logger.info(`${PLUGIN_ID} worker ready`);
@@ -307,7 +368,8 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
       // caller of an `/apps` route was never asking for "the data service".
       const dataService = service;
       const appService = apps;
-      if (!dataService || !appService) return { status: 503, body: { error: "plugin not ready" } };
+      const decisionService = decisions;
+      if (!dataService || !appService || !decisionService) return { status: 503, body: { error: "plugin not ready" } };
       // Ruling P2-R24: the raw error stays out of the response; the operator log
       // gets it instead (via the logger captured during `setup`).
       const log = logger;
@@ -330,14 +392,16 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
       }
       // The apps dispatcher answers every `apps.*` route and returns null for
       // anything else, so a data route falls through untouched.
-      return (await handleAppsApiRequest(appService, input, onError)) ?? handleApiRequest(dataService, input, onError);
+      return (await handleAppsApiRequest(appService, input, onError))
+        ?? (await handleDecisionsApiRequest(decisionService, input, onError))
+        ?? handleApiRequest(dataService, input, onError);
     },
 
     async onHealth() {
       // A worker whose `setup` has not finished (or has shut down) has nothing
       // to serve — `onApiRequest` answers 503 — so it must not report `ok`. The
       // pool is assigned before the migrations run, hence all three are checked.
-      if (!pool || !service || !apps) return { status: "degraded", message: `${PLUGIN_ID} not ready` };
+      if (!pool || !service || !apps || !decisions) return { status: "degraded", message: `${PLUGIN_ID} not ready` };
       try {
         await pool.query("SELECT 1");
         return { status: "ok", message: `${PLUGIN_ID} ready` };
@@ -355,6 +419,8 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
         pool = null;
         service = null;
         apps = null;
+        decisions = null;
+        providers = null;
         logger = null;
         installSkillsForCompany = null;
       }
