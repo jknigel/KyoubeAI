@@ -32,7 +32,10 @@ export const DECISIONS_CONFIG_SCHEMA = {
       description: "Only for the custom provider. Must start with https://; the worker calls <base URL>/v1/systemone.",
     },
     decisionsApiKey: {
-      type: "string",
+      // The core validates the saved value against this schema with ajv, and the value is the
+      // `{ type: "secret_ref", ... }` object, so `string` alone would reject every save (smoke, core
+      // 2026.916.1). The settings form still renders the secret picker, which keys on `format`.
+      type: ["string", "object"],
       format: "secret-ref",
       title: "Typed decisions: API key",
       description: "A company secret holding the provider's API key.",

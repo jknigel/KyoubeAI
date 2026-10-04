@@ -56,8 +56,11 @@ docker compose
 ```
 
 Six plugins ship in the image: `@kyoube/plugin-terminal` (`plugins/kyoube-terminal`),
-`@kyoube/plugin-apps` (`plugins/kyoube-apps`), which carries both the Data layer and the Apps module in
-one worker because apps need in-process access to the data service and plugins cannot call each other,
+`@kyoube/plugin-apps` (`plugins/kyoube-apps`), which carries the Data layer, the Apps module and typed
+decisions (`docs/decisions.md`) in one worker because apps need in-process access to the data service and
+plugins cannot call each other. It is the only Kyoube plugin that calls out of the server:
+`ctx.http.fetch` to the company's chosen `/v1/systemone` provider, with the key read through
+`ctx.secrets`,
 `@kyoube/plugin-files` (`plugins/kyoube-files`), the Files tab on project pages,
 `@kyoube/plugin-studio` (`plugins/kyoube-studio`), the Studio layout, and
 `@kyoube/plugin-agent-rules` (`plugins/kyoube-agent-rules`), described below, and

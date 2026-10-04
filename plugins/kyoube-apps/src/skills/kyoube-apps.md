@@ -142,3 +142,6 @@ kyoube.ready().then(load);
 
 Tell the user the app's slug and link (`/<company>/app-artifact/<slug>`), which version is published and
 which is the latest draft, and which tables it uses.
+
+To classify, score or check rows with the company's typed-decision model, see the kyoube-decisions
+skill (`POST /decisions/decide` with `rows`).

@@ -4,6 +4,10 @@ All notable changes to KyoubeAI are recorded here, in terms of what changed for 
 building on it. The format is loosely [Keep a Changelog](https://keepachangelog.com/); versioning is
 [SemVer](https://semver.org/).
 
+## Unreleased
+
+Typed decisions (`docs/decisions.md`): agents can ask a Jev-class model closed questions over `POST /decisions/decide` and the `decisions_*` tools, with a per-company provider, key secret, switches and daily cap. `kyoube.apps` 0.5.0 gains `http.outbound` and `secrets.read-ref`; `ensure-plugins` grants them on upgrade, and nothing is sent until an instance admin sets a provider and a company admin switches a use on.
+
 ## 1.3.0 - 2026-10-03
 
 ### Added

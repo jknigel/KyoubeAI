@@ -17,7 +17,7 @@ import { DataService, type DataServiceDeps, type MutationEvent } from "./data/se
 import { runMetaMigrations } from "./db/migrate.js";
 import { createPool as defaultCreatePool } from "./db/pool.js";
 import type { KyoubeRuntimeConfig } from "./kyoube-config.js";
-import { APPS_SKILL_KEY, DATA_SKILL_KEY, PLUGIN_ID, PURGE_JOB_KEY } from "./manifest.js";
+import { APPS_SKILL_KEY, DATA_SKILL_KEY, DECISIONS_SKILL_KEY, PLUGIN_ID, PURGE_JOB_KEY } from "./manifest.js";
 import { RoleResolver } from "./roles.js";
 import { registerTools } from "./tools.js";
 
@@ -285,6 +285,7 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
       const installSkills = async (companyId: string) => ({
         data: await ctx.skills.managed.reconcile(DATA_SKILL_KEY, companyId),
         apps: await ctx.skills.managed.reconcile(APPS_SKILL_KEY, companyId),
+        decisions: await ctx.skills.managed.reconcile(DECISIONS_SKILL_KEY, companyId),
       });
       installSkillsForCompany = installSkills;
       const skillsInstalled = new Set<string>();

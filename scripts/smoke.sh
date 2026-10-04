@@ -652,7 +652,7 @@ api_post "/tables/smoke_contacts/rows/delete" "{\"companyId\":\"$COMPANY_ID\",\"
 api_post "/tables/smoke_contacts/rows/count" "{\"companyId\":\"$COMPANY_ID\"}" | jq -e '.count == 1' >/dev/null
 echo "    data round-trip ok"
 
-# The 17 data_* and 7 apps_* tools (both registered under the "kyoube.apps:"
+# The 17 data_*, 7 apps_* and 2 decisions_* tools (both registered under the "kyoube.apps:"
 # prefix, since Phase 3 added the Apps tools to the same plugin) are what an
 # agent actually calls, through the core's tool gateway. Executing one from
 # here is not possible without a live agent run: POST
@@ -663,10 +663,10 @@ echo "    data round-trip ok"
 # that the host registered the whole tool surface (Step 3 of the task brief
 # covers real agent execution manually).
 curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/plugins/tools" >"$TMP/tools.json"
-jq -e '[.[] | select(.name | startswith("kyoube.apps:"))] | length == 24' "$TMP/tools.json" >/dev/null \
-  || { echo "expected 24 kyoube.apps tools (17 data_* + 7 apps_*), got: $(jq -c '[.[] | select(.name | startswith("kyoube.apps:")) | .name]' "$TMP/tools.json")" >&2; exit 1; }
-jq -e 'map(.name) | index("kyoube.apps:data_sql_select") != null and index("kyoube.apps:data_insert") != null and index("kyoube.apps:apps_create") != null and index("kyoube.apps:apps_publish") != null' "$TMP/tools.json" >/dev/null
-echo "    24 kyoube.apps:data_*/apps_* tools registered with the host tool dispatcher"
+jq -e '[.[] | select(.name | startswith("kyoube.apps:"))] | length == 26' "$TMP/tools.json" >/dev/null \
+  || { echo "expected 26 kyoube.apps tools (17 data_* + 7 apps_* + 2 decisions_*), got: $(jq -c '[.[] | select(.name | startswith("kyoube.apps:")) | .name]' "$TMP/tools.json")" >&2; exit 1; }
+jq -e 'map(.name) | index("kyoube.apps:data_sql_select") != null and index("kyoube.apps:data_insert") != null and index("kyoube.apps:apps_create") != null and index("kyoube.apps:apps_publish") != null and index("kyoube.apps:decisions_decide") != null' "$TMP/tools.json" >/dev/null
+echo "    26 kyoube.apps:data_*/apps_*/decisions_* tools registered with the host tool dispatcher"
 
 echo "==> the activity log summarises the data mutations but never the rows"
 curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/companies/$COMPANY_ID/activity?limit=200" \
@@ -715,6 +715,46 @@ STATUS="$(curl -sS -o "$TMP/apps-undeclared.json" -w '%{http_code}' -H "Authoriz
 jq -e '.code == "WORKER_ERROR" and (.message | contains("forbidden"))' "$TMP/apps-undeclared.json" >/dev/null \
   || { echo "expected a WORKER_ERROR with a 'forbidden' message, got: $(cat "$TMP/apps-undeclared.json")" >&2; exit 1; }
 echo "    apps round-trip ok"
+
+echo "==> decisions: off by default, provider config with a secret, budget kept on a failed call"
+api_get "/decisions/status" | jq -e '.available == false and .enabled == false and .configured == false' >/dev/null
+STATUS="$(curl -sS -o "$TMP/decide-off.json" -w '%{http_code}' -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -X POST "$API/decisions/decide" --data "{\"companyId\":\"$COMPANY_ID\",\"state\":\"hello\",\"questions\":{\"q\":{\"type\":\"check\",\"statement\":\"It says hello.\"}}}")"
+if [[ "$STATUS" != "403" ]] || ! jq -e '.code == "disabled"' "$TMP/decide-off.json" >/dev/null; then
+  echo "expected 403 disabled before setup, got $STATUS $(cat "$TMP/decide-off.json")" >&2; exit 1
+fi
+# A real provider only when the operator gives a key; otherwise an unreachable https host proves
+# config, secret binding, the switch and the budget release without any outside call.
+DECISIONS_PROVIDER="custom"; DECISIONS_MODEL="jev-1.13.0"; DECISIONS_BASE="https://decisions.invalid"
+DECISIONS_KEY="${KYOUBE_SMOKE_DECISIONS_KEY:-smoke-not-a-real-key}"
+if [[ -n "${KYOUBE_SMOKE_DECISIONS_KEY:-}" ]]; then DECISIONS_PROVIDER="openrouter"; DECISIONS_MODEL="${KYOUBE_SMOKE_DECISIONS_MODEL:-typesafe/jev-1.13}"; fi
+SECRET_ID="$(curl -fsS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -X POST "$BASE_URL/api/companies/$COMPANY_ID/secrets" \
+  --data "$(jq -cn --arg v "$DECISIONS_KEY" '{name:"smoke-decisions-key", value:$v}')" | jq -r '.id')"
+[[ -n "$SECRET_ID" && "$SECRET_ID" != "null" ]] || { echo "could not create the decisions key secret" >&2; exit 1; }
+curl -fsS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -X POST "$BASE_URL/api/plugins/kyoube.apps/config" \
+  --data "$(jq -cn --arg c "$COMPANY_ID" --arg p "$DECISIONS_PROVIDER" --arg m "$DECISIONS_MODEL" --arg b "$DECISIONS_BASE" --arg s "$SECRET_ID" \
+    '{companyId:$c, configJson:{decisionsProvider:$p, decisionsModel:$m, decisionsBaseUrl:$b, decisionsApiKey:{type:"secret_ref", secretId:$s, version:"latest"}}}')" >/dev/null
+apps_bridge decisions.set_settings "{\"companyId\":\"$COMPANY_ID\",\"params\":{\"agents\":true}}" | jq -e '.data.agents == true' >/dev/null
+apps_bridge decisions.settings "{\"companyId\":\"$COMPANY_ID\",\"params\":{}}" >"$TMP/decision-settings.json"
+jq -e --arg p "$DECISIONS_PROVIDER" '.data.provider.configured == true and .data.provider.provider == $p and .data.provider.keyResolves == true' "$TMP/decision-settings.json" >/dev/null \
+  || { echo "decision settings did not resolve the key: $(cat "$TMP/decision-settings.json")" >&2; exit 1; }
+STATUS="$(curl -sS -o "$TMP/decide.json" -w '%{http_code}' -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -X POST "$API/decisions/decide" --data "{\"companyId\":\"$COMPANY_ID\",\"state\":\"hello\",\"questions\":{\"q\":{\"type\":\"check\",\"statement\":\"It says hello.\"}}}")"
+if [[ -n "${KYOUBE_SMOKE_DECISIONS_KEY:-}" ]]; then
+  if [[ "$STATUS" != "200" ]] || ! jq -e '.answers.q.type == "check" and (.answers.q.value | type) == "boolean"' "$TMP/decide.json" >/dev/null; then
+    echo "expected a real decision, got $STATUS $(cat "$TMP/decide.json")" >&2; exit 1
+  fi
+  api_get "/decisions/status" | jq -e '.budget.used >= 1' >/dev/null
+else
+  if [[ "$STATUS" != "503" ]] || ! jq -e '.code == "provider_unavailable"' "$TMP/decide.json" >/dev/null; then
+    echo "expected 503 provider_unavailable from an unreachable provider, got $STATUS $(cat "$TMP/decide.json")" >&2; exit 1
+  fi
+  api_get "/decisions/status" | jq -e '.available == true and .budget.used == 0' >/dev/null \
+    || { echo "a failed provider call must not use budget" >&2; exit 1; }
+fi
+curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/companies/$COMPANY_ID/activity?limit=200" \
+  | jq -e 'tostring | contains("smoke-not-a-real-key") | not' >/dev/null || { echo "the activity log leaked the decisions key" >&2; exit 1; }
+echo "    decisions: config, secret, switch and budget release ok"
 
 echo "==> files: a project's folder is browsable and editable from the action bridge"
 # kyoube.files adds a Files tab to the project page. It has no board-API routes
