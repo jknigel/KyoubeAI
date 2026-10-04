@@ -99,3 +99,18 @@ describe("SDK install", () => {
     expect(env.posts).toHaveLength(posted);
   });
 });
+
+describe("typed decisions", () => {
+  it("posts decide and decideOutcome as protocol requests", async () => {
+    vi.useFakeTimers();
+    const env = await install("nonce-abcdefghijklmnop");
+    const sdk = env.sdk() as unknown as { decide(set: string, input: unknown): Promise<unknown>; decideOutcome(id: string, question: string, value: unknown): Promise<unknown> };
+    const decided = sdk.decide("triage", { rowId: "r1" });
+    const sent = env.posts.at(-1)!.message;
+    expect(sent).toMatchObject({ method: "decisions.decide", nonce: "nonce-abcdefghijklmnop", params: { set: "triage", input: { rowId: "r1" } } });
+    env.deliver({ source: env.parent, data: { kyoube: 1, id: sent.id, result: { decisionId: "d1", answers: {} } } });
+    await expect(decided).resolves.toEqual({ decisionId: "d1", answers: {} });
+    void sdk.decideOutcome("d1", "urgent", false);
+    expect(env.posts.at(-1)!.message).toMatchObject({ method: "decisions.outcome", params: { decisionId: "d1", question: "urgent", value: false } });
+  });
+});

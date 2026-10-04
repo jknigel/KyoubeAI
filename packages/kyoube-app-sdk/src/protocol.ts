@@ -1,5 +1,5 @@
 export const KYOUBE_PROTOCOL = 1 as const;
-export const ALLOWED_METHODS = ["data.query", "data.get", "data.count", "data.describe", "data.insert", "data.update", "data.delete", "ui.toast", "ui.openApp"] as const;
+export const ALLOWED_METHODS = ["data.query", "data.get", "data.count", "data.describe", "data.insert", "data.update", "data.delete", "ui.toast", "ui.openApp", "decisions.decide", "decisions.outcome"] as const;
 export type KyoubeMethod = (typeof ALLOWED_METHODS)[number];
 
 /**

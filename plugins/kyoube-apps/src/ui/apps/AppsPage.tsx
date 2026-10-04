@@ -71,13 +71,15 @@ function Runner(props: { companyId: string; userId: string | null; slug: string 
   const toast = usePluginToast();
   const runtime = usePluginAction("apps.runtime");
   const data = usePluginAction("apps.data");
+  const decide = usePluginAction("apps.decide");
+  const outcome = usePluginAction("apps.decision_outcome");
   const [state, setState] = useState<{ context: unknown; source: string } | null>(null);
   const [error, setError] = useState<{ code: string; message: string } | null>(null);
   const [showSource, setShowSource] = useState(false);
   // Ruling P1-R15: both actions are read through refs so neither `load` nor
   // the effect below has to depend on an unstable function identity.
-  const actionsRef = useRef({ runtime, data });
-  actionsRef.current = { runtime, data };
+  const actionsRef = useRef({ runtime, data, decide, outcome });
+  actionsRef.current = { runtime, data, decide, outcome };
 
   const load = useCallback(() => {
     setError(null);
@@ -110,6 +112,8 @@ function Runner(props: { companyId: string; userId: string | null; slug: string 
           onData={(method, params) => actionsRef.current.data({ slug: props.slug, method, params })}
           onToast={(title, tone) => { toast({ title, tone: toastTone(tone) }); }}
           onOpenApp={(slug) => navigation.navigate(appsPagePath(slug))}
+          onDecide={(set, input) => actionsRef.current.decide({ slug: props.slug, set, input })}
+          onDecisionOutcome={(decisionId, question, value) => actionsRef.current.outcome({ slug: props.slug, decisionId, question, value })}
         />
       )}
     </div>

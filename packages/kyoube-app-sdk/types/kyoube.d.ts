@@ -21,6 +21,8 @@ export interface KyoubeContext {
   viewer: { id: string | null; name: string; level: "none" | "read" | "write" | "schema" };
   app: { slug: string; name: string; version: number };
   tables: string[];
+  /** The decision sets this app declares, and whether the company lets apps use them right now. */
+  decisions: { available: boolean; sets: string[] };
 }
 export type Where = { field: string; op: "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "in" | "contains" | "starts_with" | "is_null" | "is_not_null"; value?: unknown } | { and: Where[] } | { or: Where[] } | { not: Where };
 export interface QuerySpec { where?: Where; orderBy?: Array<{ field: string; direction?: "asc" | "desc" }>; limit?: number; offset?: number; fields?: string[] }
@@ -34,12 +36,25 @@ export interface KyoubeData {
   update(table: string, target: { ids?: string[]; where?: Where }, patch: Record<string, unknown>): Promise<{ affected: number; rows: Row[] }>;
   delete(table: string, target: { ids?: string[]; where?: Where }): Promise<{ affected: number }>;
 }
+/** One answer: an option key (choice), a level label (score) or true/false (check). */
+export interface KyoubeAnswer {
+  type: "choice" | "score" | "check";
+  value: string | boolean;
+  confidence: number;
+  /** `review`: show it to the person as a suggestion; never act on it alone. */
+  status: "auto" | "review";
+}
+export interface KyoubeDecision { decisionId: string | null; model: string; answers: Record<string, KyoubeAnswer> }
 export interface Kyoube {
   version: 1;
   context: KyoubeContext | null;
   ready(): Promise<KyoubeContext>;
   data: KyoubeData;
   ui: { toast(title: string, tone?: "info" | "success" | "warn" | "error"): Promise<void>; openApp(slug: string): Promise<void> };
+  /** Ask a decision set the manifest declares, about a stored row or about unsaved values of the set's fields. */
+  decide(set: string, input: { rowId: string } | { values: Record<string, unknown> }): Promise<KyoubeDecision>;
+  /** Record what the person chose for one answer in a review lane: only for this app's own decisions for them, within 24 hours, once. */
+  decideOutcome(decisionId: string, question: string, value: string | boolean): Promise<{ outcome: "human_confirmed" | "human_changed" }>;
   Error: new (code: string, message: string) => Error & { code: string };
 }
 declare global {

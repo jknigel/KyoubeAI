@@ -44,4 +44,11 @@ describe("protocol guards", () => {
     expect(isKyoubeReady({ kyoube: 1, event: "ready", context: {} })).toBe(true);
     expect(isKyoubeReady({ kyoube: 1, event: "other" })).toBe(false);
   });
+  it("allows the two typed-decision methods, nonce and all", () => {
+    expect(ALLOWED_METHODS).toContain("decisions.decide");
+    expect(ALLOWED_METHODS).toContain("decisions.outcome");
+    expect(isKyoubeRequest(request({ method: "decisions.decide", params: { set: "triage", input: { rowId: "r1" } } }))).toBe(true);
+    expect(isKyoubeRequest(request({ method: "decisions.outcome", params: { decisionId: "d", question: "q", value: true } }))).toBe(true);
+    expect(isKyoubeRequest(request({ method: "decisions.ask" }))).toBe(false);
+  });
 });

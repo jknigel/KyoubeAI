@@ -100,6 +100,10 @@ function scrubNonceScript(): void {
       toast: (title: string, tone: "info" | "success" | "warn" | "error" = "info") => call("ui.toast", { title, tone }),
       openApp: (slug: string) => call("ui.openApp", { slug }),
     },
+    // Typed decisions (docs/decisions.md): the app names a set its manifest declares and a row or
+    // unsaved values; the host builds the state from the set's declared fields and nothing else.
+    decide: (set: string, input: { rowId: string } | { values: Record<string, unknown> }) => call("decisions.decide", { set, input }),
+    decideOutcome: (decisionId: string, question: string, value: string | boolean) => call("decisions.outcome", { decisionId, question, value }),
     Error: KyoubeAppError,
   };
   Object.defineProperty(window, "kyoube", { value: Object.freeze(kyoube), writable: false, configurable: false });

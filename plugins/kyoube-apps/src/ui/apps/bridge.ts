@@ -7,10 +7,14 @@ export type RoutedRequest =
   | { kind: "data"; method: string; params: Record<string, unknown> }
   | { kind: "toast"; title: string; tone: string }
   | { kind: "openApp"; slug: string }
+  | { kind: "decide"; set: string; input: Record<string, unknown> }
+  | { kind: "outcome"; decisionId: string; question: string; value: string | boolean }
   | { kind: "reject"; code: string; message: string };
 
 /** Mirrors `APP_SLUG_RE` in `src/apps/manifest.ts` — the host side of the same rule. */
 const SLUG_RE = /^[a-z][a-z0-9-]{1,48}$/;
+/** Mirrors `QUESTION_KEY_RE` in `src/decisions/contract.ts` (not imported: that module is worker-only). */
+const DECISION_KEY_RE = /^[a-z][a-z0-9_]{0,39}$/;
 const MAX_TOAST_TITLE = 200;
 
 /**
@@ -24,7 +28,7 @@ const MAX_TOAST_TITLE = 200;
 const DATA_METHODS = new Set(["query", "get", "count", "describe", "insert", "update", "delete"]);
 
 /** The `DataError` codes the worker throws, as `<code>: <text>` (see `src/data/errors.ts`). */
-const KNOWN_CODES = ["invalid", "forbidden", "not_found", "conflict", "limit"] as const;
+const KNOWN_CODES = ["invalid", "forbidden", "not_found", "conflict", "limit", "disabled", "budget_exceeded", "too_large", "provider_rejected", "provider_unavailable", "timeout"] as const;
 
 /**
  * Keys that mean something to the JavaScript object model rather than to the
@@ -106,6 +110,19 @@ export function routeAppRequest(request: KyoubeRequest): RoutedRequest {
     if (typeof slug !== "string" || !SLUG_RE.test(slug)) return { kind: "reject", code: "invalid", message: "openApp needs a valid slug" };
     return { kind: "openApp", slug };
   }
+  if (request.method === "decisions.decide") {
+    const { set, input } = request.params;
+    if (typeof set !== "string" || !DECISION_KEY_RE.test(set)) return { kind: "reject", code: "invalid", message: "decide needs the name of a decision set the manifest declares" };
+    if (!isPlainObject(input)) return { kind: "reject", code: "invalid", message: "decide needs { rowId } or { values }" };
+    return { kind: "decide", set, input };
+  }
+  if (request.method === "decisions.outcome") {
+    const { decisionId, question, value } = request.params;
+    if (typeof decisionId !== "string" || typeof question !== "string" || !DECISION_KEY_RE.test(question) || (typeof value !== "string" && typeof value !== "boolean")) {
+      return { kind: "reject", code: "invalid", message: "decideOutcome needs a decisionId, a question key, and a string or boolean value" };
+    }
+    return { kind: "outcome", decisionId, question, value };
+  }
   const method = request.method.startsWith("data.") ? request.method.slice("data.".length) : "";
   if (!DATA_METHODS.has(method)) return { kind: "reject", code: "invalid", message: `unknown method "${request.method}"` };
   return { kind: "data", method, params: request.params };
@@ -183,7 +200,9 @@ const MAX_NONCE_MISMATCHES = 3;
  * runner on their own). Nothing is spent on them because nothing is done about
  * them — and a page cannot stop another window posting to it in any case.
  * `toasts` is an additional, smaller ceiling on the one call that puts
- * something on the viewer's screen.
+ * something on the viewer's screen. `decisions` is a third ceiling, like `toasts`: each typed
+ * decision spends one provider request from the company's daily cap, so a frame may ask at most
+ * ten per window. A decision also takes one of the 60 requests; a reported outcome takes only that.
  *
  * The numbers are deliberately far above what a hand-written UI does and far
  * below what a loop does: 60 requests in 10 s is six a second — more than any
@@ -192,7 +211,7 @@ const MAX_NONCE_MISMATCHES = 3;
  * patience: an app that keeps hitting the ceiling for three windows running is
  * not busy, it is looping, and is stopped rather than served forever.
  */
-export const APP_BUDGET = { windowMs: 10_000, requests: 60, toasts: 5, limitedWindows: 3 } as const;
+export const APP_BUDGET = { windowMs: 10_000, requests: 60, toasts: 5, decisions: 10, limitedWindows: 3 } as const;
 
 /**
  * The per-mount state the bridge keeps for one running app: the handshake
@@ -206,7 +225,7 @@ export interface AppGuard {
   /** True when `nonce` is this mount's. A mismatch is counted, and the third one stops the runner. */
   accepts(nonce: unknown): boolean;
   /** True when this call fits the frame's budget. A refusal is counted; three limited windows running stop the runner. */
-  spend(kind: "request" | "toast"): boolean;
+  spend(kind: "request" | "toast" | "decision"): boolean;
   /** The reason this runner stopped, or null while it is still running. */
   stopped(): StopReason | null;
   /** Records a stop the runner decided on itself (a second frame load). Idempotent. */
@@ -219,7 +238,7 @@ export function createAppGuard(nonce: string, opts: { onStop: (reason: StopReaso
   let reason: StopReason | null = null;
   // The calls still inside the window, oldest first; never longer than the
   // budget itself, because a call over the ceiling is refused rather than kept.
-  const spent: Record<"request" | "toast", number[]> = { request: [], toast: [] };
+  const spent: Record<"request" | "toast" | "decision", number[]> = { request: [], toast: [], decision: [] };
   // The start of the window the last refusal fell in, and how many windows in a
   // row have had one.
   let limitedAt: number | null = null;
@@ -259,10 +278,10 @@ export function createAppGuard(nonce: string, opts: { onStop: (reason: StopReaso
       if (mismatches >= MAX_NONCE_MISMATCHES) stop("nonce");
       return false;
     },
-    spend(kind: "request" | "toast"): boolean {
+    spend(kind: "request" | "toast" | "decision"): boolean {
       const at = now();
       const times = spent[kind];
-      const max = kind === "request" ? APP_BUDGET.requests : APP_BUDGET.toasts;
+      const max = kind === "request" ? APP_BUDGET.requests : kind === "toast" ? APP_BUDGET.toasts : APP_BUDGET.decisions;
       while (times.length > 0 && at - times[0]! >= APP_BUDGET.windowMs) times.shift();
       if (times.length >= max) {
         refused(at);
@@ -291,6 +310,10 @@ export interface AppBridgeCallbacks {
   onData: (method: string, params: Record<string, unknown>) => Promise<unknown>;
   onToast: (title: string, tone: string) => void;
   onOpenApp: (slug: string) => void;
+  /** A typed decision (`apps.decide`). Absent, the app is told decisions are not available here. */
+  onDecide?: (set: string, input: Record<string, unknown>) => Promise<unknown>;
+  /** What the person chose in a review lane (`apps.decision_outcome`). */
+  onDecisionOutcome?: (decisionId: string, question: string, value: string | boolean) => Promise<unknown>;
   /** False once the runner has torn down, or once the app navigated its frame — nothing runs after that. */
   isLive: () => boolean;
   /** This mount's nonce and strike count (ruling P4-R18). */
@@ -408,6 +431,32 @@ export async function handleAppMessage(event: AppMessageEvent, target: AppMessag
       return;
     case "reject":
       reply({ error: { code: routed.code, message: routed.message } });
+      return;
+    case "decide":
+      if (!callbacks.guard.spend("decision")) {
+        reply({ error: { code: "limit", message: "limit: too many decisions" } });
+        return;
+      }
+      if (!callbacks.onDecide) {
+        reply({ error: { code: "disabled", message: "disabled: typed decisions are not available here" } });
+        return;
+      }
+      try {
+        reply({ result: await callbacks.onDecide(routed.set, routed.input) });
+      } catch (error) {
+        reply({ error: appErrorPayload(error) });
+      }
+      return;
+    case "outcome":
+      if (!callbacks.onDecisionOutcome) {
+        reply({ error: { code: "disabled", message: "disabled: typed decisions are not available here" } });
+        return;
+      }
+      try {
+        reply({ result: await callbacks.onDecisionOutcome(routed.decisionId, routed.question, routed.value) });
+      } catch (error) {
+        reply({ error: appErrorPayload(error) });
+      }
       return;
     case "data":
       try {
