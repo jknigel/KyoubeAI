@@ -1,7 +1,8 @@
 -- The guardrail on risky agent actions (docs/decisions.md): one row per held action, tied to the
 -- human-only confirmation card that holds it. A row is used at most once (consumed_at) and only
--- within 24 hours (expires_at). It names the action by a hash of its exact parameters, never by
--- their values.
+-- within 24 hours (expires_at). It names the action by a hash of its exact parameters (a table's
+-- own id among them), never by their values, and keeps the row count its card showed: an allowed
+-- action that would now touch more rows goes back to a person on a new card (superseded_by).
 CREATE TABLE IF NOT EXISTS kyoube_meta.guardrail_holds (
   id uuid PRIMARY KEY,
   company_id text NOT NULL REFERENCES kyoube_meta.companies(company_id) ON DELETE CASCADE,
@@ -10,6 +11,8 @@ CREATE TABLE IF NOT EXISTS kyoube_meta.guardrail_holds (
   card_id text NOT NULL,
   action_fingerprint text NOT NULL,
   operation text NOT NULL,
+  affected_rows integer,
+  superseded_by text,
   consumed_at timestamptz,
   expires_at timestamptz NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),

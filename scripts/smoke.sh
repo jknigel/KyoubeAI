@@ -1053,14 +1053,15 @@ curl -fsS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' 
 as_agent "$M_KEY" POST "$GUARD_DROP" "{\"companyId\":\"$COMPANY_ID\",\"issueId\":\"$GUARD_ISSUE\",\"confirmationId\":\"$GUARD_CARD\"}"
 [[ "$HTTP_STATUS" == 200 ]] || { echo "the allowed drop did not run: $HTTP_STATUS $(cat "$TMP/resp.json")" >&2; exit 1; }
 api_get "/tables" | jq -e 'map(.name) | index("smoke_guard") == null' >/dev/null || { echo "the allowed drop left the table in place" >&2; exit 1; }
-# A missing table answers not_found before the guardrail looks at the confirmation, so put the table
-# back to show that the used confirmation is what refuses the second drop.
+# A missing table answers not_found before the guardrail looks at the confirmation.
 as_agent "$M_KEY" POST "$GUARD_DROP" "{\"companyId\":\"$COMPANY_ID\",\"issueId\":\"$GUARD_ISSUE\",\"confirmationId\":\"$GUARD_CARD\"}"
 if [[ "$HTTP_STATUS" != 404 ]] || ! jq -e '.code == "not_found"' "$TMP/resp.json" >/dev/null; then echo "a drop of a missing table was not not_found: $HTTP_STATUS $(cat "$TMP/resp.json")" >&2; exit 1; fi
+# A hold binds to the table the person was shown: one made again under the same name is another
+# table, so the (used) confirmation for the old one does not match it at all.
 api_post "/tables" "{\"companyId\":\"$COMPANY_ID\",\"name\":\"smoke_guard\",\"fields\":[{\"name\":\"note\",\"kind\":\"text\"}]}" >/dev/null
 as_agent "$M_KEY" POST "$GUARD_DROP" "{\"companyId\":\"$COMPANY_ID\",\"issueId\":\"$GUARD_ISSUE\",\"confirmationId\":\"$GUARD_CARD\"}"
-if [[ "$HTTP_STATUS" != 409 ]] || ! jq -e '.code == "conflict"' "$TMP/resp.json" >/dev/null; then echo "a used confirmation was accepted again: $HTTP_STATUS $(cat "$TMP/resp.json")" >&2; exit 1; fi
-api_get "/tables" | jq -e 'map(.name) | index("smoke_guard") != null' >/dev/null || { echo "a used confirmation dropped the table again" >&2; exit 1; }
+if [[ "$HTTP_STATUS" != 400 ]] || ! jq -e '.code == "invalid"' "$TMP/resp.json" >/dev/null; then echo "a confirmation for the dropped table matched the one made again: $HTTP_STATUS $(cat "$TMP/resp.json")" >&2; exit 1; fi
+api_get "/tables" | jq -e 'map(.name) | index("smoke_guard") != null' >/dev/null || { echo "an old confirmation dropped the new table" >&2; exit 1; }
 # A table dropped twice within one second would collide on its recycle-bin name, so wait.
 sleep 2
 api_post "/tables/smoke_guard/drop" "{\"companyId\":\"$COMPANY_ID\"}" >/dev/null

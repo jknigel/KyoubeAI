@@ -1,4 +1,5 @@
 // tests/unit/guardrail.spec.ts
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parseQuestions, type DecideResult } from "../../src/decisions/contract.js";
 import {
@@ -84,6 +85,12 @@ describe("GUARD_QUESTIONS and guardPasses", () => {
   it("are valid questions", () => {
     expect(parseQuestions(GUARD_QUESTIONS)).toEqual(GUARD_QUESTIONS);
   });
+  it("are the questions the real-model check screens with", () => {
+    // scripts/decisions-eval.mjs measures the guardrail on its `screening` suite; a change to the
+    // questions here has to be measured there too.
+    const fixtures = JSON.parse(readFileSync(new URL("../../../../scripts/decisions-eval.fixtures.json", import.meta.url), "utf8")) as { suites: Record<string, { questions: unknown }> };
+    expect(fixtures.suites.screening!.questions).toEqual(GUARD_QUESTIONS);
+  });
   it("passes only when both answers are auto, the action matches the task and the risk is not dangerous", () => {
     expect(guardPasses(result(true, "auto", "routine", "auto"))).toBe(true);
     expect(guardPasses(result(true, "auto", "notable", "auto"))).toBe(true);
@@ -116,6 +123,11 @@ describe("confirmationPayload", () => {
   it("says when the check could not run", () => {
     const payload = confirmationPayload("agent-1", action(), null, { failure: "provider_unavailable" });
     expect(payload.detailsMarkdown).toContain("could not run (provider_unavailable)");
+  });
+  it("asks again with the new count when an allowed action grew", () => {
+    const payload = confirmationPayload("Builder", action({ operation: "delete", params: { table: "tickets", ids: null, where: {} } }), 5, { grown: { allowed: 3 } });
+    expect(payload.prompt).toBe("Agent Builder wants to delete 5 rows from table `tickets`.");
+    expect(payload.detailsMarkdown).toContain("A person allowed this action when it would have touched 3 rows. It would now touch 5 rows, so it did not run");
   });
 });
 

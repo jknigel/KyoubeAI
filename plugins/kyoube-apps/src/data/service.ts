@@ -208,7 +208,7 @@ export class DataService {
   async removeField(companyId: string, actor: DataActor, table: string, field: string, guard?: GuardContext): Promise<TableInfo> {
     const scope = await this.authorize(companyId, actor, "schema", "remove a field");
     await this.guarded(companyId, actor, { operation: "remove_field", table, field, params: { table, field } }, guard,
-      () => this.schema.tableWithField(scope, table, field));
+      async () => { await this.schema.tableWithField(scope, table, field); return this.schema.tableId(scope, table); });
     const hard = (await getCompanySettings(this.pool, companyId)).hardDelete;
     const info = await this.schema.removeField(scope, table, field, hard,
       (name) => this.entry(companyId, actor, "remove_field", name, { field, hard }));
@@ -219,7 +219,7 @@ export class DataService {
   async dropTable(companyId: string, actor: DataActor, table: string, guard?: GuardContext): Promise<{ ok: true }> {
     const scope = await this.authorize(companyId, actor, "schema", "drop a table");
     await this.guarded(companyId, actor, { operation: "drop_table", table, params: { table }, countRows: () => this.records.count(scope, table) }, guard,
-      () => this.schema.getTable(scope, table));
+      () => this.schema.tableId(scope, table));
     const hard = (await getCompanySettings(this.pool, companyId)).hardDelete;
     await this.schema.dropTable(scope, table, hard,
       (name) => this.entry(companyId, actor, "drop_table", name, { hard }));
@@ -230,7 +230,7 @@ export class DataService {
   async renameTable(companyId: string, actor: DataActor, table: string, newName: string, guard?: GuardContext): Promise<TableInfo> {
     const scope = await this.authorize(companyId, actor, "schema", "rename a table");
     await this.guarded(companyId, actor, { operation: "rename_table", table, newName, params: { table, newName } }, guard,
-      () => this.schema.getTable(scope, table));
+      () => this.schema.tableId(scope, table));
     const info = await this.schema.renameTable(scope, table, newName,
       (name) => this.entry(companyId, actor, "rename_table", name, { from: table }));
     await this.notify(companyId, actor, "rename_table", info.name, `renamed table ${table} to ${info.name}`);
@@ -264,7 +264,7 @@ export class DataService {
       await this.guarded(companyId, actor, {
         operation: "update", table, params: { ...rowTargetParams(table, target), patch },
         countRows: () => this.targetCount(scope, table, target),
-      }, guard, () => this.schema.getTable(scope, table));
+      }, guard, () => this.schema.tableId(scope, table));
     }
     // With AI columns attached, the write also hands back the AI values it replaced (only when the
     // patch sets one), which is what tells an edit from a save that wrote a value back.
@@ -282,7 +282,7 @@ export class DataService {
       await this.guarded(companyId, actor, {
         operation: "delete", table, params: rowTargetParams(table, target),
         countRows: () => this.targetCount(scope, table, target),
-      }, guard, () => this.schema.getTable(scope, table));
+      }, guard, () => this.schema.tableId(scope, table));
     }
     const result = await this.records.delete(scope, table, target,
       (done) => this.entry(companyId, actor, "delete", table, { affected: done.affected }, via));
@@ -493,13 +493,15 @@ export class DataService {
    * The guardrail (docs/decisions.md): agents only, after authorisation and before the change, so a
    * call the agent may not make anyway never costs a check. `target` first confirms the table (and
    * field) the call names exists, so a missing one fails with the same not_found it gets with the
-   * guardrail off, before any check or card. A throw stops the change; nothing has been written by then.
+   * guardrail off, before any check or card. It returns the table's own id, which goes into the
+   * fingerprint: a person's "Allow once" is for the table they were shown, never one made later under
+   * the same name. A throw stops the change; nothing has been written by then.
    */
-  private async guarded(companyId: string, actor: DataActor, action: Omit<GuardedAction, "companyId" | "actor" | "guard">, guard: GuardContext | undefined, target: () => Promise<unknown>): Promise<void> {
+  private async guarded(companyId: string, actor: DataActor, action: Omit<GuardedAction, "companyId" | "actor" | "guard">, guard: GuardContext | undefined, target: () => Promise<string>): Promise<void> {
     const check = this.hooks.guardAgentAction;
     if (actor.kind !== "agent" || !check) return;
-    await target();
-    await check({ ...action, companyId, actor, guard });
+    const tableId = await target();
+    await check({ ...action, params: { ...action.params, tableId }, companyId, actor, guard });
   }
 
   /** How many rows a bulk update or delete would touch, for the guardrail's question. */

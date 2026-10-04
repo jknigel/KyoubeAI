@@ -95,6 +95,15 @@ describe("Guardrail.check", () => {
     expect(on.decided).toHaveLength(0);
   });
 
+  it("refuses an agent call that carries no agent id instead of letting it through", async () => {
+    const { guardrail, decided, cards } = harness(PASS);
+    const anonymous = drop({ issueId: ISSUE }, { actor: { kind: "agent", id: null, runId: null } });
+    expect((await failure(guardrail.check(anonymous)) as DataError).code).toBe("guardrail_context_required");
+    expect([decided.length, cards.length]).toEqual([0, 0]);
+    // With the guardrail off there is nothing to check.
+    await harness(PASS, { guardrail: false }).guardrail.check(anonymous);
+  });
+
   it("needs the agent's own task", async () => {
     const { guardrail, decided } = harness();
     expect((await failure(guardrail.check(drop())) as DataError).code).toBe("guardrail_context_required");
@@ -110,7 +119,8 @@ describe("Guardrail.check", () => {
     await guardrail.check(drop({ issueId: ISSUE }));
     expect(cards).toHaveLength(0);
     const [companyId, actor, surface, request, options] = decided[0]!;
-    expect([companyId, actor, surface, options]).toEqual([C, AGENT, "guardrail", { via: "drop_table" }]);
+    // 12 s for the provider, so the check, the count and the action itself fit the core's 30 s call.
+    expect([companyId, actor, surface, options]).toEqual([C, AGENT, "guardrail", { via: "drop_table", deadlineMs: 12_000 }]);
     expect(request).toMatchObject({
       state: { action: { operation: "drop table", table: "scratch", affectedRows: 1204 }, task: "Summarise last week's tickets\n\nRead only. Do not change or delete any data." },
       questions: { matches_task: { type: "check" }, risk: { type: "score" } },
@@ -234,6 +244,46 @@ describe("Guardrail.check", () => {
     const otherAgent = drop({ issueId: OTHER_ISSUE, confirmationId: "card-1" }, { actor: OTHER_AGENT });
     expect((await failure(guardrail.check(otherAgent)) as DataError).code).toBe("invalid");
     expect((await findHold(db.pool, C, "card-1"))!.consumedAt).toBeNull();
+  });
+
+  it("keeps on the hold the row count the person was shown", async () => {
+    const { guardrail } = harness(OFF_TASK);
+    await failure(guardrail.check(drop({ issueId: ISSUE })));
+    expect(await findHold(db.pool, C, "card-1")).toMatchObject({ affectedRows: 1204, supersededBy: null });
+    await failure(guardrail.check(drop({ issueId: ISSUE }, { operation: "rename_table", newName: "old_scratch", params: { table: "scratch", newName: "old_scratch" }, countRows: undefined })));
+    expect(await findHold(db.pool, C, "card-2")).toMatchObject({ affectedRows: null });
+  });
+
+  it("asks the person again, without running it, when the action would now touch more rows than they allowed", async () => {
+    const { guardrail, cards, decided } = harness(OFF_TASK);
+    await failure(guardrail.check(drop({ issueId: ISSUE })));
+    Object.assign(cards[0]!, { status: "accepted", resolvedByUserId: "owner-1" });
+    const grown = drop({ issueId: ISSUE, confirmationId: "card-1" }, { countRows: async () => 1300 });
+    const again = await failure(guardrail.check(grown)) as DataError;
+    expect([again.code, again.details?.confirmationId, cards.length, decided.length]).toEqual(["held", "card-2", 2, 1]);
+    expect(cards[1]!.request.payload.prompt).toBe("Agent Builder wants to drop table `scratch` (1,300 rows).");
+    expect(cards[1]!.request.payload.detailsMarkdown).toContain("allowed this action when it would have touched 1,204 rows");
+    expect(cards[1]!.request.resolverPolicy).toBe("human_only");
+    expect(await findHold(db.pool, C, "card-1")).toMatchObject({ consumedAt: null, supersededBy: "card-2" });
+    expect(await findHold(db.pool, C, "card-2")).toMatchObject({ affectedRows: 1300, consumedAt: null });
+    // The old confirmation leads to the new card, by id or by a plain retry, and raises no third one.
+    const stale = await failure(guardrail.check(grown)) as DataError;
+    const plain = await failure(guardrail.check(drop({ issueId: ISSUE }, { countRows: async () => 1300 }))) as DataError;
+    expect([stale.code, stale.details?.confirmationId, plain.code, plain.details?.confirmationId, cards.length]).toEqual(["held", "card-2", "held", "card-2", 2]);
+    // Once the person allows the new count, the call runs once, whichever id it names.
+    Object.assign(cards[1]!, { status: "accepted", resolvedByUserId: "owner-1" });
+    expect(await failure(guardrail.check(grown))).toBe("resolved");
+    expect((await findHold(db.pool, C, "card-2"))!.consumedAt).not.toBeNull();
+    expect((await findHold(db.pool, C, "card-1"))!.consumedAt).toBeNull();
+    expect(decided).toHaveLength(1);
+  });
+
+  it("runs an allowed action that now touches the same or fewer rows", async () => {
+    const { guardrail, cards } = harness(OFF_TASK);
+    await failure(guardrail.check(drop({ issueId: ISSUE })));
+    Object.assign(cards[0]!, { status: "accepted", resolvedByUserId: "owner-1" });
+    expect(await failure(guardrail.check(drop({ issueId: ISSUE }, { countRows: async () => 1100 })))).toBe("resolved");
+    expect(cards).toHaveLength(1);
   });
 
   it("lets an allowed confirmation lapse after 24 hours", async () => {
