@@ -128,7 +128,10 @@ function SourcePanel(props: { companyId: string; userId: string | null; slug: st
   const publish = usePluginAction("apps.publish");
   const rollback = usePluginAction("apps.rollback");
   const preview = usePluginAction("apps.publish_preview");
-  const [pending, setPending] = useState<{ mode: "publish" | "rollback"; version: number | "latest"; preview: PublishPreviewData } | null>(null);
+  const [pending, setPending] = useState<{ mode: "publish" | "rollback"; preview: PublishPreviewData } | null>(null);
+  // A preview being fetched or a dialog open: Publish and Roll back wait, so a second click can never
+  // swap the dialog's version from under a confirmation.
+  const [previewing, setPreviewing] = useState(false);
   // Ruling P2-R26: memoise the params object on its scalar inputs.
   const accessParams = useMemo(() => ({ companyId: props.companyId, userId: props.userId }), [props.companyId, props.userId]);
   const access = usePluginData<{ level: string }>("data.access", accessParams);
@@ -159,16 +162,19 @@ function SourcePanel(props: { companyId: string; userId: string | null; slug: st
     .catch((err: unknown) => { toast({ title: errorText(err), tone: "error" }); });
   // Spec §5: anything with decision sets goes through the disclosure dialog; an app without sets
   // publishes in one click, as before.
+  // Either way the request names the version the preview resolved, never "latest".
   const start = (mode: "publish" | "rollback", version: number | "latest") => {
+    if (previewing || pending) return;
+    setPreviewing(true);
     preview({ slug: props.slug, version }).then((result) => {
       const data = result as PublishPreviewData;
       if (data.sets.length === 0) {
-        const params = { slug: props.slug, ...(version === "latest" ? {} : { version }) };
-        void act(mode === "publish" ? publish(params) : rollback(params), mode === "publish" ? `Published v${data.version}` : "Rolled back");
-        return;
+        const params = { slug: props.slug, version: data.version };
+        return act(mode === "publish" ? publish(params) : rollback(params), mode === "publish" ? `Published v${data.version}` : "Rolled back");
       }
-      setPending({ mode, version, preview: data });
-    }).catch((err: unknown) => { toast({ title: errorText(err), tone: "error" }); });
+      setPending({ mode, preview: data });
+    }).catch((err: unknown) => { toast({ title: errorText(err), tone: "error" }); })
+      .finally(() => setPreviewing(false));
   };
   // Mirrors AppService's own gates (update needs write, publish/rollback need
   // schema); the worker enforces them regardless, this only stops the panel
@@ -184,11 +190,11 @@ function SourcePanel(props: { companyId: string; userId: string | null; slug: st
         <span className="flex-1" />
         {canWrite && <input className={input} placeholder="version notes" value={notes} onChange={(event) => setNotes(event.target.value)} />}
         {canWrite && <button type="button" className={button} onClick={() => { try { void act(update({ slug: props.slug, manifest: JSON.parse(manifest), source, notes }), "Draft saved"); } catch (err) { toast({ title: `Manifest JSON: ${errorText(err)}`, tone: "error" }); } }}>Save draft</button>}
-        {canSchema && <button type="button" className={button} onClick={() => start("publish", "latest")}>Publish latest</button>}
-        {canSchema && app.currentVersion !== null && app.currentVersion > 1 && <button type="button" className={button} onClick={() => start("rollback", (app.currentVersion ?? 1) - 1)}>Roll back one version</button>}
+        {canSchema && <button type="button" className={button} disabled={previewing || pending !== null} onClick={() => start("publish", "latest")}>Publish latest</button>}
+        {canSchema && app.currentVersion !== null && app.currentVersion > 1 && <button type="button" className={button} disabled={previewing || pending !== null} onClick={() => start("rollback", (app.currentVersion ?? 1) - 1)}>Roll back one version</button>}
       </div>
       {pending && (
-        <PublishDialog slug={props.slug} appName={app.name} mode={pending.mode} version={pending.version} preview={pending.preview}
+        <PublishDialog key={`${pending.mode}:${pending.preview.version}`} slug={props.slug} appName={app.name} mode={pending.mode} preview={pending.preview}
           onCancel={() => setPending(null)} onDone={() => { setPending(null); props.onChanged(); void reload(); }} />
       )}
       <label className="flex flex-col gap-1">Manifest<textarea className={`${input} font-mono`} readOnly={!canWrite} rows={6} value={manifest} onChange={(event) => setManifest(event.target.value)} /></label>
