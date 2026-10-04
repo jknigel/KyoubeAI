@@ -1,16 +1,30 @@
-export type DataErrorCode = "invalid" | "forbidden" | "not_found" | "conflict" | "limit";
+export type DataErrorCode =
+  | "invalid" | "forbidden" | "not_found" | "conflict" | "limit"
+  // Typed decisions (docs/decisions.md).
+  | "disabled" | "budget_exceeded" | "too_large" | "provider_rejected" | "provider_unavailable" | "timeout"
+  // The guardrail on risky agent actions.
+  | "held" | "rejected_by_person" | "guardrail_context_required";
+
+/**
+ * Facts a caller needs to act on an error — ids, never data. A held action, for instance, has to
+ * tell the agent which confirmation card to wait for. Every surface that answers a caller passes
+ * these through, so nothing that could carry row contents may ever go in here.
+ */
+export type DataErrorDetails = Record<string, string | number | boolean | null>;
 
 export class DataError extends Error {
   readonly code: DataErrorCode;
+  readonly details: DataErrorDetails | undefined;
   /**
    * The error this one was mapped from, when there was one. It is for operator logs only —
    * `message` is the whole caller-visible contract (ruling P4-R15 scrubs it), and nothing that
    * answers a request, a tool call, or an app may read this.
    */
-  constructor(code: DataErrorCode, message: string, options?: { cause?: unknown }) {
-    super(`${code}: ${message}`, options);
+  constructor(code: DataErrorCode, message: string, options?: { cause?: unknown; details?: DataErrorDetails }) {
+    super(`${code}: ${message}`, options?.cause !== undefined ? { cause: options.cause } : undefined);
     this.name = "DataError";
     this.code = code;
+    this.details = options?.details;
   }
 }
 

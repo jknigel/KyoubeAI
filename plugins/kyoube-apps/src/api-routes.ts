@@ -1,6 +1,6 @@
 import type { PluginApiRequestInput, PluginApiResponse, PluginApiRouteDeclaration } from "@paperclipai/plugin-sdk";
 import { z } from "zod";
-import { DataError } from "./data/errors.js";
+import { DataError, type DataErrorCode } from "./data/errors.js";
 import { FIELD_KINDS } from "./data/field-kinds.js";
 import type { DataActor } from "./data/permissions.js";
 import type { DataService } from "./data/service.js";
@@ -78,11 +78,19 @@ export function actorFromRequest(input: PluginApiRequestInput): DataActor {
   return { kind: "user", id: actor.userId ?? actor.actorId, runId: null };
 }
 
+const STATUS_FOR_CODE: Record<DataErrorCode, number> = {
+  invalid: 400, forbidden: 403, not_found: 404, conflict: 409, limit: 413,
+  disabled: 403, budget_exceeded: 429, too_large: 413, provider_rejected: 502, provider_unavailable: 503, timeout: 504,
+  held: 409, rejected_by_person: 403, guardrail_context_required: 428,
+};
+
 export function statusForError(error: unknown): number {
-  if (error instanceof DataError) {
-    return { invalid: 400, forbidden: 403, not_found: 404, conflict: 409, limit: 413 }[error.code];
-  }
-  return 500;
+  return error instanceof DataError ? STATUS_FOR_CODE[error.code] : 500;
+}
+
+/** The caller-visible body for a `DataError`: its own message and code, plus its caller-safe details. */
+export function errorBody(error: DataError): Record<string, unknown> {
+  return { ...(error.details ?? {}), error: error.message, code: error.code };
 }
 
 function parseBody<K extends keyof typeof bodies>(key: K, body: unknown): z.infer<(typeof bodies)[K]> {
@@ -117,7 +125,7 @@ export async function handleApiRequest(
   } catch (error) {
     const status = statusForError(error);
     if (error instanceof DataError) {
-      return { status, body: { error: error.message, code: error.code } };
+      return { status, body: errorBody(error) };
     }
     // Ruling P2-R24: never echo a raw JS/driver error message to the caller.
     // Log the real error for operators instead (never the request body).
