@@ -51,13 +51,13 @@ const fieldSpec = z.object({
   displayName: z.string().optional(),
   description: z.string().optional(),
   required: z.boolean().optional(),
-  options: z.object({ choices: z.array(z.string()).optional(), relationTable: z.string().optional() }).optional(),
+  options: z.object({ choices: z.array(z.string()).optional(), relationTable: z.string().optional(), decision: z.unknown().optional() }).optional(),
 });
 const bodies = {
   "tables.create": z.object({ name: z.string(), displayName: z.string().optional(), description: z.string().nullable().optional(), fields: z.array(fieldSpec).max(100) }),
   "tables.rename": z.object({ newName: z.string() }),
   "fields.add": z.object({ field: fieldSpec }),
-  "fields.update": z.object({ displayName: z.string().optional(), description: z.string().nullable().optional(), required: z.boolean().optional(), choices: z.array(z.string()).optional() }),
+  "fields.update": z.object({ displayName: z.string().optional(), description: z.string().nullable().optional(), required: z.boolean().optional(), choices: z.array(z.string()).optional(), decision: z.unknown().optional() }),
   "indexes.create": z.object({ fields: z.array(z.string()).min(1).max(4), unique: z.boolean().optional() }),
   "rows.insert": z.object({ rows: z.array(z.record(z.string(), z.unknown())).min(1).max(500) }),
   "rows.query": z.object({ where: z.unknown().optional(), orderBy: z.array(z.object({ field: z.string(), direction: z.enum(["asc", "desc"]).optional() })).optional(), limit: z.number().int().optional(), offset: z.number().int().optional(), fields: z.array(z.string()).optional() }),
@@ -143,7 +143,7 @@ async function dispatch(service: DataService, input: PluginApiRequestInput, comp
     case "tables.rename": { const b = parseBody("tables.rename", input.body); return service.renameTable(companyId, actor, param(input, "table"), b.newName); }
     case "tables.drop": return service.dropTable(companyId, actor, param(input, "table"));
     case "fields.add": { const b = parseBody("fields.add", input.body); return service.addField(companyId, actor, param(input, "table"), b.field); }
-    case "fields.update": { const b = parseBody("fields.update", input.body); return service.updateField(companyId, actor, param(input, "table"), param(input, "field"), { displayName: b.displayName, description: b.description, required: b.required, choices: b.choices }); }
+    case "fields.update": { const b = parseBody("fields.update", input.body); return service.updateField(companyId, actor, param(input, "table"), param(input, "field"), { displayName: b.displayName, description: b.description, required: b.required, choices: b.choices, decision: b.decision }); }
     case "fields.remove": return service.removeField(companyId, actor, param(input, "table"), param(input, "field"));
     case "indexes.create": { const b = parseBody("indexes.create", input.body); return service.createIndex(companyId, actor, param(input, "table"), b.fields, b.unique ?? false); }
     case "rows.insert": { const b = parseBody("rows.insert", input.body); return service.insert(companyId, actor, param(input, "table"), b.rows); }

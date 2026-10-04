@@ -1,6 +1,14 @@
 import { z } from "zod";
 import { DataError } from "./errors.js";
 import { assertIdentifier, quoteIdent, quoteLiteral } from "./identifiers.js";
+import { parseQuestion, UNSURE, type Question } from "../decisions/contract.js";
+
+export const MAX_AI_SOURCE_FIELDS = 20;
+/** The existing limit on select choices (fieldSchema below). */
+export const MAX_AI_CHOICES = 200;
+
+/** An AI column (docs/decisions.md, spec §4): the question the fill job asks, and the fields it reads. */
+export interface AiColumnDefinition { question: Question; sourceFields: string[]; advisory?: boolean }
 
 export const FIELD_KINDS = ["text", "long_text", "integer", "decimal", "boolean", "date", "datetime", "json", "select", "multi_select", "relation", "email", "url"] as const;
 export type FieldKind = (typeof FIELD_KINDS)[number];
@@ -8,6 +16,7 @@ export type FieldKind = (typeof FIELD_KINDS)[number];
 export interface FieldOptions {
   choices?: string[];
   relationTable?: string;
+  decision?: AiColumnDefinition;
 }
 
 export interface FieldSpec {
@@ -28,8 +37,45 @@ const fieldSchema = z.object({
   options: z.object({
     choices: z.array(z.string().trim().min(1).max(120)).max(200).optional(),
     relationTable: z.string().optional(),
+    decision: z.unknown().optional(),
   }).optional(),
 });
+
+const aiColumnSchema = z.object({
+  question: z.unknown(),
+  sourceFields: z.array(z.string()).min(1).max(MAX_AI_SOURCE_FIELDS),
+  advisory: z.boolean().optional(),
+}).strict();
+
+export function aiColumnKind(question: Question): FieldKind {
+  return question.type === "check" ? "boolean" : "select";
+}
+
+/** A choice's option keys (never `unsure`, which leaves the cell for review) or a score's levels, in order. */
+export function aiColumnChoices(question: Question): string[] | undefined {
+  if (question.type === "choice") return Object.keys(question.options).filter((key) => key !== UNSURE);
+  if (question.type === "score") return [...question.levels];
+  return undefined;
+}
+
+export function isAiColumn(field: { options: FieldOptions }): boolean {
+  return field.options.decision !== undefined;
+}
+
+export function normalizeAiColumn(name: string, kind: FieldKind, required: boolean, choices: string[] | undefined, raw: unknown): AiColumnDefinition {
+  const parsed = aiColumnSchema.safeParse(raw);
+  if (!parsed.success) throw new DataError("invalid", `invalid AI column "${name}": ${parsed.error.issues.map((issue) => `options.decision.${issue.path.join(".")} ${issue.message}`).join("; ")}`);
+  const question = parseQuestion(parsed.data.question, "options.decision.question");
+  const expected = aiColumnKind(question);
+  if (kind !== expected) throw new DataError("invalid", `AI column "${name}" asks a ${question.type} question, so its kind must be ${expected}`);
+  if (required) throw new DataError("invalid", `AI column "${name}" cannot be required: a cell waiting for review is empty`);
+  if (choices !== undefined) throw new DataError("invalid", `the choices of AI column "${name}" come from its question; leave options.choices out`);
+  const derived = aiColumnChoices(question);
+  if (derived && derived.length > MAX_AI_CHOICES) throw new DataError("invalid", `AI column "${name}" can offer at most ${MAX_AI_CHOICES} options`);
+  const sourceFields = [...new Set(parsed.data.sourceFields.map((source) => assertIdentifier(source, "source field")))];
+  if (sourceFields.includes(name)) throw new DataError("invalid", `AI column "${name}" cannot read itself`);
+  return { question, sourceFields, ...(parsed.data.advisory ? { advisory: true } : {}) };
+}
 
 function titleCase(name: string): string {
   return name.split("_").filter(Boolean).map((part) => part[0]!.toUpperCase() + part.slice(1)).join(" ");
@@ -41,7 +87,12 @@ export function normalizeFieldSpec(raw: unknown): FieldSpec {
   const value = parsed.data;
   const name = assertIdentifier(value.name, "field name");
   const options: FieldOptions = {};
-  if (value.kind === "select" || value.kind === "multi_select") {
+  if (value.options?.decision !== undefined) {
+    // An AI column's choices come from its question, so they are set before the select check below.
+    options.decision = normalizeAiColumn(name, value.kind, value.required ?? false, value.options.choices, value.options.decision);
+    const derived = aiColumnChoices(options.decision.question);
+    if (derived) options.choices = derived;
+  } else if (value.kind === "select" || value.kind === "multi_select") {
     const choices = [...new Set(value.options?.choices ?? [])];
     if (choices.length === 0) throw new DataError("invalid", `field "${name}" of kind ${value.kind} needs options.choices`);
     options.choices = choices;
