@@ -3,6 +3,7 @@ import { API_ROUTES } from "./api-routes.js";
 import { APP_API_ROUTES } from "./apps/api-routes.js";
 import { APPS_PAGE_ROUTE } from "./apps/page-route.js";
 import { appToolDeclarations } from "./apps/tools.js";
+import { DECISIONS_CONFIG_SCHEMA } from "./decisions/config.js";
 import appsSkillMarkdown from "./skills/kyoube-apps.md";
 import skillMarkdown from "./skills/kyoube-data.md";
 import { toolDeclarations } from "./tools.js";
@@ -49,8 +50,15 @@ const manifest: PaperclipPluginManifestV1 = {
     // `instance.settings.register`, and POST /api/plugins/install rejects the
     // whole manifest with "inconsistent capabilities" when it is absent.
     "instance.settings.register",
+    // Typed decisions (docs/decisions.md): the worker calls the company's configured
+    // `/v1/systemone` provider through `ctx.http.fetch` and reads its API key secret.
+    // kyoube.apps never declares issue.interactions.respond or approvals.respond, so no decision
+    // can ever answer a card or an approval (tests/unit/decision-config.spec.ts).
+    "http.outbound",
+    "secrets.read-ref",
   ],
   entrypoints: { worker: "./dist/worker.js", ui: "./dist/ui" },
+  instanceConfigSchema: DECISIONS_CONFIG_SCHEMA,
   tools: [...toolDeclarations(), ...appToolDeclarations()],
   apiRoutes: [...API_ROUTES, ...APP_API_ROUTES],
   jobs: [{ jobKey: PURGE_JOB_KEY, displayName: "Purge trashed tables and fields", description: "Drops tables/fields soft-deleted more than 30 days ago.", schedule: "0 3 * * *" }],
