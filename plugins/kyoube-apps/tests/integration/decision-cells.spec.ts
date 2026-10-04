@@ -16,6 +16,7 @@ import {
   reviewCells,
   syncColumn,
   upsertCells,
+  watermarkCeiling,
   type AiColumnRef,
 } from "../../src/decisions/cells.js";
 import { createTestDatabase } from "./setup.js";
@@ -101,6 +102,21 @@ describe("decision cells", () => {
     await advanceWatermark(db.pool, ref.fieldId, "2026-10-05 10:00:00+00", R1);
     await resetWatermark(db.pool, ref.fieldId);
     expect((await syncColumn(db.pool, ref, "fp-2")).at).toBeNull();
+  });
+
+  it("never moves the watermark past its ceiling, the database clock less the lag", async () => {
+    const ceiling = await watermarkCeiling(db.pool, 120_000);
+    const clock = await db.pool.query("SELECT $1::timestamptz BETWEEN now() - interval '121 seconds' AND now() - interval '119 seconds' AS near", [ceiling]);
+    expect(clock.rows[0]).toEqual({ near: true });
+    expect((await syncColumn(db.pool, ref, "fp-3")).at).toBeNull();
+    // A scan that went past the ceiling stops at its first position: the instant, the nil uuid.
+    await advanceWatermark(db.pool, ref.fieldId, "2026-10-05 10:00:00.5+00", R2, "2026-10-05 10:00:00.25+00");
+    const capped = await syncColumn(db.pool, ref, "fp-3");
+    expect([capped.at, capped.id]).toEqual([expect.stringMatching(/:00\.25\+/), "00000000-0000-0000-0000-000000000000"]);
+    // One that stopped short of it keeps its own position.
+    await advanceWatermark(db.pool, ref.fieldId, "2026-10-05 10:00:00.125+00", R2, "2026-10-05 10:00:00.25+00");
+    const short = await syncColumn(db.pool, ref, "fp-3");
+    expect([short.at, short.id]).toEqual([expect.stringMatching(/:00\.125\+/), R2]);
   });
 
   it("upserts cells but never overwrites a manual one", async () => {

@@ -5,7 +5,7 @@ import { DataError } from "../data/errors.js";
 import type { AiColumnDefinition } from "../data/field-kinds.js";
 import type { AiSourceRow } from "../data/records-service.js";
 import { systemActor, type DataService } from "../data/service.js";
-import { advanceWatermark, deleteCells, errorRowIds, getCells, listAiColumns, syncColumn, upsertCells, type AiColumnRef, type CellWrite } from "./cells.js";
+import { advanceWatermark, deleteCells, errorRowIds, getCells, listAiColumns, syncColumn, upsertCells, watermarkCeiling, type AiColumnRef, type CellWrite } from "./cells.js";
 import { canonical, questionFingerprint, reviewThreshold, type DecideResult } from "./contract.js";
 import { runPool, type DecisionService } from "./service.js";
 
@@ -20,6 +20,13 @@ export const FILL_DEADLINE_MS = 4 * 60_000;
 export const SCAN_PAGE = 500;
 /** Field names may be 63 characters and question keys only 40, so the fill job asks under one key. */
 export const AI_QUESTION_KEY = "value";
+/**
+ * A write's rows carry its transaction's start time (`now()`) and become visible only when it
+ * commits, possibly after a later write's rows. So a scan never moves the watermark past the
+ * database clock (read before its first page) less this: rows inside the window are read again
+ * next run, and skipped there by their unchanged hash.
+ */
+export const WATERMARK_LAG_MS = 2 * 60_000;
 
 /** Errors that end a company's run: no budget, switched off, or the provider is not answering. */
 const STOP = new Set(["budget_exceeded", "disabled", "provider_unavailable", "provider_rejected", "timeout"]);
@@ -182,6 +189,7 @@ export class AiColumnService {
     const sources = ref.definition.sourceFields;
     const fingerprint = columnFingerprint(ref.definition);
     const mark = await syncColumn(this.deps.pool, ref, fingerprint);
+    const ceiling = await watermarkCeiling(this.deps.pool, WATERMARK_LAG_MS);
     const candidates: Candidate[] = [];
     const examined: Array<{ at: string; id: string }> = [];
     let after = mark.at && mark.id ? { at: mark.at, id: mark.id } : null;
@@ -206,12 +214,13 @@ export class AiColumnService {
       }
     }
     const outcomes = await this.decideBatch(ref, candidates, deadline, report);
-    // The watermark passes every examined row up to the first candidate left unprocessed.
+    // The watermark passes every examined row up to the first candidate left unprocessed, and
+    // never the ceiling (WATERMARK_LAG_MS).
     let through = examined.length - 1;
     candidates.forEach((candidate, index) => {
       if (outcomes[index] === null && candidate.scanIndex !== null) through = Math.min(through, candidate.scanIndex - 1);
     });
-    if (through >= 0) await advanceWatermark(this.deps.pool, ref.fieldId, examined[through]!.at, examined[through]!.id);
+    if (through >= 0) await advanceWatermark(this.deps.pool, ref.fieldId, examined[through]!.at, examined[through]!.id, ceiling);
     return outcomes.filter((outcome) => outcome !== null).length;
   }
 
