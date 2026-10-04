@@ -4,7 +4,7 @@ import type { Pool } from "pg";
 import { handleApiRequest } from "./api-routes.js";
 import { handleAppsApiRequest } from "./apps/api-routes.js";
 import { MAX_APP_NOTES } from "./apps/manifest.js";
-import { AppService, parseRuntimeMethod, type AppServiceDeps } from "./apps/service.js";
+import { AppService, parseDecideInput, parseRuntimeMethod, type AppServiceDeps } from "./apps/service.js";
 import { registerAppTools } from "./apps/tools.js";
 import { handleDecisionsApiRequest } from "./decisions/api-routes.js";
 import { AiColumnService } from "./decisions/columns.js";
@@ -212,6 +212,7 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
       const appService = (deps.createAppService ?? ((appDeps) => new AppService(appDeps)))({
         pool: dbPool,
         data: dataService,
+        decisions: decisionService,
         onMutation: appsActivity.log,
         onMutationError: appsActivity.onError,
       });
@@ -331,8 +332,8 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
       action("apps.get", (c, a, p) => appService.get(c, a, str(p, "slug"), versionRef(p)));
       action("apps.create", (c, a, p) => appService.create(c, a, p.manifest, p.source, optionalNotes(p)));
       action("apps.update", (c, a, p) => appService.update(c, a, str(p, "slug"), p.manifest, p.source, optionalNotes(p)));
-      action("apps.publish", (c, a, p) => appService.publish(c, a, str(p, "slug"), optionalVersionNumber(p)));
-      action("apps.rollback", (c, a, p) => appService.rollback(c, a, str(p, "slug"), versionNumber(p)));
+      action("apps.publish", (c, a, p) => appService.publish(c, a, str(p, "slug"), optionalVersionNumber(p), { decisionsConfirmed: p.decisionsConfirmed === true }));
+      action("apps.rollback", (c, a, p) => appService.rollback(c, a, str(p, "slug"), versionNumber(p), { decisionsConfirmed: p.decisionsConfirmed === true }));
       action("apps.archive", (c, a, p) => appService.archive(c, a, str(p, "slug")));
       // The runner has no viewer name to show yet (the action context carries
       // ids, not display names), so the app sees an empty one.
@@ -342,6 +343,11 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
       // outside the runtime surface; `params` stays opaque JSON that
       // AppService checks against the app's declared tables.
       action("apps.data", (c, a, p) => appService.runtimeData(c, a, str(p, "slug"), parseRuntimeMethod(p.method), (p.params ?? {}) as Params));
+      // Typed decisions from a running app (docs/decisions.md). `set` and `input` arrive from app
+      // code through the bridge; `parseDecideInput` and AppService check them before anything runs.
+      action("apps.decide", (c, a, p) => appService.runtimeDecide(c, a, str(p, "slug"), str(p, "set"), parseDecideInput(p.input)));
+      action("apps.decision_outcome", (c, a, p) => appService.decideOutcome(c, a, str(p, "slug"), str(p, "decisionId"), str(p, "question"), p.value));
+      action("apps.publish_preview", (c, a, p) => appService.publishPreview(c, a, str(p, "slug"), p.version === undefined || p.version === null || p.version === "latest" ? "latest" : versionNumber(p)));
 
       // ---- typed decisions (same actor rules; DecisionService checks the admin gate) ----
       action("decisions.settings", (c, a) => decisionService.getSettings(c, a));
