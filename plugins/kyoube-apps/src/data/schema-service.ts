@@ -215,16 +215,29 @@ export class SchemaService {
       if (patch.required !== undefined && patch.required !== current.required) {
         await client.query(`ALTER TABLE ${t} ALTER COLUMN ${quoteIdent(name)} ${patch.required ? "SET" : "DROP"} NOT NULL`);
       }
+      let emptied: string[] = [];
       if (choicesChanged && next.options.choices) {
-        // A changed question can drop options that rows still hold; those cells become empty
-        // (the fill job decides them again) rather than blocking the new constraint.
+        // A changed question can drop options that rows still hold; those values become empty
+        // rather than blocking the new constraint, and their cells go with them (below), so the
+        // fill job decides them again — a `manual` cell would otherwise keep the row empty for good.
         if (isAiColumn(current)) {
-          await client.query(`UPDATE ${t} SET ${quoteIdent(name)} = NULL WHERE ${quoteIdent(name)} IS NOT NULL AND NOT (${quoteIdent(name)} = ANY($1::text[]))`, [next.options.choices]);
+          const result = await client.query<{ id: string }>(
+            `UPDATE ${t} SET ${quoteIdent(name)} = NULL WHERE ${quoteIdent(name)} IS NOT NULL AND NOT (${quoteIdent(name)} = ANY($1::text[])) RETURNING id`,
+            [next.options.choices],
+          );
+          emptied = result.rows.map((emptiedRow) => String(emptiedRow.id));
         }
         await client.query(`ALTER TABLE ${t} DROP CONSTRAINT IF EXISTS ${quoteIdent(choicesConstraintName(info.name, name))}`);
         await client.query(`ALTER TABLE ${t} ADD ${choicesConstraint(next, info.name)}`);
       }
       await asOwner();
+      if (emptied.length > 0) {
+        await client.query(
+          `DELETE FROM kyoube_meta.decision_cells
+            WHERE field_id = (SELECT id FROM kyoube_meta.fields WHERE table_id = $1 AND name = $2) AND row_id = ANY($3::uuid[])`,
+          [row.id, name, emptied],
+        );
+      }
       await client.query(
         "UPDATE kyoube_meta.fields SET display_name = $3, description = $4, required = $5, options = $6, updated_at = now() WHERE table_id = $1 AND name = $2",
         [row.id, name, next.displayName, next.description, next.required, JSON.stringify(next.options)],
