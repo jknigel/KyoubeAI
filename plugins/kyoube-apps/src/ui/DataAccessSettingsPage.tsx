@@ -3,6 +3,7 @@ import type { PluginCompanySettingsPageProps } from "@paperclipai/plugin-sdk/ui"
 import { usePluginAction, usePluginToast } from "@paperclipai/plugin-sdk/ui";
 import { errorText } from "./format.js";
 import { button, input } from "./forms.js";
+import { DecisionsSettings } from "./DecisionsSettings.js";
 
 const LEVELS = ["none", "read", "write", "schema"] as const;
 interface GrantsData { settings: { defaultAgentLevel: string; hardDelete: boolean }; grants: Array<{ agentId: string; level: string; updatedAt: string }>; agents: Array<{ id: string; name: string; status: string }> }
@@ -58,6 +59,7 @@ export function DataAccessSettingsPage({ context }: PluginCompanySettingsPagePro
               {data.agents.length === 0 && <tr><td className="px-2 py-2 text-foreground/60" colSpan={3}>No agents in this company yet.</td></tr>}
             </tbody>
           </table>
+          <DecisionsSettings companyId={companyId} />
         </>
       )}
     </div>
