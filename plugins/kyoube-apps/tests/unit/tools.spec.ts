@@ -11,7 +11,7 @@ describe("tool declarations", () => {
   it("declares every tool with a JSON schema object", () => {
     const declarations = toolDeclarations();
     expect(declarations.map((tool) => tool.name)).toEqual([
-      "data_list_tables", "data_describe_table", "data_create_table", "data_add_field", "data_update_field", "data_remove_field",
+      "data_list_tables", "data_describe_table", "data_list_review", "data_create_table", "data_add_field", "data_update_field", "data_remove_field",
       "data_drop_table", "data_rename_table", "data_create_index", "data_insert", "data_update", "data_delete", "data_get",
       "data_query", "data_count", "data_sql_select", "data_my_access",
     ]);

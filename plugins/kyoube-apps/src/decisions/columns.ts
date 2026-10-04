@@ -1,12 +1,13 @@
 import { createHash } from "node:crypto";
 import type { Pool } from "pg";
-import type { AiColumnHooks, AiRowWrite } from "../data/ai-hooks.js";
+import type { AiCellsView, AiColumnHooks, AiRowWrite, CellCounts, ReviewEntry } from "../data/ai-hooks.js";
 import { DataError } from "../data/errors.js";
 import { isAiColumn, type AiColumnDefinition } from "../data/field-kinds.js";
 import type { AiSourceRow } from "../data/records-service.js";
+import type { TableInfo } from "../data/schema-service.js";
 import { systemActor, type DataService } from "../data/service.js";
 import {
-  advanceWatermark, cellRowIdsAfter, deleteCells, errorRowIds, getCells, listAiColumns, markManual, syncColumn, upsertCells, watermarkCeiling,
+  advanceWatermark, cellRowIdsAfter, clearForRefill, countCells, deleteCells, errorRowIds, getCells, listAiColumns, markManual, resetWatermark, reviewCells, syncColumn, upsertCells, watermarkCeiling,
   type AiColumnRef, type CellWrite,
 } from "./cells.js";
 import { canonical, questionFingerprint, reviewThreshold, type DecideResult } from "./contract.js";
@@ -116,11 +117,51 @@ export class AiColumnService {
       assertEnabled: async (companyId) => { await this.deps.decisions.assertEnabled(companyId, "columns"); },
       changed: (companyId) => this.startBackground(companyId),
       rowsWritten: (event) => this.rowsWritten(event),
-      counts: async () => ({}),
-      listReview: async () => [],
-      refill: async () => {},
-      cells: async () => ({ provider: null, counts: {}, cells: {} }),
+      counts: (companyId, table) => this.counts(companyId, table),
+      listReview: (companyId, table, field, limit, offset) => this.listReview(companyId, table, field, limit, offset),
+      refill: (companyId, table, field) => this.refill(companyId, table, field),
+      cells: (companyId, table, rowIds) => this.cells(companyId, table, rowIds),
     };
+  }
+
+  async counts(companyId: string, table: TableInfo): Promise<Record<string, CellCounts>> {
+    const refs = await listAiColumns(this.deps.pool, companyId, table.name);
+    const counts = await countCells(this.deps.pool, refs.map((ref) => ref.fieldId));
+    return Object.fromEntries(refs.map((ref) => [ref.field, counts.get(ref.fieldId)!]));
+  }
+
+  async listReview(companyId: string, table: TableInfo, field: string | null, limit: number, offset: number): Promise<ReviewEntry[]> {
+    const refs = (await listAiColumns(this.deps.pool, companyId, table.name)).filter((ref) => field === null || ref.field === field);
+    if (field !== null && refs.length === 0) throw new DataError("invalid", `"${field}" is not an AI column of "${table.name}"`);
+    const entries: ReviewEntry[] = [];
+    for (const ref of refs) {
+      for (const cell of await reviewCells(this.deps.pool, ref.fieldId, limit + offset, 0)) {
+        entries.push({ rowId: cell.rowId, field: ref.field, suggestion: cell.suggestion, confidence: cell.confidence, decisionId: cell.decisionId, updatedAt: cell.updatedAt });
+      }
+    }
+    entries.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : a.rowId.localeCompare(b.rowId)));
+    return entries.slice(offset, offset + limit);
+  }
+
+  async refill(companyId: string, table: TableInfo, field: string): Promise<void> {
+    const ref = (await listAiColumns(this.deps.pool, companyId, table.name)).find((candidate) => candidate.field === field);
+    if (!ref) throw new DataError("invalid", `"${field}" is not an AI column of "${table.name}"`);
+    await clearForRefill(this.deps.pool, ref.fieldId);
+    await resetWatermark(this.deps.pool, ref.fieldId);
+    this.startBackground(companyId);
+  }
+
+  async cells(companyId: string, table: TableInfo, rowIds: string[]): Promise<AiCellsView> {
+    const refs = await listAiColumns(this.deps.pool, companyId, table.name);
+    const view: AiCellsView = { provider: (await this.deps.providerName?.(companyId)) ?? null, counts: {}, cells: {} };
+    if (refs.length === 0) return view;
+    const counts = await countCells(this.deps.pool, refs.map((ref) => ref.fieldId));
+    for (const ref of refs) {
+      view.counts[ref.field] = counts.get(ref.fieldId)!;
+      const states = await getCells(this.deps.pool, ref.fieldId, rowIds);
+      view.cells[ref.field] = Object.fromEntries([...states].map(([id, state]) => [id, { status: state.status, suggestion: state.suggestion, confidence: state.confidence }]));
+    }
+    return view;
   }
 
   /**

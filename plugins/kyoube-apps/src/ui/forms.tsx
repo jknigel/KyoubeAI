@@ -20,6 +20,13 @@ export function CellInput(props: { field: UiField; value: string; onChange: (val
   return <input className={input} type={type} value={value} placeholder={field.kind === "multi_select" ? "a, b" : field.kind === "relation" ? "row id" : ""} onChange={(event) => onChange(event.target.value)} />;
 }
 
+/** The row a form submits: one entry per field it shows, parsed from its text values. */
+export function rowFromValues(fields: UiField[], values: Record<string, string>): Record<string, unknown> {
+  const row: Record<string, unknown> = {};
+  for (const field of fields) row[field.name] = parseCellInput(field.kind, values[field.name] ?? "");
+  return row;
+}
+
 export function RowForm(props: { fields: UiField[]; initial: Record<string, unknown>; submitLabel: string; onSubmit: (row: Record<string, unknown>) => Promise<void>; onCancel: () => void }) {
   const [values, setValues] = useState<Record<string, string>>(() => Object.fromEntries(props.fields.map((field) => [field.name, initialFormValue(field, props.initial[field.name])])));
   const [error, setError] = useState<string | null>(null);
@@ -27,9 +34,7 @@ export function RowForm(props: { fields: UiField[]; initial: Record<string, unkn
     <form className="flex flex-col gap-2 rounded border p-3" onSubmit={(event) => {
       event.preventDefault();
       try {
-        const row: Record<string, unknown> = {};
-        for (const field of props.fields) row[field.name] = parseCellInput(field.kind, values[field.name] ?? "");
-        props.onSubmit(row).catch((err) => setError(String(err instanceof Error ? err.message : err)));
+        props.onSubmit(rowFromValues(props.fields, values)).catch((err) => setError(String(err instanceof Error ? err.message : err)));
       } catch (err) { setError(String(err instanceof Error ? err.message : err)); }
     }}>
       {props.fields.map((field) => (

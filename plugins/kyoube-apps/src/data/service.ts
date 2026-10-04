@@ -1,5 +1,5 @@
 import type { Pool, PoolClient } from "pg";
-import type { AiColumnHooks, AiRowWrite } from "./ai-hooks.js";
+import type { AiCellsView, AiColumnHooks, AiRowWrite, CellCounts, ReviewEntry } from "./ai-hooks.js";
 import { ensureCompany, schemaNameFor, type CompanyScope } from "../db/company-scope.js";
 import { withMeta, type AuditEntry } from "./audit.js";
 import { DataError } from "./errors.js";
@@ -162,9 +162,12 @@ export class DataService {
     return this.schema.listTables(scope);
   }
 
-  async describeTable(companyId: string, actor: DataActor, table: string): Promise<TableInfo> {
+  async describeTable(companyId: string, actor: DataActor, table: string): Promise<TableInfo & { aiColumns?: Record<string, CellCounts> }> {
     const scope = await this.authorize(companyId, actor, "read", "describe a table");
-    return this.schema.getTable(scope, table);
+    const info = await this.schema.getTable(scope, table);
+    const hook = this.hooks.aiColumns;
+    if (!hook || !info.fields.some((field) => field.options.decision)) return info;
+    return { ...info, aiColumns: await hook.counts(companyId, info) };
   }
 
   async createTable(companyId: string, actor: DataActor, input: CreateTableInput): Promise<TableInfo> {
@@ -282,6 +285,38 @@ export class DataService {
   async sqlSelect(companyId: string, actor: DataActor, sql: string, params: unknown[] = []): Promise<{ columns: string[]; rows: Row[]; truncated: boolean }> {
     const scope = await this.authorize(companyId, actor, "read", "run SQL");
     return this.records.sqlSelect(scope, sql, params);
+  }
+
+  // ---- AI columns (docs/decisions.md) ----------------------------------------
+
+  /** Rows waiting for a person on an AI column: ids and suggestions only, never row values. */
+  async listReview(companyId: string, actor: DataActor, table: string, opts: { field?: string | null; limit?: number; offset?: number }): Promise<{ rows: ReviewEntry[] }> {
+    const scope = await this.authorize(companyId, actor, "read", "list AI cells to review");
+    const info = await this.schema.getTable(scope, table);
+    const hook = this.hooks.aiColumns;
+    if (!hook) return { rows: [] };
+    const limit = Math.min(Math.max(Math.trunc(opts.limit ?? 50), 1), 200);
+    const offset = Math.max(Math.trunc(opts.offset ?? 0), 0);
+    return { rows: await hook.listReview(companyId, info, opts.field ?? null, limit, offset) };
+  }
+
+  async refillAiColumn(companyId: string, actor: DataActor, table: string, field: string): Promise<{ ok: true }> {
+    const scope = await this.authorize(companyId, actor, "schema", "refill an AI column");
+    const hook = await this.requireAiColumns(companyId);
+    const info = await this.schema.getTable(scope, table);
+    await hook.refill(companyId, info, field);
+    await this.notify(companyId, actor, "refill_ai_column", info.name, `asked for a refill of AI column ${field} on ${info.name}`);
+    return { ok: true };
+  }
+
+  /** The Data page's view of the AI cells on the rows it shows (at most 200 ids). */
+  async aiCells(companyId: string, actor: DataActor, table: string, rowIds: string[]): Promise<AiCellsView> {
+    const scope = await this.authorize(companyId, actor, "read", "read AI cells");
+    const info = await this.schema.getTable(scope, table);
+    const hook = this.hooks.aiColumns;
+    const ids = rowIds.filter((id) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)).slice(0, 200);
+    if (!hook) return { provider: null, counts: {}, cells: {} };
+    return hook.cells(companyId, info, ids);
   }
 
   // ---- administration ---------------------------------------------------

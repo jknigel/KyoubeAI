@@ -251,6 +251,8 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
         where: params.where, orderBy: params.orderBy as never, limit: params.limit as number | undefined, offset: params.offset as number | undefined,
       }));
       ctx.data.register("data.count", async (params) => ({ count: await dataService.count(str(params, "companyId"), readActor(params), str(params, "table"), params.where) }));
+      ctx.data.register("data.ai_cells", async (params) => dataService.aiCells(str(params, "companyId"), readActor(params), str(params, "table"),
+        Array.isArray(params.rowIds) ? params.rowIds.filter((id): id is string => typeof id === "string") : []));
       ctx.data.register("data.access", async (params) => {
         const companyId = str(params, "companyId");
         const access = await dataService.myAccess(companyId, readActor(params));
@@ -273,6 +275,7 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
       action("data.remove_field", (c, a, p) => dataService.removeField(c, a, str(p, "table"), str(p, "field")));
       action("data.drop_table", (c, a, p) => dataService.dropTable(c, a, str(p, "table")));
       action("data.rename_table", (c, a, p) => dataService.renameTable(c, a, str(p, "table"), str(p, "newName")));
+      action("data.refill_ai_column", (c, a, p) => dataService.refillAiColumn(c, a, str(p, "table"), str(p, "field")));
       action("data.insert", (c, a, p) => dataService.insert(c, a, str(p, "table"), Array.isArray(p.rows) ? p.rows : []));
       action("data.update", (c, a, p) => dataService.update(c, a, str(p, "table"), { ids: p.ids as string[] | undefined, where: p.where }, (p.patch ?? {}) as Record<string, unknown>));
       action("data.delete", (c, a, p) => dataService.delete(c, a, str(p, "table"), { ids: p.ids as string[] | undefined, where: p.where }));
