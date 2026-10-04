@@ -4,6 +4,7 @@ import { DataError, type DataErrorCode } from "./data/errors.js";
 import { FIELD_KINDS } from "./data/field-kinds.js";
 import type { DataActor } from "./data/permissions.js";
 import type { DataService } from "./data/service.js";
+import { guardFrom } from "./decisions/guardrail.js";
 
 type Method = "GET" | "POST";
 
@@ -142,18 +143,20 @@ async function dispatch(service: DataService, input: PluginApiRequestInput, comp
     case "tables.list": return service.listTables(companyId, actor);
     case "tables.create": { const b = parseBody("tables.create", input.body); return service.createTable(companyId, actor, { name: b.name, displayName: b.displayName, description: b.description, fields: b.fields }); }
     case "tables.get": return service.describeTable(companyId, actor, param(input, "table"));
-    case "tables.rename": { const b = parseBody("tables.rename", input.body); return service.renameTable(companyId, actor, param(input, "table"), b.newName); }
-    case "tables.drop": return service.dropTable(companyId, actor, param(input, "table"));
+    // The covered calls (the guardrail, docs/decisions.md) also take `issueId` and `confirmationId`;
+    // the body schemas are not strict, so both pass through them and `guardFrom` reads only those.
+    case "tables.rename": { const b = parseBody("tables.rename", input.body); return service.renameTable(companyId, actor, param(input, "table"), b.newName, guardFrom(input.body)); }
+    case "tables.drop": return service.dropTable(companyId, actor, param(input, "table"), guardFrom(input.body));
     case "fields.add": { const b = parseBody("fields.add", input.body); return service.addField(companyId, actor, param(input, "table"), b.field); }
     case "fields.update": { const b = parseBody("fields.update", input.body); return service.updateField(companyId, actor, param(input, "table"), param(input, "field"), { displayName: b.displayName, description: b.description, required: b.required, choices: b.choices, decision: b.decision }); }
-    case "fields.remove": return service.removeField(companyId, actor, param(input, "table"), param(input, "field"));
+    case "fields.remove": return service.removeField(companyId, actor, param(input, "table"), param(input, "field"), guardFrom(input.body));
     case "indexes.create": { const b = parseBody("indexes.create", input.body); return service.createIndex(companyId, actor, param(input, "table"), b.fields, b.unique ?? false); }
     case "rows.insert": { const b = parseBody("rows.insert", input.body); return service.insert(companyId, actor, param(input, "table"), b.rows); }
     case "rows.query": { const b = parseBody("rows.query", input.body); return service.query(companyId, actor, param(input, "table"), { where: b.where, orderBy: b.orderBy, limit: b.limit, offset: b.offset, fields: b.fields }); }
     case "rows.count": { const b = parseBody("rows.count", input.body); return { count: await service.count(companyId, actor, param(input, "table"), b.where) }; }
     case "rows.get": return service.get(companyId, actor, param(input, "table"), param(input, "id"));
-    case "rows.update": { const b = parseBody("rows.update", input.body); return service.update(companyId, actor, param(input, "table"), { ids: b.ids, where: b.where }, b.patch); }
-    case "rows.delete": { const b = parseBody("rows.delete", input.body); return service.delete(companyId, actor, param(input, "table"), { ids: b.ids, where: b.where }); }
+    case "rows.update": { const b = parseBody("rows.update", input.body); return service.update(companyId, actor, param(input, "table"), { ids: b.ids, where: b.where }, b.patch, undefined, guardFrom(input.body)); }
+    case "rows.delete": { const b = parseBody("rows.delete", input.body); return service.delete(companyId, actor, param(input, "table"), { ids: b.ids, where: b.where }, undefined, guardFrom(input.body)); }
     case "sql.select": { const b = parseBody("sql.select", input.body); return service.sqlSelect(companyId, actor, b.sql, b.params ?? []); }
     case "tables.review": {
       const field = typeof input.query.field === "string" && input.query.field ? input.query.field : null;

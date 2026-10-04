@@ -62,9 +62,15 @@ export async function findLiveHold(pool: Pool, input: { companyId: string; agent
   return result.rows[0] ? fromRow(result.rows[0]) : null;
 }
 
-/** One atomic statement, so two racing retries cannot both use the same hold. */
-export async function consumeHold(pool: Pool, holdId: string): Promise<boolean> {
-  const result = await pool.query("UPDATE kyoube_meta.guardrail_holds SET consumed_at = now() WHERE id = $1 AND consumed_at IS NULL", [holdId]);
+/**
+ * One atomic statement, so two racing retries cannot both use the same hold, and an expired hold is
+ * never used. `now` is the caller's clock, as for `findLiveHold`.
+ */
+export async function consumeHold(pool: Pool, holdId: string, now: Date = new Date()): Promise<boolean> {
+  const result = await pool.query(
+    "UPDATE kyoube_meta.guardrail_holds SET consumed_at = now() WHERE id = $1 AND consumed_at IS NULL AND expires_at > $2",
+    [holdId, now],
+  );
   return (result.rowCount ?? 0) > 0;
 }
 

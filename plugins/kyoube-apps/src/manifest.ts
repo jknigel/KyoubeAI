@@ -61,6 +61,12 @@ const manifest: PaperclipPluginManifestV1 = {
     // can ever answer a card or an approval (tests/unit/decision-config.spec.ts).
     "http.outbound",
     "secrets.read-ref",
+    // The guardrail (milestone 4): read the agent's task, raise a human-only confirmation card on
+    // it, and read that card's answer. Answering cards (issue.interactions.respond) and approvals
+    // (approvals.respond) are never declared: a decision can hold an action, never approve one.
+    "issues.read",
+    "issue.interactions.create",
+    "issue.interactions.read",
   ],
   entrypoints: { worker: "./dist/worker.js", ui: "./dist/ui" },
   instanceConfigSchema: DECISIONS_CONFIG_SCHEMA,

@@ -50,6 +50,18 @@ describe("guardrail holds", () => {
     expect(await findLiveHold(db.pool, { companyId: C, agentId: "agent-1", issueId: "issue-1", fingerprint: "b".repeat(64), now: new Date() })).toBeNull();
   });
 
+  it("is never used once it has expired", async () => {
+    const lapsed = hold({ fingerprint: "c".repeat(64), expiresAt: new Date(Date.now() - 60_000) });
+    await createHold(db.pool, lapsed);
+    expect(await consumeHold(db.pool, lapsed.id)).toBe(false);
+    const live = hold({ fingerprint: "d".repeat(64) });
+    await createHold(db.pool, live);
+    expect(await consumeHold(db.pool, live.id, new Date(Date.now() + 2 * 86_400_000))).toBe(false);
+    expect((await findHold(db.pool, C, lapsed.cardId))!.consumedAt).toBeNull();
+    expect((await findHold(db.pool, C, live.cardId))!.consumedAt).toBeNull();
+    expect(await consumeHold(db.pool, live.id, new Date())).toBe(true);
+  });
+
   it("purges holds a week past their expiry", async () => {
     const old = hold({ expiresAt: new Date(Date.now() - 8 * 86_400_000) });
     const recent = hold({ expiresAt: new Date(Date.now() - 86_400_000) });

@@ -9,6 +9,7 @@ import type { TableInfo } from "../data/schema-service.js";
 import type { DataService, MutationEvent } from "../data/service.js";
 import { schemaNameFor } from "../db/company-scope.js";
 import { QUESTION_KEY_RE, type DecideResult, type Question } from "../decisions/contract.js";
+import type { GuardAgentAction, GuardContext, GuardedAction } from "../decisions/guardrail.js";
 import type { DecisionService } from "../decisions/service.js";
 import { getLoggedDecision, recordOutcome, type Outcome } from "../decisions/store.js";
 import { assertAppSource, decisionSetsChanged, validateAppManifest, type AppManifest } from "./manifest.js";
@@ -48,12 +49,16 @@ export interface AppServiceDeps {
   onMutationError?: (error: unknown, event: MutationEvent) => void;
   /** The clock `decideOutcome` measures its 24-hour window with; tests replace it. */
   now?: () => number;
+  /** The guardrail on risky agent actions (milestone 4). */
+  guardAgentAction?: GuardAgentAction;
 }
 
-/** What publishing and rolling back accept besides the version. Milestone 4 adds `guard` here. */
+/** What publishing and rolling back accept besides the version. */
 export interface PublishOptions {
   /** The publisher reviewed the version's new or changed decision sets and what they send. */
   decisionsConfirmed?: boolean;
+  /** The guardrail's task and confirmation ids; only an agent's call carries them. */
+  guard?: GuardContext;
 }
 
 export type DecideInputRef = { rowId: string } | { values: Record<string, unknown> };
@@ -160,6 +165,7 @@ export class AppService {
   private readonly onMutation: AppServiceDeps["onMutation"];
   private readonly onMutationError: AppServiceDeps["onMutationError"];
   private readonly now: () => number;
+  private readonly guardAgentAction: AppServiceDeps["guardAgentAction"];
 
   constructor(deps: AppServiceDeps) {
     this.pool = deps.pool;
@@ -169,6 +175,7 @@ export class AppService {
     this.onMutation = deps.onMutation;
     this.onMutationError = deps.onMutationError;
     this.now = deps.now ?? Date.now;
+    this.guardAgentAction = deps.guardAgentAction;
   }
 
   /** Live apps for this company: drafts are visible only to those who can edit them. */
@@ -234,8 +241,9 @@ export class AppService {
   }
 
   /** Terminal in Phase 3 (ruling P3-R10): the app disappears and its slug is free again. */
-  async archive(companyId: string, actor: DataActor, slug: string): Promise<AppRecord> {
+  async archive(companyId: string, actor: DataActor, slug: string, opts: { guard?: GuardContext } = {}): Promise<AppRecord> {
     await this.authorize(companyId, actor, "schema", "archive an app", { fresh: true });
+    await this.guarded(companyId, actor, { operation: "app_archive", app: slug, params: { slug } }, opts.guard);
     const app = await this.store.setStatus(companyId, slug, "archived",
       (archived) => this.entry(companyId, actor, "app_archive", archived, {}));
     await this.notify(companyId, actor, "app_archive", app, `archived app ${slug}`);
@@ -435,6 +443,10 @@ export class AppService {
     if (changed && opts.decisionsConfirmed !== true) {
       throw new DataError("invalid", "this version adds or changes decision sets; review what they send, then publish with decisionsConfirmed: true");
     }
+    // Milestone 4: the guardrail screens an agent's publish or rollback of this exact version. The
+    // resolved version number is in the fingerprint, so a person's "Allow once" covers the version
+    // they were shown, never a newer draft saved in between.
+    await this.guarded(companyId, actor, { operation: operation === "app_rollback" ? "app_rollback" : "app_publish", app: slug, version: target.version, params: { slug, version: target.version } }, opts.guard);
     const sets = Object.keys(target.manifest.decisions ?? {});
     const app = await this.store.setCurrent(companyId, slug, target.version,
       (published) => this.entry(companyId, actor, operation, published, { version: target.version, ...(sets.length > 0 ? { decisionSets: sets, decisionsConfirmed: changed } : {}) }));
@@ -498,6 +510,12 @@ export class AppService {
    */
   private entry(companyId: string, actor: DataActor, operation: string, app: AppRecord, details: Record<string, unknown>): AuditEntry {
     return { companyId, actor, operation, table: null, details: { app: app.slug, appId: app.id, ...details } };
+  }
+
+  /** The guardrail, as in DataService: agents only, after authorisation, before the change. */
+  private async guarded(companyId: string, actor: DataActor, action: Omit<GuardedAction, "companyId" | "actor" | "guard">, guard?: GuardContext): Promise<void> {
+    if (actor.kind !== "agent" || !this.guardAgentAction) return;
+    await this.guardAgentAction({ ...action, companyId, actor, guard });
   }
 
   /**

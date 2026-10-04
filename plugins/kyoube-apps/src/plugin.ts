@@ -9,6 +9,9 @@ import { registerAppTools } from "./apps/tools.js";
 import { handleDecisionsApiRequest } from "./decisions/api-routes.js";
 import { AiColumnService } from "./decisions/columns.js";
 import { API_KEY_CONFIG_PATH, ProviderResolver, validateDecisionsConfig } from "./decisions/config.js";
+import { guardFrom, guardOption } from "./decisions/guardrail.js";
+import { Guardrail } from "./decisions/guardrail-service.js";
+import { purgeGuardrailHolds } from "./decisions/holds.js";
 import { DecisionService, type DecisionServiceDeps } from "./decisions/service.js";
 import { purgeDecisionData } from "./decisions/store.js";
 import { registerDecisionTools } from "./decisions/tools.js";
@@ -207,6 +210,20 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
       });
       decisions = decisionService;
       registerDecisionTools(ctx, decisionService);
+      // The guardrail on risky agent actions: one instance, handed to both services, so every
+      // agent path (REST, tools, actions) is checked the same way and none can bypass it.
+      const guardrail = new Guardrail({
+        pool: dbPool,
+        decisions: decisionService,
+        issues: {
+          get: (issueId, companyId) => ctx.issues.get(issueId, companyId),
+          requestConfirmation: (issueId, interaction, companyId) => ctx.issues.requestConfirmation(issueId, interaction as never, companyId),
+          listInteractions: (issueId, companyId) => ctx.issues.listInteractions(issueId, companyId),
+        },
+        agentName: async (agentId, companyId) => (await ctx.agents.get(agentId, companyId))?.name ?? null,
+        log: (message, meta) => ctx.logger.warn(message, meta),
+      });
+      dataService.attach({ guardAgentAction: guardrail.check });
       // The apps service resolves every caller's level through this same
       // DataService, so an app can only ever narrow its viewer's access.
       const appService = (deps.createAppService ?? ((appDeps) => new AppService(appDeps)))({
@@ -215,6 +232,7 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
         decisions: decisionService,
         onMutation: appsActivity.log,
         onMutationError: appsActivity.onError,
+        guardAgentAction: guardrail.check,
       });
       apps = appService;
       // AI columns (docs/decisions.md). DataService gets them late, through attach(), because
@@ -267,19 +285,21 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
       });
 
       // ---- UI actions (actor supplied by the host) ----
+      // The actor may be an agent as well as a person, so the actions the guardrail covers take its
+      // `issueId` and `confirmationId` too; a person's call carries neither and is never checked.
       const action = (key: string, fn: (companyId: string, actor: DataActor, params: Params) => Promise<unknown>) =>
         ctx.actions.register(key, async (params, context) => fn(companyOf(context, params), actorFromAction(context), params));
 
       action("data.create_table", (c, a, p) => dataService.createTable(c, a, { name: str(p, "name"), displayName: p.displayName as string | undefined, description: p.description as string | undefined, fields: Array.isArray(p.fields) ? p.fields : [] }));
       action("data.add_field", (c, a, p) => dataService.addField(c, a, str(p, "table"), p.field));
       action("data.update_field", (c, a, p) => dataService.updateField(c, a, str(p, "table"), str(p, "field"), { displayName: p.displayName as string | undefined, description: p.description as string | null | undefined, required: p.required as boolean | undefined, choices: p.choices as string[] | undefined, decision: p.decision }));
-      action("data.remove_field", (c, a, p) => dataService.removeField(c, a, str(p, "table"), str(p, "field")));
-      action("data.drop_table", (c, a, p) => dataService.dropTable(c, a, str(p, "table")));
-      action("data.rename_table", (c, a, p) => dataService.renameTable(c, a, str(p, "table"), str(p, "newName")));
+      action("data.remove_field", (c, a, p) => dataService.removeField(c, a, str(p, "table"), str(p, "field"), guardFrom(p)));
+      action("data.drop_table", (c, a, p) => dataService.dropTable(c, a, str(p, "table"), guardFrom(p)));
+      action("data.rename_table", (c, a, p) => dataService.renameTable(c, a, str(p, "table"), str(p, "newName"), guardFrom(p)));
       action("data.refill_ai_column", (c, a, p) => dataService.refillAiColumn(c, a, str(p, "table"), str(p, "field")));
       action("data.insert", (c, a, p) => dataService.insert(c, a, str(p, "table"), Array.isArray(p.rows) ? p.rows : []));
-      action("data.update", (c, a, p) => dataService.update(c, a, str(p, "table"), { ids: p.ids as string[] | undefined, where: p.where }, (p.patch ?? {}) as Record<string, unknown>));
-      action("data.delete", (c, a, p) => dataService.delete(c, a, str(p, "table"), { ids: p.ids as string[] | undefined, where: p.where }));
+      action("data.update", (c, a, p) => dataService.update(c, a, str(p, "table"), { ids: p.ids as string[] | undefined, where: p.where }, (p.patch ?? {}) as Record<string, unknown>, undefined, guardFrom(p)));
+      action("data.delete", (c, a, p) => dataService.delete(c, a, str(p, "table"), { ids: p.ids as string[] | undefined, where: p.where }, undefined, guardFrom(p)));
       action("data.sql_select", (c, a, p) => dataService.sqlSelect(c, a, str(p, "sql"), Array.isArray(p.params) ? p.params : []));
       action("data.grants", async (c, a) => {
         const [settings, grants, agents] = await Promise.all([dataService.getSettings(c, a), dataService.listAgentGrants(c, a), ctx.agents.list({ companyId: c })]);
@@ -332,9 +352,9 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
       action("apps.get", (c, a, p) => appService.get(c, a, str(p, "slug"), versionRef(p)));
       action("apps.create", (c, a, p) => appService.create(c, a, p.manifest, p.source, optionalNotes(p)));
       action("apps.update", (c, a, p) => appService.update(c, a, str(p, "slug"), p.manifest, p.source, optionalNotes(p)));
-      action("apps.publish", (c, a, p) => appService.publish(c, a, str(p, "slug"), optionalVersionNumber(p), { decisionsConfirmed: p.decisionsConfirmed === true }));
-      action("apps.rollback", (c, a, p) => appService.rollback(c, a, str(p, "slug"), versionNumber(p), { decisionsConfirmed: p.decisionsConfirmed === true }));
-      action("apps.archive", (c, a, p) => appService.archive(c, a, str(p, "slug")));
+      action("apps.publish", (c, a, p) => appService.publish(c, a, str(p, "slug"), optionalVersionNumber(p), { decisionsConfirmed: p.decisionsConfirmed === true, ...guardOption(p) }));
+      action("apps.rollback", (c, a, p) => appService.rollback(c, a, str(p, "slug"), versionNumber(p), { decisionsConfirmed: p.decisionsConfirmed === true, ...guardOption(p) }));
+      action("apps.archive", (c, a, p) => appService.archive(c, a, str(p, "slug"), guardOption(p)));
       // The runner has no viewer name to show yet (the action context carries
       // ids, not display names), so the app sees an empty one.
       action("apps.runtime", (c, a, p) => appService.runtime(c, a, str(p, "slug"), ""));
@@ -377,6 +397,8 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
         try {
           const purged = await purgeDecisionData(dbPool);
           if (purged.decisions + purged.usage > 0) ctx.logger.info("purged old decision log rows", purged);
+          const holds = await purgeGuardrailHolds(dbPool);
+          if (holds > 0) ctx.logger.info("purged expired guardrail holds", { holds });
         } catch (error) {
           ctx.logger.error("decision log purge failed", { error: String(error) });
         }
