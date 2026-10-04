@@ -76,6 +76,15 @@ function round4(value: number): number {
   return Math.round(value * 10_000) / 10_000;
 }
 
+/**
+ * The part of the daily cap the AI-column fill may use: 90%, rounded down, and nothing under a cap
+ * of 10. One cap is shared by every use, so a big backfill must not leave agents, apps and the
+ * guardrail with no budget for the rest of the day; they keep the last tenth, and can use the full cap.
+ */
+export function fillShare(cap: number): number {
+  return cap < 10 ? 0 : Math.floor((cap * 9) / 10);
+}
+
 export class DecisionService {
   constructor(private readonly deps: DecisionServiceDeps) {}
 
@@ -222,7 +231,11 @@ export class DecisionService {
     assertRequestSize({ state: request.state, questions });
     const target = await this.deps.providers.resolve(companyId);
     const day = utcDay(this.now());
-    if (!(await reserveRequests(this.deps.pool, companyId, 1, settings.dailyCap, day))) {
+    const limit = surface === "columns" ? fillShare(settings.dailyCap) : settings.dailyCap;
+    if (!(await reserveRequests(this.deps.pool, companyId, 1, limit, day))) {
+      if (surface === "columns") {
+        throw new DataError("budget_exceeded", `AI columns have used their share of today's typed decisions (UTC): ${limit} of the daily cap of ${settings.dailyCap}, with the rest kept for agents, apps and the guardrail; a company admin can raise the cap under Company Settings → Data access`);
+      }
       throw new DataError("budget_exceeded", `this company has used its ${settings.dailyCap} typed decisions for today (UTC); a company admin can raise the cap under Company Settings → Data access`);
     }
     let raw;
@@ -236,11 +249,13 @@ export class DecisionService {
     const answers: Record<string, Answer> = {};
     for (const [key, question] of Object.entries(questions)) {
       const answer = raw.answers[key]!;
+      // The status comes from the confidence the caller sees and the log keeps, never the unrounded one.
+      const confidence = round4(answer.confidence);
       answers[key] = {
         type: question.type,
         value: answer.value,
-        confidence: round4(answer.confidence),
-        status: answerStatus(question, answer.value, answer.confidence, opts.advisory),
+        confidence,
+        status: answerStatus(question, answer.value, confidence, opts.advisory),
         ...(opts.includeProbabilities ? { probabilities: Object.fromEntries(Object.entries(answer.probabilities).map(([label, p]) => [label, round4(p)])) } : {}),
       };
     }

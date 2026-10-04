@@ -115,6 +115,18 @@ describe("decide", () => {
     expect(advisory.answers.refund!.status).toBe("review");
   });
 
+  it("decides the status from the confidence it returns and logs, rounded to four places", async () => {
+    const { service } = harness({}, async () => ok({ queue: { choice: "billing", confidence: 0.89996 }, refund: { noul: 0.89994 } }));
+    const result = await service.decide(C, AGENT, "agents", { state: "x", questions: { queue, refund } });
+    expect(result.answers.queue).toMatchObject({ confidence: 0.9, status: "auto" });
+    expect(result.answers.refund).toMatchObject({ confidence: 0.8999, status: "review" });
+    const logged = await db.pool.query("SELECT question_key, confidence, review_threshold, status FROM kyoube_meta.decisions ORDER BY question_key");
+    expect(logged.rows).toEqual([
+      { question_key: "queue", confidence: 0.9, review_threshold: 0.9, status: "auto" },
+      { question_key: "refund", confidence: 0.8999, review_threshold: 0.9, status: "review" },
+    ]);
+  });
+
   it("refuses when the use is off, the provider is missing, or the caller has no access", async () => {
     const { service } = harness();
     expect(await codeOf(service.decide(C, AGENT, "apps", { state: "x", questions: { refund } }))).toBe("disabled");
@@ -129,6 +141,32 @@ describe("decide", () => {
     await service.decide(C, AGENT, "agents", { state: "x", questions: { refund } });
     expect(await codeOf(service.decide(C, AGENT, "agents", { state: "x", questions: { refund } }))).toBe("budget_exceeded");
     expect(fetches).toHaveLength(1);
+  });
+
+  it("keeps a tenth of the daily cap from AI columns for agents, apps and the guardrail", async () => {
+    await setDecisionSettings(db.pool, C, { agents: true, columns: true, dailyCap: 20 });
+    const { service, fetches } = harness();
+    const ask = (surface: "agents" | "columns") => codeOf(service.decide(C, AGENT, surface, { state: "x", questions: { refund } }));
+    for (let i = 0; i < 18; i += 1) expect(await ask("columns")).toBe("resolved");
+    // 18 of 20 used: AI columns stop at 90%, the other uses carry on to the full cap.
+    expect(await ask("columns")).toBe("budget_exceeded");
+    expect(await ask("agents")).toBe("resolved");
+    expect(await ask("agents")).toBe("resolved");
+    expect(await ask("agents")).toBe("budget_exceeded");
+    expect(fetches).toHaveLength(20);
+    expect(await usageOn(db.pool, C, utcDay())).toBe(20);
+  });
+
+  it("rounds the AI columns' share down, and gives them nothing under a cap of 10", async () => {
+    const { service } = harness();
+    const ask = (surface: "agents" | "columns") => codeOf(service.decide(C, AGENT, surface, { state: "x", questions: { refund } }));
+    await setDecisionSettings(db.pool, C, { columns: true, dailyCap: 9 });
+    expect(await ask("columns")).toBe("budget_exceeded");
+    expect(await ask("agents")).toBe("resolved");
+    await db.pool.query("DELETE FROM kyoube_meta.decision_usage");
+    await setDecisionSettings(db.pool, C, { dailyCap: 15 });
+    for (let i = 0; i < 13; i += 1) expect(await ask("columns")).toBe("resolved");
+    expect(await ask("columns")).toBe("budget_exceeded");
   });
 
   it("releases the slot when the provider fails", async () => {

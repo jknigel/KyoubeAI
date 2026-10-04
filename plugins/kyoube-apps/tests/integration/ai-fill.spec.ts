@@ -3,8 +3,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { Pool } from "pg";
 import { roleNameFor, schemaNameFor } from "../../src/db/company-scope.js";
 import { countCells, getCells, listAiColumns } from "../../src/decisions/cells.js";
-import { setDecisionSettings, usageOn, utcDay } from "../../src/decisions/store.js";
-import { aiFixture, answer, failure, OWNER } from "./ai-fixture.js";
+import { reserveRequests, setDecisionSettings, usageOn, utcDay } from "../../src/decisions/store.js";
+import { AGENT, aiFixture, answer, failure, OWNER } from "./ai-fixture.js";
 
 const C = "99999999-9999-4999-8999-999999999999";
 let close: (() => Promise<void>) | null = null;
@@ -121,7 +121,9 @@ describe("filling AI columns", () => {
 
   it("stops when today's budget is used up and carries on where it stopped", async () => {
     const f = await setup();
-    await setDecisionSettings(f.db.pool, C, { dailyCap: 1 });
+    // A cap of 10 gives the fill 9; with 8 already used today, it has room for one row.
+    await setDecisionSettings(f.db.pool, C, { dailyCap: 10 });
+    await reserveRequests(f.db.pool, C, 8, 10, utcDay());
     await f.data.insert(C, OWNER, "tickets", [{ subject: "a refund" }, { subject: "b refund" }, { subject: "c refund" }]);
     await f.addRefund();
     await f.ai.idle(C);
@@ -130,6 +132,23 @@ describe("filling AI columns", () => {
     await f.ai.fillCompany(C);
     expect(await refunds(f)).toEqual([["a refund", true], ["b refund", true], ["c refund", true]]);
     expect(f.calls).toHaveLength(3);
+  });
+
+  it("leaves the last tenth of the daily cap to agents, apps and the guardrail", async () => {
+    const f = await setup();
+    await setDecisionSettings(f.db.pool, C, { dailyCap: 20 });
+    await f.data.insert(C, OWNER, "tickets", Array.from({ length: 25 }, (_, i) => ({ subject: `refund ${String(i).padStart(2, "0")}` })));
+    await f.addRefund();
+    await f.ai.idle(C);
+    const report = await f.ai.fillCompany(C);
+    expect(report.stoppedBy).toBe("budget_exceeded");
+    expect((await refunds(f)).filter(([, value]) => value === true)).toHaveLength(18);
+    expect(await usageOn(f.db.pool, C, utcDay())).toBe(18);
+    // The reserve is still there for an agent.
+    // (The fixture's model answers under the fill's own question key.)
+    const agent = await f.decisions.decide(C, AGENT, "agents", { state: "refund please", questions: { value: { type: "check", statement: "Asks for a refund." } } });
+    expect(agent.answers.value!.value).toBe(true);
+    expect(await usageOn(f.db.pool, C, utcDay())).toBe(19);
   });
 
   it("retries failed cells only with what is left of the run, after new and changed rows", async () => {
