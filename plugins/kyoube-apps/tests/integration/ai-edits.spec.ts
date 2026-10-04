@@ -4,7 +4,7 @@ import type { Pool } from "pg";
 import { roleNameFor, schemaNameFor } from "../../src/db/company-scope.js";
 import type { FetchLike } from "../../src/decisions/client.js";
 import { clearForRefill, getCells, listAiColumns, markManual, resetWatermark } from "../../src/decisions/cells.js";
-import { aiFixture, AGENT, OWNER, refundModel } from "./ai-fixture.js";
+import { aiFixture, AGENT, answer, OWNER, refundModel } from "./ai-fixture.js";
 
 const C = "aaaaaaaa-9999-4999-8999-999999999999";
 let close: (() => Promise<void>) | null = null;
@@ -149,6 +149,39 @@ describe("edits to AI cells", () => {
     expect((await f.data.get(C, OWNER, "tickets", f.maybe))!.refund).toBe(false);
     expect((await f.data.get(C, OWNER, "tickets", f.sure))!.refund).toBe(true);
     expect(await f.cell(f.maybe)).toMatchObject({ status: "manual" });
+  });
+
+  it("hands every value a changed question no longer allows back to the fill, a manual one included", async () => {
+    const calls: string[] = [];
+    // A choice model: "support" once the question offers it; before that "billing" for a login
+    // problem (so a person has something to correct) and "technical" otherwise.
+    const fetch: FetchLike = async (_url, init) => {
+      const body = JSON.parse(init.body) as { state: unknown; questions: { value: { criteria?: Record<string, unknown> } } };
+      const state = JSON.stringify(body.state);
+      calls.push(state);
+      const choice = Object.hasOwn(body.questions.value.criteria ?? {}, "support") ? "support" : state.includes("log in") ? "billing" : "technical";
+      return answer({ model: "jev-1.13.0", answers: { value: { choice, confidence: 0.97 } } });
+    };
+    const f = await aiFixture(C, "ai-edits.spec.ts", { fetch });
+    close = () => f.db.close();
+    const [byModel, byPerson, stillFits] = (await f.data.insert(C, OWNER, "tickets", [{ subject: "app crashes" }, { subject: "cannot log in" }, { subject: "charged twice" }])).map((row) => String(row.id));
+    const queue = (options: Record<string, null>) => ({ question: { type: "choice", instructions: "Which team?", options }, sourceFields: ["subject"] });
+    await f.data.addField(C, OWNER, "tickets", { name: "queue", kind: "select", options: { decision: queue({ billing: null, technical: null }) } });
+    await f.ai.idle(C);
+    await f.data.update(C, OWNER, "tickets", { ids: [byPerson!] }, { queue: "technical" });
+    await f.data.update(C, OWNER, "tickets", { ids: [stillFits!] }, { queue: "billing" });
+    const [ref] = await listAiColumns(f.db.pool, C);
+    const status = async (id: string) => (await getCells(f.db.pool, ref!.fieldId, [id])).get(id)?.status ?? null;
+    expect([await status(byModel!), await status(byPerson!), await status(stillFits!)]).toEqual(["auto", "manual", "manual"]);
+    calls.length = 0;
+
+    await f.data.updateField(C, OWNER, "tickets", "queue", { decision: queue({ billing: null, support: null }) });
+    await f.ai.idle(C);
+    // The person's "technical" no longer fits, so it is decided again rather than left empty for good.
+    expect(calls.sort()).toEqual(['{"subject":"app crashes"}', '{"subject":"cannot log in"}']);
+    const value = async (id: string) => (await f.data.get(C, OWNER, "tickets", id))!.queue;
+    expect([await value(byModel!), await value(byPerson!), await value(stillFits!)]).toEqual(["support", "support", "billing"]);
+    expect([await status(byModel!), await status(byPerson!), await status(stillFits!)]).toEqual(["auto", "auto", "manual"]);
   });
 });
 
