@@ -42,6 +42,18 @@ inserts. All three examples use the tool names exactly as the host namespaces th
 Every command needs `$KYOUBE_URL` (the core's base URL), `$BOARD_API_KEY` (an instance-admin key —
 see [`docs/operations.md`](operations.md#rotating-the-board-api-key)), and `$COMPANY_ID`.
 
+### A third gate: the typed-decisions guardrail
+
+Both gates above decide whether a call is *allowed*. A company that has typed decisions set up
+([`decisions.md`](decisions.md)) can add a third that decides whether an allowed call is *wanted*:
+**Guardrail on risky agent actions**, under Company Settings → Data access. It runs inside
+`kyoube.apps`, so it covers the REST path as well as tools, for `data_drop_table`,
+`data_rename_table`, `data_remove_field`, bulk `data_update`/`data_delete`, and `apps_publish`,
+`apps_rollback`, `apps_archive`. It can only hold a call, never allow one the grant level refuses.
+A held call waits on a people-only confirmation card on the agent's task. It is not a security
+boundary: the grant level is. Grant `schema` as narrowly as before, and use the guardrail to catch
+the allowed call that does not fit the task.
+
 ## 1. A read-only default profile
 
 Create a profile that includes only Kyoube's read-level tools — `data_list_tables`,

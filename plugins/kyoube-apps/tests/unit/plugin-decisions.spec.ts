@@ -94,7 +94,7 @@ describe("plugin wiring for typed decisions", () => {
 
 describe("the kyoube-decisions skill", () => {
   it("ships as a third managed skill and installs with the other two", async () => {
-    expect(PLUGIN_VERSION).toBe("0.7.0");
+    expect(PLUGIN_VERSION).toBe("0.8.0");
     expect(manifest.skills?.map((skill) => skill.skillKey)).toEqual(["kyoube-data", "kyoube-apps", DECISIONS_SKILL_KEY]);
     const { harness, plugin } = await setup();
     await plugin.definition.onApiRequest!({ routeKey: "skills.install", method: "POST", path: "/skills/install", params: {}, query: {}, body: { companyId: COMPANY }, actor: { actorType: "user", actorId: "admin-1", userId: "admin-1" }, companyId: COMPANY, headers: {} });
@@ -111,5 +111,16 @@ describe("AI columns in the skills and manifest", () => {
     expect(manifest.jobs?.find((job) => job.jobKey === "fill-ai-columns")).toMatchObject({ schedule: "*/5 * * * *" });
     const data = manifest.skills!.find((skill) => skill.skillKey === "kyoube-data")!.markdown;
     for (const phrase of ["AI column", "sourceFields", "/review", "data_list_review", "manual"]) expect(data).toContain(phrase);
+  });
+});
+
+describe("the guardrail in the skills", () => {
+  const skill = (key: string) => manifest.skills!.find((entry) => entry.skillKey === key)!.markdown;
+  it("teaches agents to pass their task, to wait when held, and never to work around a hold", () => {
+    for (const phrase of ["issueId", "$PAPERCLIP_TASK_ID", "held", "confirmationId", "rejected_by_person", "Never try the same thing another way"]) {
+      expect(skill(DECISIONS_SKILL_KEY)).toContain(phrase);
+    }
+    expect(skill("kyoube-data")).toContain("$PAPERCLIP_TASK_ID");
+    expect(skill("kyoube-apps")).toContain("$PAPERCLIP_TASK_ID");
   });
 });

@@ -12,7 +12,7 @@ import skillMarkdown from "./skills/kyoube-data.md";
 import { toolDeclarations } from "./tools.js";
 
 export const PLUGIN_ID = "kyoube.apps";
-export const PLUGIN_VERSION = "0.7.0";
+export const PLUGIN_VERSION = "0.8.0";
 export const DATA_PAGE_ROUTE = "data";
 export const DATA_ACCESS_SETTINGS_ROUTE = "data-access";
 export { APPS_PAGE_ROUTE };

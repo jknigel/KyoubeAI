@@ -74,3 +74,33 @@ the person), `too_large` (send less state), `provider_unavailable` or `timeout` 
 `provider_rejected` (the company's key or model is wrong; tell the person).
 
 For answers kept in a Data table and refreshed automatically, use an AI column (kyoube-data skill, "AI columns").
+
+## The guardrail on risky actions
+
+A company can turn on a guardrail that checks your riskiest Kyoube calls before they run: dropping,
+renaming or removing from a table, bulk updates and deletes (a `where` filter, or more than 20 ids),
+and publishing, rolling back or archiving an app. While it is on, those calls need `issueId`, the id
+of the task you are working on, which your run has as `$PAPERCLIP_TASK_ID`:
+
+```sh
+curl -sS -H "$A" -H 'Content-Type: application/json' -X POST "$K/tables/scratch_import/drop" \
+  -d '{"companyId":"'"$PAPERCLIP_COMPANY_ID"'","issueId":"'"$PAPERCLIP_TASK_ID"'"}'
+```
+
+The tools take the same `issueId` parameter. What can come back:
+
+- Success: the check found the call part of your task and not dangerous. It ran.
+- `guardrail_context_required` (428): pass `issueId`, and make sure it is your own task.
+- `not_found`: the table, field or app does not exist. No card is raised.
+- `held` (409) with a `confirmationId`: a person has to allow this call. A card is on your task.
+  Stop working on this step and wait; you are woken when they answer. Then send exactly the same
+  call again with `"confirmationId"` added. An allowed call runs once.
+- `rejected_by_person` (403): the person declined. Never try the same thing another way (a
+  different filter, smaller batches, another route). Ask them what they want instead.
+- `conflict` (409) on a retry: that confirmation was used or is more than 24 hours old. Send the
+  call without `confirmationId` to have it checked again.
+
+Only a person can release a held call. You cannot answer the card, and once a call of yours has
+been held, the same call is never re-checked by the model while the hold is still unused: it goes
+straight to a new card. A bulk update or delete made from inside a running app is refused with
+`guardrail_context_required` while the guardrail is on; use the REST routes or tools with `issueId`.

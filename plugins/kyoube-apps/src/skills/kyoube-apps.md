@@ -193,3 +193,7 @@ which is the latest draft, and which tables it uses.
 
 To classify, score or check rows with the company's typed-decision model, see the kyoube-decisions
 skill (`POST /decisions/decide` with `rows`).
+
+If the company's guardrail is on, `apps_publish`, `apps_rollback` and `apps_archive` (and their REST
+routes) need `issueId` set to your task's id, `$PAPERCLIP_TASK_ID`. A `held` answer means stop and
+wait for the person; see the kyoube-decisions skill.

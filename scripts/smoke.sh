@@ -1018,6 +1018,59 @@ if grep -q 'kyoube:working-rules' "$TMP/agents-md-off.txt"; then echo "off left 
 compose exec -T app kyoube agent-rules --once >/dev/null
 echo "    off takes the rules back out; a pass puts them back"
 
+echo "==> guardrail: an agent's risky call waits on a people-only card and runs once when a person allows it"
+# The provider set up in the decisions step is unreachable unless KYOUBE_SMOKE_DECISIONS_KEY is set.
+# Either way the drop below is held: the check cannot run, or the task says not to change any data.
+apps_bridge decisions.set_settings "{\"companyId\":\"$COMPANY_ID\",\"params\":{\"guardrail\":true}}" | jq -e '.data.guardrail == true' >/dev/null
+apps_bridge data.set_agent_grant "{\"companyId\":\"$COMPANY_ID\",\"params\":{\"agentId\":\"$M_ID\",\"level\":\"schema\"}}" >/dev/null
+api_post "/tables" "{\"companyId\":\"$COMPANY_ID\",\"name\":\"smoke_guard\",\"fields\":[{\"name\":\"note\",\"kind\":\"text\"}]}" >/dev/null
+GUARD_ISSUE="$(curl -fsS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -X POST "$BASE_URL/api/companies/$COMPANY_ID/issues" \
+  --data "$(jq -cn --arg m "$M_ID" '{title:"smoke: summarise last week (read only)", description:"Read the tables and write a summary. Do not change or delete any data.", assigneeAgentId:$m, status:"todo"}')" | jq -r '.id')"
+[[ -n "$GUARD_ISSUE" && "$GUARD_ISSUE" != "null" ]] || { echo "could not create the guardrail task" >&2; exit 1; }
+GUARD_DROP="/api/plugins/kyoube.apps/api/tables/smoke_guard/drop"
+as_agent "$M_KEY" POST "$GUARD_DROP" "{\"companyId\":\"$COMPANY_ID\"}"
+if [[ "$HTTP_STATUS" != 428 ]] || ! jq -e '.code == "guardrail_context_required"' "$TMP/resp.json" >/dev/null; then echo "expected 428 without issueId, got $HTTP_STATUS $(cat "$TMP/resp.json")" >&2; exit 1; fi
+as_agent "$M_KEY" POST "$GUARD_DROP" "{\"companyId\":\"$COMPANY_ID\",\"issueId\":\"$GUARD_ISSUE\"}"
+if [[ "$HTTP_STATUS" != 409 ]] || ! jq -e '.code == "held" and (.confirmationId | type) == "string"' "$TMP/resp.json" >/dev/null; then echo "expected 409 held, got $HTTP_STATUS $(cat "$TMP/resp.json")" >&2; exit 1; fi
+GUARD_CARD="$(jq -r '.confirmationId' "$TMP/resp.json")"
+api_get "/tables" | jq -e 'map(.name) | index("smoke_guard") != null' >/dev/null || { echo "a held drop dropped the table" >&2; exit 1; }
+curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/issues/$GUARD_ISSUE/interactions" >"$TMP/guard-cards.json"
+jq -e --arg id "$GUARD_CARD" '[(.interactions? // .)[] | select(.id == $id and .kind == "request_confirmation" and .status == "pending" and .effectiveResolverPolicy == "human_only")] | length == 1' "$TMP/guard-cards.json" >/dev/null \
+  || { echo "no pending human-only card $GUARD_CARD on the task: $(jq -c '[(.interactions? // .)[] | {id, kind, status, effectiveResolverPolicy}]' "$TMP/guard-cards.json")" >&2; exit 1; }
+# The same call again, before anyone answers, gets the same card rather than a second one.
+as_agent "$M_KEY" POST "$GUARD_DROP" "{\"companyId\":\"$COMPANY_ID\",\"issueId\":\"$GUARD_ISSUE\"}"
+if [[ "$HTTP_STATUS" != 409 ]] || ! jq -e --arg id "$GUARD_CARD" '.code == "held" and .confirmationId == $id' "$TMP/resp.json" >/dev/null; then echo "a repeated call did not get the same card: $HTTP_STATUS $(cat "$TMP/resp.json")" >&2; exit 1; fi
+# The agent cannot answer the card, even from a run of its own (the core needs a run to attribute
+# an agent's answer; without one it refuses earlier, for a different reason).
+GUARD_RUN_ID="$(curl -fsS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -X POST "$BASE_URL/api/agents/$M_ID/wakeup" --data '{"reason":"smoke: a run to try the guardrail card from"}' | jq -r '.id')"
+[[ -n "$GUARD_RUN_ID" && "$GUARD_RUN_ID" != "null" ]] || { echo "a board wakeup started no run for smoke-manager" >&2; exit 1; }
+as_agent "$M_KEY" POST "/api/issues/$GUARD_ISSUE/interactions/$GUARD_CARD/accept" '{}' "$GUARD_RUN_ID"
+if [[ "$HTTP_STATUS" != 403 ]] || ! jq -e '.code == "interaction_human_only"' "$TMP/resp.json" >/dev/null; then echo "an agent could answer the guardrail card: $HTTP_STATUS $(cat "$TMP/resp.json")" >&2; exit 1; fi
+as_agent "$M_KEY" POST "$GUARD_DROP" "{\"companyId\":\"$COMPANY_ID\",\"issueId\":\"$GUARD_ISSUE\",\"confirmationId\":\"$GUARD_CARD\"}"
+if [[ "$HTTP_STATUS" != 409 ]] || ! jq -e '.code == "held"' "$TMP/resp.json" >/dev/null; then echo "a retry before the person answered was not held: $HTTP_STATUS $(cat "$TMP/resp.json")" >&2; exit 1; fi
+# The person allows it once.
+curl -fsS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -X POST "$BASE_URL/api/issues/$GUARD_ISSUE/interactions/$GUARD_CARD/accept" --data '{}' >/dev/null
+as_agent "$M_KEY" POST "$GUARD_DROP" "{\"companyId\":\"$COMPANY_ID\",\"issueId\":\"$GUARD_ISSUE\",\"confirmationId\":\"$GUARD_CARD\"}"
+[[ "$HTTP_STATUS" == 200 ]] || { echo "the allowed drop did not run: $HTTP_STATUS $(cat "$TMP/resp.json")" >&2; exit 1; }
+api_get "/tables" | jq -e 'map(.name) | index("smoke_guard") == null' >/dev/null || { echo "the allowed drop left the table in place" >&2; exit 1; }
+# A missing table answers not_found before the guardrail looks at the confirmation, so put the table
+# back to show that the used confirmation is what refuses the second drop.
+as_agent "$M_KEY" POST "$GUARD_DROP" "{\"companyId\":\"$COMPANY_ID\",\"issueId\":\"$GUARD_ISSUE\",\"confirmationId\":\"$GUARD_CARD\"}"
+if [[ "$HTTP_STATUS" != 404 ]] || ! jq -e '.code == "not_found"' "$TMP/resp.json" >/dev/null; then echo "a drop of a missing table was not not_found: $HTTP_STATUS $(cat "$TMP/resp.json")" >&2; exit 1; fi
+api_post "/tables" "{\"companyId\":\"$COMPANY_ID\",\"name\":\"smoke_guard\",\"fields\":[{\"name\":\"note\",\"kind\":\"text\"}]}" >/dev/null
+as_agent "$M_KEY" POST "$GUARD_DROP" "{\"companyId\":\"$COMPANY_ID\",\"issueId\":\"$GUARD_ISSUE\",\"confirmationId\":\"$GUARD_CARD\"}"
+if [[ "$HTTP_STATUS" != 409 ]] || ! jq -e '.code == "conflict"' "$TMP/resp.json" >/dev/null; then echo "a used confirmation was accepted again: $HTTP_STATUS $(cat "$TMP/resp.json")" >&2; exit 1; fi
+api_get "/tables" | jq -e 'map(.name) | index("smoke_guard") != null' >/dev/null || { echo "a used confirmation dropped the table again" >&2; exit 1; }
+# A table dropped twice within one second would collide on its recycle-bin name, so wait.
+sleep 2
+api_post "/tables/smoke_guard/drop" "{\"companyId\":\"$COMPANY_ID\"}" >/dev/null
+GUARD_HOLDS="$(compose exec -T db psql -U kyoubeai -d kyoube -Atc "select count(*) from kyoube_meta.guardrail_holds where card_id = '$GUARD_CARD' and consumed_at is not null" | tr -dc '0-9')"
+[[ "$GUARD_HOLDS" == 1 ]] || { echo "expected the guardrail hold to be used exactly once, got '${GUARD_HOLDS:-<none>}'" >&2; exit 1; }
+# Off again, and the agent back to no data access, so the rest of the smoke runs as before.
+apps_bridge decisions.set_settings "{\"companyId\":\"$COMPANY_ID\",\"params\":{\"guardrail\":false}}" >/dev/null
+apps_bridge data.set_agent_grant "{\"companyId\":\"$COMPANY_ID\",\"params\":{\"agentId\":\"$M_ID\",\"level\":\"none\"}}" >/dev/null
+echo "    held without a person, the agent cannot answer the card, a person allows it once"
+
 echo "==> installs land on the home volume: stand-in harnesses, npm -g, sudo apt"
 # The image ships no pi or Hermes. Stand-ins in ~/.local/bin let the agents
 # created above resolve their harness (doctor checks that below), and the

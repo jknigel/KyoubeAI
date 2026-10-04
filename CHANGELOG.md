@@ -12,6 +12,8 @@ AI columns: Data fields that the company's typed-decision model fills in from ot
 
 Typed decisions in Kyoube Apps (`kyoube.apps` 0.7.0): apps declare decision sets in their manifest and call `kyoube.decide` and `kyoube.decideOutcome`; a version that adds or changes sets needs a person to publish it, after a disclosure of what it sends.
 
+The guardrail (`kyoube.apps` 0.8.0): with Guardrail on risky agent actions switched on, an agent's drop, rename, field removal, bulk update or delete, and app publish, rollback or archive is checked against its task; anything doubtful, or a check that cannot run, waits on a people-only confirmation card and runs once after a person allows it. Adds `issues.read`, `issue.interactions.create` and `issue.interactions.read`.
+
 ## 1.3.0 - 2026-10-03
 
 ### Added

@@ -134,6 +134,17 @@ Terminal `sudo`. `./update.sh` takes the backup for you.
   [SECURITY.md](../SECURITY.md) ("Trusted runtime host") says what that trusts. To turn it off, set
   `KYOUBE_TRUSTED_RUNTIME_HOST=` (empty) in `.env` and run `docker compose up -d`.
 
+## Moving to typed decisions
+
+`kyoube.apps` 0.5.0 to 0.8.0 adds typed decisions ([`decisions.md`](decisions.md)) and with them
+new capabilities: `http.outbound` and `secrets.read-ref` (0.5.0), then `issues.read`,
+`issue.interactions.create` and `issue.interactions.read` (0.8.0). `kyoube ensure-plugins` grants
+them on upgrade without asking (it reinstalls the plugin and keeps its data), so no board approval
+appears. Nothing is sent anywhere until an instance admin sets a provider and key for a company and
+a company admin switches a use on; until then every use answers `disabled`. `kyoube.apps` never
+gets the capability to answer a card or an approval (`issue.interactions.respond`,
+`approvals.respond`).
+
 ## Moving an install from core 2026.831.1
 
 Builds of KyoubeAI made before 1.0.0 ran on core 2026.831.1; 1.0.0 runs on core 2026.916.1, a large
@@ -288,6 +299,14 @@ tracked, so `bump-core.sh` cannot touch it) and `docker compose up -d --build`.
   make the bump pass. If the post-restart doctors in the smoke show `agent rules` failing with a 503
   from `kyoube.agent-rules`, the core changed how it answers a plugin route before the worker runs;
   see `pluginReady` in `docker/bootstrap/src/agent-rules/api.ts`.
+- **The smoke's `decisions` or `guardrail` step fails.** Typed decisions rely on three core
+  conventions the plugin SDK does not type: a `format: "secret-ref"` field in plugin config (the
+  secret picker, and the stored `{ type: "secret_ref", secretId, version }` binding that
+  `ctx.secrets.resolve` accepts); `resolverPolicy: "human_only"` on a confirmation card a plugin
+  raises, with `resolvedByUserId` set when a person answers and an agent's answer refused
+  (`interaction_human_only`); and `kyoube ensure-plugins` turning a capability escalation into a
+  reinstall. The failing assertion names which one. See [`decisions.md`](decisions.md). Never
+  loosen the smoke's assertions to make the bump pass.
 - **The core's own migrations run on first start** against the `kyoubeai` database, before the app
   serves anything. Give it time — the compose healthcheck allows a 180-second start period for
   exactly this — and read `docker compose logs -f app` rather than restarting into a half-migrated
