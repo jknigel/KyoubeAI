@@ -125,7 +125,10 @@ function percent(confidence: number): string {
   return `${Math.round(confidence * 100)}%`;
 }
 
-export function confirmationPayload(agentName: string, action: GuardedAction, affectedRows: number | null, outcome: { result: DecideResult } | { failure: string }): ConfirmationPayload {
+/** Why a card is raised: the check's answers, the check failing, or an earlier hold no person released. */
+export type GuardOutcome = { result: DecideResult } | { failure: string } | { heldBefore: true };
+
+export function confirmationPayload(agentName: string, action: GuardedAction, affectedRows: number | null, outcome: GuardOutcome): ConfirmationPayload {
   let details: string;
   if ("result" in outcome) {
     const matches = outcome.result.answers.matches_task;
@@ -136,8 +139,10 @@ export function confirmationPayload(agentName: string, action: GuardedAction, af
       `- Part of the task: ${matches ? `${matches.value === true ? "yes" : "no"} (${percent(matches.confidence)} sure)` : "unknown"}`,
       `- Risk: ${risk ? `${String(risk.value)} (${percent(risk.confidence)} sure)` : "unknown"}`,
     ].join("\n");
-  } else {
+  } else if ("failure" in outcome) {
     details = `The guardrail's automatic check could not run (${outcome.failure}), so a person has to decide.`;
+  } else {
+    details = "The guardrail held this exact action before and no person allowed it, so the automatic check was not asked again: a person has to decide.";
   }
   details += "\n\nAllow it once, or don't. Allowing it lets the agent repeat exactly this call one time.";
   return { version: 1, prompt: `Agent ${agentName} wants to ${describeAction(action, affectedRows)}.`, detailsMarkdown: details, acceptLabel: "Allow once", rejectLabel: "Don't allow" };

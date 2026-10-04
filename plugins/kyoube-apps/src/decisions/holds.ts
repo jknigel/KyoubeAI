@@ -74,7 +74,26 @@ export async function consumeHold(pool: Pool, holdId: string, now: Date = new Da
   return (result.rowCount ?? 0) > 0;
 }
 
-export async function purgeGuardrailHolds(pool: Pool, graceDays = 7): Promise<number> {
+/** How long a hold is kept after it expires, before the purge job deletes it. */
+export const HOLD_GRACE_DAYS = 7;
+
+/**
+ * Whether this agent has an unused hold on this exact action that is still kept: unexpired, or
+ * expired at most `HOLD_GRACE_DAYS` ago, on any task. Its card never released the action (a used hold
+ * means the action ran), so only a person may release it now and the model is not asked again.
+ */
+export async function hasUnreleasedHold(pool: Pool, input: { companyId: string; agentId: string; fingerprint: string; now: Date }): Promise<boolean> {
+  const result = await pool.query(
+    `SELECT 1 FROM kyoube_meta.guardrail_holds
+      WHERE company_id = $1 AND agent_id = $2 AND action_fingerprint = $3 AND consumed_at IS NULL
+        AND expires_at > $4::timestamptz - make_interval(days => $5::int)
+      LIMIT 1`,
+    [input.companyId, input.agentId, input.fingerprint, input.now, HOLD_GRACE_DAYS],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+export async function purgeGuardrailHolds(pool: Pool, graceDays = HOLD_GRACE_DAYS): Promise<number> {
   const result = await pool.query("DELETE FROM kyoube_meta.guardrail_holds WHERE expires_at < now() - make_interval(days => $1::int)", [graceDays]);
   return result.rowCount ?? 0;
 }

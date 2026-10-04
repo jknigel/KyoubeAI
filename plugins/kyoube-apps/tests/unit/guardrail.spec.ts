@@ -108,6 +108,11 @@ describe("confirmationPayload", () => {
     expect(payload.detailsMarkdown).toContain("- Risk: dangerous (91% sure)");
     expect(payload.detailsMarkdown).toContain("exactly this call one time");
   });
+  it("says when the model was not asked because a person has to release an earlier hold", () => {
+    const payload = confirmationPayload("Builder", action(), null, { heldBefore: true });
+    expect(payload.prompt).toBe("Agent Builder wants to drop table `tickets`.");
+    expect(payload.detailsMarkdown).toContain("held this exact action before and no person allowed it");
+  });
   it("says when the check could not run", () => {
     const payload = confirmationPayload("agent-1", action(), null, { failure: "provider_unavailable" });
     expect(payload.detailsMarkdown).toContain("could not run (provider_unavailable)");

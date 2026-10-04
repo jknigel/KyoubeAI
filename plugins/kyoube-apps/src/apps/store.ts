@@ -161,7 +161,8 @@ export class AppStore {
     }, audit));
   }
 
-  private async require(companyId: string, slug: string): Promise<AppRecord> {
+  /** The live app behind `slug`, or the not_found every by-slug change gives. */
+  async require(companyId: string, slug: string): Promise<AppRecord> {
     const app = await this.get(companyId, slug);
     if (!app) throw new DataError("not_found", `app "${slug}" not found`);
     return app;

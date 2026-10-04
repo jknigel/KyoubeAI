@@ -243,7 +243,14 @@ export class AppService {
   /** Terminal in Phase 3 (ruling P3-R10): the app disappears and its slug is free again. */
   async archive(companyId: string, actor: DataActor, slug: string, opts: { guard?: GuardContext } = {}): Promise<AppRecord> {
     await this.authorize(companyId, actor, "schema", "archive an app", { fresh: true });
-    await this.guarded(companyId, actor, { operation: "app_archive", app: slug, params: { slug } }, opts.guard);
+    // The app's id, not just its slug, is what a person allows: a slug is free again once its app is
+    // archived (ruling P3-R10), so an "Allow once" must never carry over to a replacement app. Reading
+    // the app first also gives a missing one the same not_found as without the guardrail, before any
+    // check or card.
+    await this.guarded(companyId, actor, async () => {
+      const app = await this.store.require(companyId, slug);
+      return { operation: "app_archive", app: slug, params: { slug, appId: app.id } };
+    }, opts.guard);
     const app = await this.store.setStatus(companyId, slug, "archived",
       (archived) => this.entry(companyId, actor, "app_archive", archived, {}));
     await this.notify(companyId, actor, "app_archive", app, `archived app ${slug}`);
@@ -444,9 +451,13 @@ export class AppService {
       throw new DataError("invalid", "this version adds or changes decision sets; review what they send, then publish with decisionsConfirmed: true");
     }
     // Milestone 4: the guardrail screens an agent's publish or rollback of this exact version. The
-    // resolved version number is in the fingerprint, so a person's "Allow once" covers the version
-    // they were shown, never a newer draft saved in between.
-    await this.guarded(companyId, actor, { operation: operation === "app_rollback" ? "app_rollback" : "app_publish", app: slug, version: target.version, params: { slug, version: target.version } }, opts.guard);
+    // version's own id is in the fingerprint, so a person's "Allow once" covers the version they were
+    // shown: never a newer draft saved in between, nor a same-numbered version of a replacement app
+    // that took the slug after this one was archived.
+    await this.guarded(companyId, actor, async () => ({
+      operation: operation === "app_rollback" ? "app_rollback" : "app_publish", app: slug, version: target.version,
+      params: { slug, version: target.version, versionId: target.id },
+    }), opts.guard);
     const sets = Object.keys(target.manifest.decisions ?? {});
     const app = await this.store.setCurrent(companyId, slug, target.version,
       (published) => this.entry(companyId, actor, operation, published, { version: target.version, ...(sets.length > 0 ? { decisionSets: sets, decisionsConfirmed: changed } : {}) }));
@@ -512,10 +523,13 @@ export class AppService {
     return { companyId, actor, operation, table: null, details: { app: app.slug, appId: app.id, ...details } };
   }
 
-  /** The guardrail, as in DataService: agents only, after authorisation, before the change. */
-  private async guarded(companyId: string, actor: DataActor, action: Omit<GuardedAction, "companyId" | "actor" | "guard">, guard?: GuardContext): Promise<void> {
+  /**
+   * The guardrail, as in DataService: agents only, after authorisation, before the change. `action` is
+   * built only when the check runs, so a person's call reads nothing extra.
+   */
+  private async guarded(companyId: string, actor: DataActor, action: () => Promise<Omit<GuardedAction, "companyId" | "actor" | "guard">>, guard?: GuardContext): Promise<void> {
     if (actor.kind !== "agent" || !this.guardAgentAction) return;
-    await this.guardAgentAction({ ...action, companyId, actor, guard });
+    await this.guardAgentAction({ ...(await action()), companyId, actor, guard });
   }
 
   /**

@@ -13,6 +13,7 @@ const C = "88888888-8888-4888-8888-888888888888";
 const AGENT = { kind: "agent" as const, id: "agent-1", runId: "run-1" };
 const OTHER_AGENT = { kind: "agent" as const, id: "agent-2", runId: "run-2" };
 const ISSUE = "issue-mine";
+const ISSUE_2 = "issue-mine-too";
 const OTHER_ISSUE = "issue-theirs";
 
 let db: Awaited<ReturnType<typeof createTestDatabase>>;
@@ -40,6 +41,7 @@ function fakeIssues() {
   const issues = new Map<string, GuardrailIssue>([
     [ISSUE, { id: ISSUE, companyId: C, title: "Summarise last week's tickets", description: "Read only. Do not change or delete any data.", assigneeAgentId: "agent-1" }],
     [OTHER_ISSUE, { id: OTHER_ISSUE, companyId: C, title: "Another task", description: null, assigneeAgentId: "agent-2" }],
+    [ISSUE_2, { id: ISSUE_2, companyId: C, title: "A second task", description: null, assigneeAgentId: "agent-1" }],
   ]);
   const cards: Card[] = [];
   const port: GuardrailIssues = {
@@ -56,8 +58,9 @@ function fakeIssues() {
   return { cards, port };
 }
 
-function harness(answer: DecideResult | Error = OFF_TASK, opts: { guardrail?: boolean } = {}) {
+function harness(initial: DecideResult | Error = OFF_TASK, opts: { guardrail?: boolean } = {}) {
   const decided: unknown[][] = [];
+  let answer = initial;
   let clock = Date.parse("2026-10-05T12:00:00Z");
   const issues = fakeIssues();
   const guardrail = new Guardrail({
@@ -70,7 +73,7 @@ function harness(answer: DecideResult | Error = OFF_TASK, opts: { guardrail?: bo
     agentName: async (id) => (id === "agent-1" ? "Builder" : null),
     now: () => clock,
   });
-  return { guardrail, decided, cards: issues.cards, advance: (ms: number) => { clock += ms; } };
+  return { guardrail, decided, cards: issues.cards, advance: (ms: number) => { clock += ms; }, answer: (next: DecideResult | Error) => { answer = next; } };
 }
 
 function drop(guard?: GuardContext, overrides: Partial<GuardedAction> = {}): GuardedAction {
@@ -152,7 +155,7 @@ describe("Guardrail.check", () => {
     expect(reused.message).toContain("already used");
   });
 
-  it("runs a plain retry that matches an allowed hold, once", async () => {
+  it("runs a plain retry that matches an allowed hold once, then checks the next identical call with the model as normal", async () => {
     const { guardrail, cards, decided } = harness(OFF_TASK);
     await failure(guardrail.check(drop({ issueId: ISSUE })));
     Object.assign(cards[0]!, { status: "accepted", resolvedByUserId: "owner-1" });
@@ -187,13 +190,39 @@ describe("Guardrail.check", () => {
     expect([cards.length, decided.length]).toEqual([1, 1]);
   });
 
-  it("checks afresh with a new card when the old card closed without an answer", async () => {
-    const { guardrail, cards } = harness(OFF_TASK);
+  it("raises a new card without asking the model again when the old card closed without an answer", async () => {
+    const { guardrail, cards, decided, answer } = harness(OFF_TASK);
     await failure(guardrail.check(drop({ issueId: ISSUE })));
     Object.assign(cards[0]!, { status: "cancelled" });
+    answer(PASS);
     const held = await failure(guardrail.check(drop({ issueId: ISSUE }))) as DataError;
-    expect(held.details).toEqual({ confirmationId: "card-2" });
-    expect((await findHold(db.pool, C, "card-1"))!.consumedAt).not.toBeNull();
+    expect([held.code, held.details?.confirmationId, decided.length]).toEqual(["held", "card-2", 1]);
+    expect(cards[1]!.request.payload.detailsMarkdown).toContain("was not asked again");
+    // The unanswered hold stays unused: it never released the action.
+    expect((await findHold(db.pool, C, "card-1"))!.consumedAt).toBeNull();
+    // Retrying with the closed card's id finds the next card instead of raising yet another.
+    const stale = await failure(guardrail.check(drop({ issueId: ISSUE, confirmationId: "card-1" }))) as DataError;
+    expect([stale.code, stale.details?.confirmationId, cards.length, decided.length]).toEqual(["held", "card-2", 2, 1]);
+  });
+
+  it("sends an expired declined hold to a person, never back to the model", async () => {
+    const { guardrail, cards, decided, advance, answer } = harness(OFF_TASK);
+    await failure(guardrail.check(drop({ issueId: ISSUE })));
+    Object.assign(cards[0]!, { status: "rejected", resolvedByUserId: "owner-1" });
+    advance(25 * 60 * 60 * 1000);
+    // Even a model that would now let it through is not asked: only a person releases a held action.
+    answer(PASS);
+    const again = await failure(guardrail.check(drop({ issueId: ISSUE }))) as DataError;
+    expect([again.code, again.details?.confirmationId, decided.length]).toEqual(["held", "card-2", 1]);
+    expect(cards[1]!.request.payload.detailsMarkdown).toContain("was not asked again");
+  });
+
+  it("does not let the agent leave a held action behind by naming another of its tasks", async () => {
+    const { guardrail, cards, decided } = harness(OFF_TASK);
+    await failure(guardrail.check(drop({ issueId: ISSUE })));
+    Object.assign(cards[0]!, { status: "rejected", resolvedByUserId: "owner-1" });
+    const elsewhere = await failure(guardrail.check(drop({ issueId: ISSUE_2 }))) as DataError;
+    expect([elsewhere.code, elsewhere.details?.confirmationId, cards[1]!.issueId, decided.length]).toEqual(["held", "card-2", ISSUE_2, 1]);
   });
 
   it("refuses a confirmation for a different action, task or agent", async () => {
@@ -208,7 +237,7 @@ describe("Guardrail.check", () => {
   });
 
   it("lets an allowed confirmation lapse after 24 hours", async () => {
-    const { guardrail, cards, advance } = harness(OFF_TASK);
+    const { guardrail, cards, advance, decided } = harness(OFF_TASK);
     await failure(guardrail.check(drop({ issueId: ISSUE })));
     Object.assign(cards[0]!, { status: "accepted", resolvedByUserId: "owner-1" });
     advance(25 * 60 * 60 * 1000);
@@ -216,5 +245,8 @@ describe("Guardrail.check", () => {
     expect(lapsed.code).toBe("conflict");
     expect(lapsed.message).toContain("expired");
     expect((await findHold(db.pool, C, "card-1"))!.consumedAt).toBeNull();
+    // The lapsed hold never released the action, so the next call goes to a person, not the model.
+    const next = await failure(guardrail.check(drop({ issueId: ISSUE }))) as DataError;
+    expect([next.code, next.details?.confirmationId, decided.length]).toEqual(["held", "card-2", 1]);
   });
 });
