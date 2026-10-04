@@ -1,5 +1,7 @@
 // tests/integration/ai-fill.spec.ts
 import { afterEach, describe, expect, it } from "vitest";
+import type { Pool } from "pg";
+import { roleNameFor, schemaNameFor } from "../../src/db/company-scope.js";
 import { countCells, getCells, listAiColumns } from "../../src/decisions/cells.js";
 import { setDecisionSettings, usageOn, utcDay } from "../../src/decisions/store.js";
 import { aiFixture, answer, failure, OWNER } from "./ai-fixture.js";
@@ -12,6 +14,23 @@ async function setup(overrides: Parameters<typeof aiFixture>[2] = {}) {
   const fixture = await aiFixture(C, "ai-fill.spec.ts", overrides);
   close = () => fixture.db.close();
   return fixture;
+}
+
+/** One statement as the company's own role, the way the data layer runs its writes. */
+async function asCompany(pool: Pool, sql: string, params: unknown[]) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`SET LOCAL search_path TO "${schemaNameFor(C)}"`);
+    await client.query(`SET LOCAL ROLE "${roleNameFor(C)}"`);
+    await client.query(sql, params);
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 async function refunds(fixture: Awaited<ReturnType<typeof setup>>) {
@@ -63,6 +82,24 @@ describe("filling AI columns", () => {
     await f.ai.idle(C);
     expect(f.calls).toHaveLength(2);
     expect(await refunds(f)).toEqual([["please refund me", true], ["thanks", false]]);
+  });
+
+  it("keeps the watermark behind the database clock, so a write that commits late is still filled", async () => {
+    const f = await setup();
+    await f.data.insert(C, OWNER, "tickets", [{ subject: "d: thanks" }]);
+    await f.addRefund();
+    await f.ai.idle(C);
+    expect(f.calls).toHaveLength(1);
+    // A write that started 30 s ago and commits only now: its row is older than the one the scan
+    // just passed, and it has no cell.
+    const [late] = await f.data.insert(C, OWNER, "tickets", [{ subject: "c: please refund me" }]);
+    await asCompany(f.db.pool, "UPDATE tickets SET updated_at = now() - interval '30 seconds' WHERE id = $1", [String(late!.id)]);
+    await f.ai.fillCompany(C);
+    expect(f.calls).toHaveLength(2);
+    expect(await refunds(f)).toEqual([["c: please refund me", true], ["d: thanks", false]]);
+    const [ref] = await listAiColumns(f.db.pool, C);
+    const mark = await f.db.pool.query("SELECT scanned_through_at <= now() - interval '2 minutes' AS lagging FROM kyoube_meta.decision_columns WHERE field_id = $1", [ref!.fieldId]);
+    expect(mark.rows).toEqual([{ lagging: true }]);
   });
 
   it("stops at a provider error, keeps the budget, and retries the row next run", async () => {

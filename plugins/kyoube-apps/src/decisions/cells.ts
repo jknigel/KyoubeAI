@@ -108,11 +108,27 @@ export async function syncColumn(pool: Pool, ref: AiColumnRef, fingerprint: stri
   return result.rows[0]!;
 }
 
-/** `at` is the `updated_at::text` the scan read: microseconds, which a JS Date would lose. */
-export async function advanceWatermark(pool: Pool, fieldId: string, at: string, id: string): Promise<void> {
+/**
+ * The database's clock less `lagMs`, as text like `updated_at::text`. Read before a scan, it is the
+ * furthest that scan may move the watermark (see `advanceWatermark`).
+ */
+export async function watermarkCeiling(pool: Pool, lagMs: number): Promise<string> {
+  const result = await pool.query<{ at: string }>("SELECT (now() - $1::int * interval '1 millisecond')::text AS at", [lagMs]);
+  return result.rows[0]!.at;
+}
+
+/**
+ * `at` is the `updated_at::text` the scan read: microseconds, which a JS Date would lose. With a
+ * `ceiling`, the watermark goes no further than (ceiling, nil uuid), the first position at that
+ * instant: whichever of the two positions comes first is kept.
+ */
+export async function advanceWatermark(pool: Pool, fieldId: string, at: string, id: string, ceiling: string | null = null): Promise<void> {
   await pool.query(
-    "UPDATE kyoube_meta.decision_columns SET scanned_through_at = $2::timestamptz, scanned_through_id = $3::uuid, updated_at = now() WHERE field_id = $1",
-    [fieldId, at, id],
+    `UPDATE kyoube_meta.decision_columns AS c SET scanned_through_at = w.at, scanned_through_id = w.id, updated_at = now()
+       FROM (SELECT v.at, v.id FROM (VALUES ($2::timestamptz, $3::uuid), ($4::timestamptz, '00000000-0000-0000-0000-000000000000'::uuid)) AS v(at, id)
+              WHERE v.at IS NOT NULL ORDER BY v.at, v.id LIMIT 1) AS w
+      WHERE c.field_id = $1`,
+    [fieldId, at, id, ceiling],
   );
 }
 
