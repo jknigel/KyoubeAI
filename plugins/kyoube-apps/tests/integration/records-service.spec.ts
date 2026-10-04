@@ -149,4 +149,20 @@ describe("RecordsService", () => {
     await schema.dropTable(scope, "notes", false);
     await expect(records.sqlSelect(scope, "select body from notes")).rejects.toThrow('unknown table "notes"');
   });
+
+  it("hands back the values an update replaced, only for the patched fields asked about", async () => {
+    await schema.createTable(scope, { name: "tasks", fields: [{ name: "title", kind: "text" }, { name: "done", kind: "boolean" }, { name: "stage", kind: "select", options: { choices: ["a", "b"] } }] }, { kind: "user", id: "u1" });
+    const [one, two] = await records.insert(scope, "tasks", [{ title: "one", done: false, stage: "a" }, { title: "two", done: true, stage: null }], by);
+    const asked = (field: { name: string }) => field.name !== "title";
+    const result = await records.update(scope, "tasks", { where: { field: "title", op: "in", value: ["one", "two"] } }, { title: "renamed", done: true, stage: "b" }, undefined, { previousOf: asked });
+    expect(result.affected).toBe(2);
+    expect(result.previous).toEqual(new Map([[String(one!.id), { done: false, stage: "a" }], [String(two!.id), { done: true, stage: null }]]));
+    // The old values never leak into the rows themselves.
+    const rows = [...result.rows].sort((a, b) => String(a.id).localeCompare(String(b.id)));
+    const fresh = await Promise.all(rows.map((row) => records.get(scope, "tasks", String(row.id))));
+    expect(rows).toEqual(fresh);
+    // A patch that sets none of the fields asked about takes the plain statement.
+    expect((await records.update(scope, "tasks", { ids: [String(one!.id)] }, { title: "again" }, undefined, { previousOf: asked })).previous).toBeNull();
+    expect((await records.update(scope, "tasks", { ids: [String(one!.id)] }, { done: false })).previous).toBeNull();
+  });
 });

@@ -240,16 +240,19 @@ export class DataService {
     const inserted = await this.records.insert(scope, table, rows, { kind: actor.kind, id: actor.id },
       (created) => this.entry(companyId, actor, "insert", table, { count: created.length, ids: created.map((row) => row.id) }, via));
     await this.notify(companyId, actor, "insert", table, `inserted ${inserted.length} row(s) into ${table}`);
-    await this.afterRowWrite(companyId, actor, scope, table, inserted, null, via);
+    await this.afterRowWrite(companyId, actor, scope, table, inserted, null, new Map(), via);
     return inserted;
   }
 
   async update(companyId: string, actor: DataActor, table: string, target: RowTarget, patch: Row, via?: ViaApp): Promise<{ affected: number; rows: Row[] }> {
     const scope = await this.authorize(companyId, actor, "write", "update rows");
-    const result = await this.records.update(scope, table, target, patch,
-      (done) => this.entry(companyId, actor, "update", table, { affected: done.affected, fields: Object.keys(patch) }, via));
+    // With AI columns attached, the write also hands back the AI values it replaced (only when the
+    // patch sets one), which is what tells an edit from a save that wrote a value back.
+    const { previous, ...result } = await this.records.update(scope, table, target, patch,
+      (done) => this.entry(companyId, actor, "update", table, { affected: done.affected, fields: Object.keys(patch) }, via),
+      this.hooks.aiColumns ? { previousOf: isAiColumn } : {});
     await this.notify(companyId, actor, "update", table, `updated ${result.affected} row(s) in ${table}`);
-    await this.afterRowWrite(companyId, actor, scope, table, result.rows, Object.keys(patch), via);
+    if (previous) await this.afterRowWrite(companyId, actor, scope, table, result.rows, Object.keys(patch), previous, via);
     return result;
   }
 
@@ -414,14 +417,14 @@ export class DataService {
    * outcomes"). It runs after the write committed, like the activity summariser, so a failure here
    * is reported, never thrown: the caller's write already happened.
    */
-  private async afterRowWrite(companyId: string, actor: DataActor, scope: CompanyScope, table: string, rows: Row[], patchKeys: string[] | null, via?: ViaApp): Promise<void> {
+  private async afterRowWrite(companyId: string, actor: DataActor, scope: CompanyScope, table: string, rows: Row[], patchKeys: string[] | null, previous: Map<string, Row>, via?: ViaApp): Promise<void> {
     const hook = this.hooks.aiColumns;
     if (!hook || rows.length === 0) return;
     try {
       const info = await this.schema.getTable(scope, table);
       const fields = patchKeys ?? info.fields.map((field) => field.name);
       if (!info.fields.some((field) => isAiColumn(field) && fields.includes(field.name))) return;
-      const event: AiRowWrite = { companyId, actor, table: info, rows, fields, via: via ?? null };
+      const event: AiRowWrite = { companyId, actor, table: info, rows, previous, fields, via: via ?? null };
       await hook.rowsWritten(event);
     } catch (error) {
       this.onMutationError?.(error, { companyId, actor, operation: "ai_cells", table, summary: "AI column bookkeeping failed" });
