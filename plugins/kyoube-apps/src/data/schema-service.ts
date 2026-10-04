@@ -234,10 +234,16 @@ export class SchemaService {
     return this.getTable(scope, info.name);
   }
 
-  async removeField(scope: CompanyScope, table: string, fieldName: string, hard: boolean, audit?: AuditPlan<string>): Promise<TableInfo> {
+  /** The table and the field's checked name, or the not_found `removeField` gives for either. */
+  async tableWithField(scope: CompanyScope, table: string, fieldName: string): Promise<{ info: TableInfo; name: string }> {
     const info = await this.getTable(scope, table);
     const name = assertIdentifier(fieldName, "field name");
     if (!info.fields.some((field) => field.name === name)) throw new DataError("not_found", `field "${name}" not found on "${info.name}"`);
+    return { info, name };
+  }
+
+  async removeField(scope: CompanyScope, table: string, fieldName: string, hard: boolean, audit?: AuditPlan<string>): Promise<TableInfo> {
+    const { info, name } = await this.tableWithField(scope, table, fieldName);
     const fed = info.fields.find((field) => field.options.decision?.sourceFields.includes(name));
     if (fed) throw new DataError("invalid", `field "${name}" feeds AI column "${fed.name}"; remove that column or change its sources first`);
     const row = await this.tableRow(scope, info.name);
