@@ -4,15 +4,40 @@ All notable changes to KyoubeAI are recorded here, in terms of what changed for 
 building on it. The format is loosely [Keep a Changelog](https://keepachangelog.com/); versioning is
 [SemVer](https://semver.org/).
 
-## Unreleased
+## 1.4.0 - 2026-10-05
 
-Typed decisions (`docs/decisions.md`): agents can ask a Jev-class model closed questions over `POST /decisions/decide` and the `decisions_*` tools, with a per-company provider, key secret, switches and daily cap. `kyoube.apps` 0.5.0 gains `http.outbound` and `secrets.read-ref`; `ensure-plugins` grants them on upgrade, and nothing is sent until an instance admin sets a provider and a company admin switches a use on.
+### Added
 
-AI columns: Data fields that the company's typed-decision model fills in from other fields of the row, in the background, with a review lane on the Data page, `GET /tables/:table/review`, `data_list_review` and Refill. `kyoube.apps` 0.6.0 adds the `fill-ai-columns` job (every 5 minutes).
+- Typed decisions (docs/decisions.md): a company brings its own key for a Jev-class model (TypeSafe,
+  OpenRouter, Vercel AI Gateway, or any HTTPS endpoint serving `/v1/systemone`) and gets closed
+  answers: a choice, a level or true/false, each with a confidence and an `auto` or `review` status.
+  An instance admin sets the provider, model and key secret per company in the plugin settings; a
+  company admin turns each use on and sets a daily cap under Company Settings → Data access.
+- Agents ask typed questions over `POST /decisions/decide` (text, JSON, or Data rows read under the
+  agent's own access) and the `decisions_decide` and `decisions_status` tools, taught by the new
+  `kyoube-decisions` skill.
+- AI columns: Data fields the model fills in from other fields of the row, in the background, with a
+  review lane on the Data page, `GET /tables/:table/review`, `data_list_review` and Refill. A
+  person's edit is kept and recorded as confirmed or changed.
+- Typed decisions in Kyoube Apps: apps declare decision sets in their manifest and call
+  `kyoube.decide` and `kyoube.decideOutcome`. A version that adds or changes sets needs a person to
+  publish it, after a disclosure of exactly which fields it sends.
+- The guardrail on risky agent actions: when switched on, an agent's drop, rename, field removal,
+  bulk update or delete, and app publish, rollback or archive is checked against its task. Anything
+  doubtful, or a check that cannot run, waits on a people-only confirmation card and runs once after
+  a person allows it.
+- `scripts/decisions-eval.mjs`, a by-hand check of a provider against 200 labelled decisions.
 
-Typed decisions in Kyoube Apps (`kyoube.apps` 0.7.0): apps declare decision sets in their manifest and call `kyoube.decide` and `kyoube.decideOutcome`; a version that adds or changes sets needs a person to publish it, after a disclosure of what it sends.
+### Upgrading
 
-The guardrail (`kyoube.apps` 0.8.0): with Guardrail on risky agent actions switched on, an agent's drop, rename, field removal, bulk update or delete, and app publish, rollback or archive is checked against its task; anything doubtful, or a check that cannot run, waits on a people-only confirmation card and runs once after a person allows it. Adds `issues.read`, `issue.interactions.create` and `issue.interactions.read`.
+- `kyoube.apps` goes from 0.4.3 to 0.8.0. On upgrade, `kyoube ensure-plugins` grants it
+  `http.outbound`, `secrets.read-ref`, `issues.read`, `issue.interactions.create` and
+  `issue.interactions.read` without a separate approval. It never gets `issue.interactions.respond`
+  or `approvals.respond`.
+- Nothing leaves the server until an instance admin sets a provider and key for a company and a
+  company admin switches a use on. Every use starts off.
+- Migrations `0003` to `0005` add the decision settings, usage counter, decision log, AI cell state
+  and guardrail holds. They run when the plugin starts.
 
 ## 1.3.0 - 2026-10-03
 
