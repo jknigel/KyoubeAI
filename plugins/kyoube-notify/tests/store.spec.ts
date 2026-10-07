@@ -76,11 +76,12 @@ describe("NotifyStore", () => {
     expect(await store.claimFailure("agent-1", 30 * 60_000)).toBe(true);
   });
 
-  it("remembers the last status it saw for a task", async () => {
+  it("swaps a task's status atomically, returning the one stored before", async () => {
     const { store } = setup();
-    expect(await store.lastStatus("issue-1")).toBeNull();
-    await store.setStatus("issue-1", "blocked");
-    expect(await store.lastStatus("issue-1")).toBe("blocked");
+    const results = await Promise.all([store.swapStatus("i", "done"), store.swapStatus("i", "done")]);
+    expect(results.filter((r) => r === null)).toHaveLength(1);
+    expect(results.filter((r) => r === "done")).toHaveLength(1);
+    expect(await store.swapStatus("i", "blocked")).toBe("done");
   });
 
   it("ensures exactly one concurrent claimInteraction returns true", async () => {

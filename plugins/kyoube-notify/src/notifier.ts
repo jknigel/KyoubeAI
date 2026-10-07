@@ -92,7 +92,13 @@ export class Notifier {
       outcomes.set(job.device.id, outcome);
       byUser.set(job.userId, outcomes);
     }
-    for (const [userId, outcomes] of byUser) await this.deps.store.applyOutcomes(userId, outcomes);
+    for (const [userId, outcomes] of byUser) {
+      try {
+        await this.deps.store.applyOutcomes(userId, outcomes);
+      } catch (error) {
+        this.deps.logger.warn(`kyoube.notify: could not record outcomes for ${userId}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
     return results.filter((result) => result.outcome.result === "delivered").length;
   }
 
@@ -155,8 +161,7 @@ export class Notifier {
     const issue = await this.deps.issues.get(issueId, event.companyId);
     if (!issue) return;
     const reported = str(((event.payload ?? {}) as { _previous?: { status?: unknown } })._previous?.status);
-    const stored = await this.deps.store.lastStatus(issue.id);
-    if (stored !== issue.status) await this.deps.store.setStatus(issue.id, issue.status);
+    const stored = await this.deps.store.swapStatus(issue.id, issue.status);
     // Already seen in this status (a second event for the same change): nothing new to say.
     const previous = stored === issue.status ? issue.status : (reported ?? stored);
     const kind = statusTransition(issue.status, previous);
@@ -170,7 +175,7 @@ export class Notifier {
   private async onComment(event: PluginEvent): Promise<void> {
     const issueId = str(event.entityId);
     if (!issueId) return;
-    await this.checkQuestions(event.companyId, issueId);
+    await this.safeCheckQuestions(event.companyId, issueId);
     const issue = await this.deps.issues.get(issueId, event.companyId);
     if (!issue) return;
     const candidates = taskOwners(issue, await this.members(event.companyId), userActor(event));
@@ -185,7 +190,7 @@ export class Notifier {
   private async onRunEnded(event: PluginEvent): Promise<void> {
     const payload = (event.payload ?? {}) as { issueId?: unknown; agentId?: unknown; runId?: unknown };
     const issueId = str(payload.issueId);
-    if (issueId) await this.checkQuestions(event.companyId, issueId);
+    if (issueId) await this.safeCheckQuestions(event.companyId, issueId);
     const agentId = str(payload.agentId);
     const runId = str(payload.runId);
     if (event.eventType !== "agent.run.failed" || !agentId || !runId) return;
@@ -195,6 +200,14 @@ export class Notifier {
     if (userIds.length === 0 || !prefix) return;
     if (!(await this.deps.store.claimFailure(agentId, FAILURE_WINDOW_MS))) return;
     await this.deliver({ userIds, message: failureMessage({ prefix, agentName: await this.agentName(agentId, event.companyId), agentId, runId }) });
+  }
+
+  private async safeCheckQuestions(companyId: string, issueId: string): Promise<void> {
+    try {
+      await this.checkQuestions(companyId, issueId);
+    } catch (error) {
+      this.deps.logger.warn(`kyoube.notify: question check for issue ${issueId} failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   /** Option A: the core sends no event for a new question, so a task's open questions are checked when its agent's run ends or a comment lands. */
