@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#18181b" />
+    <meta name="apple-mobile-web-app-title" content="KyoubeAI" />
+    <title>KyoubeAI</title>
+    <!-- PAPERCLIP_RUNTIME_BRANDING_START -->
+    <!-- PAPERCLIP_RUNTIME_BRANDING_END -->
+    <!-- PAPERCLIP_FAVICON_START -->
+    <link rel="icon" href="/favicon.ico" sizes="48x48" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+    <!-- PAPERCLIP_FAVICON_END -->
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" crossorigin="use-credentials" />
+    <script>
+      (() => {
+        const key = "paperclip.theme";
+        const darkThemeColor = "#18181b";
+        const lightThemeColor = "#ffffff";
+        try {
+          const stored = window.localStorage.getItem(key);
+          const prefersDark =
+            typeof window.matchMedia === "function" &&
+            window.matchMedia("(prefers-color-scheme: dark)").matches;
+          const fallback = "dark";
+          const theme = stored === "light" || stored === "dark" ? stored : fallback;
+          const isDark = theme === "dark";
+          document.documentElement.classList.toggle("dark", isDark);
+          document.documentElement.style.colorScheme = isDark ? "dark" : "light";
+          const themeColorMeta = document.querySelector('meta[name="theme-color"]');
+          if (themeColorMeta) {
+            themeColorMeta.setAttribute("content", isDark ? darkThemeColor : lightThemeColor);
+          }
+        } catch {
+          document.documentElement.classList.add("dark");
+          document.documentElement.style.colorScheme = "dark";
+        }
+      })();
+    </script>
+    <script type="module" crossorigin src="/assets/index-5zyW-AFc-f4b4b795.js"></script>
+    <link rel="modulepreload" crossorigin href="/assets/rolldown-runtime-BQ-vy_Pv-29a3fe83.js">
+    <link rel="modulepreload" crossorigin href="/assets/createLucideIcon-jb2oy7cx-c26ed38b.js">
+    <link rel="modulepreload" crossorigin href="/assets/preload-helper-BATLnrmA-09e31357.js">
+    <link rel="modulepreload" crossorigin href="/assets/zap-9sJAAYeK-3bcd8ef9.js">
+    <link rel="modulepreload" crossorigin href="/assets/button-CEd6kS2j-c0e709d6.js">
+    <link rel="modulepreload" crossorigin href="/assets/EmptyState-CC7x0HAM-0c3a97c5.js">
+    <link rel="modulepreload" crossorigin href="/assets/agents-xI1Xys61-8a71521f.js">
+    <link rel="modulepreload" crossorigin href="/assets/router-COSg0IUu-9b030544.js">
+    <link rel="modulepreload" crossorigin href="/assets/agent-icons-DrD2Zx3m-e0aebbd1.js">
+    <link rel="modulepreload" crossorigin href="/assets/mention-chips-BggBvRaT-fff970d9.js">
+    <link rel="modulepreload" crossorigin href="/assets/dist-Cx8VEKJb-7b224f18.js">
+    <link rel="modulepreload" crossorigin href="/assets/dist-D6KOaoqd-19dc428a.js">
+    <link rel="modulepreload" crossorigin href="/assets/input-BcOXVXcm-df0e86d1.js">
+    <link rel="modulepreload" crossorigin href="/assets/AgentIconPicker-COsznsLw-8fd25c7d.js">
+    <link rel="modulepreload" crossorigin href="/assets/dist-Dqqmm7he-0aab9df6.js">
+    <link rel="modulepreload" crossorigin href="/assets/MarkdownEditor-CRu-ivEd-f2d973bb.js">
+    <link rel="modulepreload" crossorigin href="/assets/alert-dialog-Esc4fH-B-6fbde5c3.js">
+    <link rel="modulepreload" crossorigin href="/assets/check-0qGgej79-9a1f7585.js">
+    <link rel="modulepreload" crossorigin href="/assets/chevron-right-DSqDYln--228fb2cd.js">
+    <link rel="modulepreload" crossorigin href="/assets/checkbox-BgeTZsj3-167a33f0.js">
+    <link rel="modulepreload" crossorigin href="/assets/label-B4JGsfa3-ddd4f617.js">
+    <link rel="modulepreload" crossorigin href="/assets/clipboard-l7Rd8e64-9f89bec7.js">
+    <link rel="modulepreload" crossorigin href="/assets/loader-circle-DjXOr2Xn-bf3fa394.js">
+    <link rel="modulepreload" crossorigin href="/assets/octagon-alert-DMzlHDrp-ab33d775.js">
+    <link rel="modulepreload" crossorigin href="/assets/StatusIcon-DoEGfPYk-48ab661d.js">
+    <link rel="modulepreload" crossorigin href="/assets/chevron-down-BenaeceU-15935f7b.js">
+    <link rel="modulepreload" crossorigin href="/assets/select-DxEwVSwS-5a14bfa6.js">
+    <link rel="modulepreload" crossorigin href="/assets/minus-D-4dQLO2-8e454085.js">
+    <link rel="modulepreload" crossorigin href="/assets/triangle-alert-D9OhBrVb-1989e56c.js">
+    <link rel="modulepreload" crossorigin href="/assets/badge-DdWcnn1Z-571893a4.js">
+    <link rel="modulepreload" crossorigin href="/assets/environments-DQYovjxJ-d75d9b5a.js">
+    <link rel="modulepreload" crossorigin href="/assets/RoutineRunVariablesDialog-BSKNgMsw-75217bb0.js">
+    <link rel="modulepreload" crossorigin href="/assets/use-adapter-capabilities-CGV88q8m-a3a9d87e.js">
+    <link rel="modulepreload" crossorigin href="/assets/external-link-omOv6q3h-06ee0115.js">
+    <link rel="modulepreload" crossorigin href="/assets/adapter-display-registry-4xOHJicD-353b7c54.js">
+    <link rel="modulepreload" crossorigin href="/assets/rotate-ccw-B9coXz66-46353caf.js">
+    <link rel="modulepreload" crossorigin href="/assets/shield-alert-CWOemnXC-e3cf53ef.js">
+    <link rel="modulepreload" crossorigin href="/assets/ToastContext-DEAATmcq-1a1ef4ee.js">
+    <link rel="modulepreload" crossorigin href="/assets/health-DTtx1xvO-3da2b269.js">
+    <link rel="modulepreload" crossorigin href="/assets/skeleton-D6PXL6jy-2527e5c1.js">
+    <link rel="modulepreload" crossorigin href="/assets/managed-sandbox-environment-yqowlhe1-921a9bcd.js">
+    <link rel="modulepreload" crossorigin href="/assets/AiConnectionCredentialStep-DHV6zd1f-350576ab.js">
+    <link rel="modulepreload" crossorigin href="/assets/tabs-BVgC5R1e-4659a9c7.js">
+    <link rel="modulepreload" crossorigin href="/assets/MarkdownBody-BvNH4T_Y-e39b967a.js">
+    <link rel="modulepreload" crossorigin href="/assets/builtInAgents-DqRBgMXM-46ee4f7f.js">
+    <link rel="stylesheet" crossorigin href="/assets/index-tk1F4est-67851957.css">
+    <link rel="stylesheet" href="/assets/kyoube-theme-9b554e8e.css">
+    <script>(function () {
+  // Inlined into index.html's <head> by docker/theme/theme.mjs.
+  // The Studio skin applies while the Studio plugin's team roster is on the
+  // page. The plugin's UI loads after the first paint, so without this flag a
+  // full page load would show the stock sidebar and then rearrange it. The
+  // flag applies the layout at once and clears itself if the roster has not
+  // appeared within a few seconds (plugin missing or failed), which returns
+  // the stock sidebar.
+  var root = document.documentElement;
+  try {
+    if (/Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "")) root.setAttribute("data-kyoube-platform", "mac");
+  } catch (e) {}
+  root.setAttribute("data-kyoube-shell", "studio");
+  setTimeout(function () {
+    if (!document.querySelector('[data-kyoube-studio="team"]')) root.removeAttribute("data-kyoube-shell");
+  }, 6000);
+})();</script>
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
