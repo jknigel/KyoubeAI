@@ -10,6 +10,8 @@ export interface AgentRow {
   name: string;
   status: string;
   reportsTo: string | null;
+  /** One of core's bundled agents (the Reflection Coach, …), which core never treats as the company's top agent. */
+  builtIn?: boolean;
 }
 
 /** One principal permission grant, reduced to what the guardrail compares. */
@@ -37,6 +39,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** Ids of agents with at least one direct report; terminated agents count neither as managers nor as reports. */
+/**
+ * What core gives its root CEO so it can change the company's agents: its own
+ * and other agents' instructions, skills and settings, and new skills
+ * (ROOT_AGENT_DEFAULT_CHANGE_GRANTS, server/src/services/built-in-agents.ts).
+ */
+export const CHANGE_KEYS = ["agents:configure", "skills:create"] as const;
+
+/**
+ * The company's top agent: the one live agent that reports to nobody, or null
+ * when there are none or several. Core picks the same agent, but only when its
+ * role is "ceo", and KyoubeAI's onboarding hires it as "general".
+ */
+export function topAgentId(agents: AgentRow[]): string | null {
+  const tops = agents.filter((agent) => !agent.reportsTo && !agent.builtIn && agent.status !== "terminated" && agent.status !== "pending_approval");
+  return tops.length === 1 ? tops[0]!.id : null;
+}
+
 export function managerIds(agents: AgentRow[]): Set<string> {
   const live = agents.filter((agent) => agent.status !== "terminated");
   const liveIds = new Set(live.map((agent) => agent.id));

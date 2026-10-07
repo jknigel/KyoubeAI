@@ -5,6 +5,8 @@ import { isProtected, ownTeamGrant, type AgentRow, type Grant, type Policy } fro
 const C = "11111111-1111-4111-8111-111111111111";
 const BROAD: Grant = { permissionKey: "tasks:assign", scope: null };
 const agent = (id: string, reportsTo: string | null, status = "idle"): AgentRow => ({ id, name: id.toUpperCase(), status, reportsTo });
+const CONFIGURE: Grant = { permissionKey: "agents:configure", scope: null };
+const SKILLS: Grant = { permissionKey: "skills:create", scope: null };
 
 /**
  * An in-memory core. `previewAssign` follows core's rule for a protected target
@@ -14,7 +16,7 @@ const agent = (id: string, reportsTo: string | null, status = "idle"): AgentRow 
 class FakeCore implements GuardPort {
   policies = new Map<string, Policy>();
   grants = new Map<string, Grant[]>();
-  record: GuardRecord = { protected: [], scoped: [], broadRemoved: [] };
+  record: GuardRecord = { protected: [], scoped: [], broadRemoved: [], changeGranted: {} };
   writes: string[] = [];
   failing = new Set<string>();
   /** A core that quietly stopped honouring policy writes. */
@@ -78,7 +80,7 @@ describe("reconcileGuard", () => {
     expect(core.policies.has("dev")).toBe(false);
     expect(core.grants.get("cto")).toEqual([ownTeamGrant("cto")]);
     expect(core.grants.get("dev")).toEqual([]);
-    expect(core.record).toEqual({ protected: ["ceo", "cto"], scoped: ["ceo", "cto"], broadRemoved: ["ceo", "cto", "dev", "solo"] });
+    expect(core.record).toEqual({ protected: ["ceo", "cto"], scoped: ["ceo", "cto"], broadRemoved: ["ceo", "cto", "dev", "solo"], changeGranted: {} });
     expect(report.updated).toEqual(["ceo", "cto", "dev", "solo"]);
     expect(report.failures).toEqual([]);
     expect(report.selfTest).toEqual({ status: "pass", detail: "CTO cannot assign to CEO; CEO can assign to CTO" });
@@ -216,7 +218,7 @@ describe("revertGuard", () => {
     expect(core.policies.get("cto")).toBeNull();
     expect(core.grants.get("cto")).toEqual([BROAD]);
     expect(core.grants.get("dev")).toEqual([{ permissionKey: "agents:create", scope: null }, BROAD]);
-    expect(core.record).toEqual({ protected: [], scoped: [], broadRemoved: [] });
+    expect(core.record).toEqual({ protected: [], scoped: [], broadRemoved: [], changeGranted: {} });
   });
 
   it("leaves a protection it did not set", async () => {
@@ -229,10 +231,10 @@ describe("revertGuard", () => {
 
   it("drops a deleted agent from the record without a failure", async () => {
     const core = org();
-    core.record = { protected: ["gone"], scoped: [], broadRemoved: ["gone"] };
+    core.record = { protected: ["gone"], scoped: [], broadRemoved: ["gone"], changeGranted: { gone: ["agents:configure"] } };
     const report = await revertGuard(core, C);
     expect(report.failures).toEqual([]);
-    expect(core.record).toEqual({ protected: [], scoped: [], broadRemoved: [] });
+    expect(core.record).toEqual({ protected: [], scoped: [], broadRemoved: [], changeGranted: {} });
   });
 
   it("keeps an agent it could not revert in the record", async () => {
@@ -241,6 +243,83 @@ describe("revertGuard", () => {
     core.failing.add("setGrants:dev");
     const report = await revertGuard(core, C);
     expect(report.failures).toEqual([{ agentId: "dev", name: "DEV", step: "grants", error: "refused setGrants:dev" }]);
-    expect(core.record).toEqual({ protected: [], scoped: [], broadRemoved: ["dev"] });
+    expect(core.record).toEqual({ protected: [], scoped: [], broadRemoved: ["dev"], changeGranted: {} });
+  });
+});
+
+describe("the top agent's change grants", () => {
+  const company = () => new FakeCore([agent("top", null), agent("cto", "top"), agent("dev", "cto")]);
+
+  it("gives the one agent that reports to nobody what core gives its root CEO, once", async () => {
+    const core = company();
+    const report = await reconcileGuard(core, C);
+    expect(core.grants.get("top")).toEqual(expect.arrayContaining([CONFIGURE, SKILLS, ownTeamGrant("top")]));
+    expect(core.grants.get("top")).toHaveLength(3);
+    expect(core.grants.get("cto")).toEqual([ownTeamGrant("cto")]);
+    expect(core.grants.get("dev")).toEqual([]);
+    expect(core.record.changeGranted).toEqual({ top: ["agents:configure", "skills:create"] });
+    expect(report.updated).toContain("top");
+    const writes = core.writes.length;
+    await reconcileGuard(core, C);
+    expect(core.writes.length).toBe(writes);
+  });
+
+  it("never gives them back once a person has taken them away", async () => {
+    const core = company();
+    await reconcileGuard(core, C);
+    core.grants.set("top", (core.grants.get("top") ?? []).filter((grant) => grant.permissionKey !== "agents:configure"));
+    await reconcileGuard(core, C);
+    expect(core.grants.get("top")?.some((grant) => grant.permissionKey === "agents:configure")).toBe(false);
+  });
+
+  it("adds only what the agent lacks, and records only that", async () => {
+    const core = company();
+    core.grants.set("top", [BROAD, CONFIGURE]);
+    await reconcileGuard(core, C);
+    expect(core.grants.get("top")).toEqual(expect.arrayContaining([CONFIGURE, SKILLS]));
+    expect(core.record.changeGranted).toEqual({ top: ["skills:create"] });
+  });
+
+  it("remembers an agent that already had both, so taking them away later sticks", async () => {
+    const core = company();
+    core.grants.set("top", [BROAD, CONFIGURE, SKILLS]);
+    await reconcileGuard(core, C);
+    expect(core.record.changeGranted).toEqual({ top: [] });
+    core.grants.set("top", [ownTeamGrant("top")]);
+    await reconcileGuard(core, C);
+    expect(core.grants.get("top")).toEqual([ownTeamGrant("top")]);
+  });
+
+  it("gives them to nobody when more than one agent reports to nobody, as core does", async () => {
+    const core = org();
+    await reconcileGuard(core, C);
+    expect(core.record.changeGranted).toEqual({});
+    expect([...core.grants.values()].flat().some((grant) => grant.permissionKey === "agents:configure")).toBe(false);
+  });
+
+  it("does not count a built-in agent or one waiting for approval as a second top agent", async () => {
+    const core = new FakeCore([agent("top", null), { ...agent("coach", null), builtIn: true }, agent("new", null, "pending_approval")]);
+    await reconcileGuard(core, C);
+    expect(core.record.changeGranted).toEqual({ top: ["agents:configure", "skills:create"] });
+    expect(core.grants.get("coach")).toEqual([]);
+    expect(core.grants.get("new")).toEqual([BROAD]);
+  });
+
+  it("gives nothing to a top agent waiting for approval", async () => {
+    const core = new FakeCore([agent("top", null, "pending_approval"), agent("dev", "top")]);
+    await reconcileGuard(core, C);
+    expect(core.record.changeGranted).toEqual({});
+    expect(core.grants.get("top")).toEqual([BROAD]);
+  });
+
+  it("revert takes back exactly the grants it added", async () => {
+    const core = company();
+    core.grants.set("top", [BROAD, CONFIGURE]);
+    await reconcileGuard(core, C);
+    const report = await revertGuard(core, C);
+    expect(report.failures).toEqual([]);
+    expect(core.grants.get("top")).toEqual(expect.arrayContaining([BROAD, CONFIGURE]));
+    expect(core.grants.get("top")).toHaveLength(2);
+    expect(core.record.changeGranted).toEqual({});
   });
 });
