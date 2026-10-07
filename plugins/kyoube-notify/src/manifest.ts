@@ -6,11 +6,15 @@ export const PLUGIN_VERSION = "0.1.0";
 export const NOTIFICATIONS_ROUTE = "notifications";
 
 /**
- * Every event the worker listens to. Core 2026.916.1 never sends
- * `interaction.created` (an agent's question is logged as
- * `issue.thread_interaction_created`, which its activity log does not map to a
- * plugin event), so new questions are found when the agent's run ends or a
- * comment lands. It will be subscribed once the core sends it, for instant delivery.
+ * Every event the worker listens to.
+ *
+ * SDK 2026.916.1 has no plugin event for an agent's new question: the core logs
+ * `issue.thread_interaction_created` (not mapped), and `interaction.created` is
+ * not in PLUGIN_EVENT_TYPES. So new questions are found when the agent's run
+ * ends or a comment lands.
+ *
+ * If a later SDK declares `interaction.created`, add it here and handle it in
+ * the notifier.
  */
 export const SUBSCRIBED_EVENTS = [
   "approval.created",
