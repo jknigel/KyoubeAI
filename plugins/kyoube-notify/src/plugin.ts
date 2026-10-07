@@ -5,6 +5,7 @@ import { PLUGIN_ID, SUBSCRIBED_EVENTS } from "./manifest.js";
 import { testMessage } from "./messages.js";
 import { Notifier, type NotifierDeps } from "./notifier.js";
 import { readPublicUrl, readTestEndpoint } from "./runtime-config.js";
+import { activeMembers } from "./routing.js";
 import { NotifyStore, type DeviceRecord } from "./store.js";
 import { parseSubscription } from "./webpush/endpoints.js";
 import { sendPush, type PushTransport } from "./webpush/send.js";
@@ -16,6 +17,8 @@ export interface NotifyPluginDeps {
   sleep?: (ms: number) => Promise<void>;
   configPath?: string;
   testEndpointPath?: string;
+  /** How long one push request may take before it counts as a network error. Default 10 s. */
+  pushTimeoutMs?: number;
 }
 
 /** What the UI sees of a device: everything but the browser's keys. */
@@ -48,7 +51,8 @@ export function createNotifyPlugin(deps: NotifyPluginDeps = {}): PaperclipPlugin
       // and drops `redirect`. No redirects: the endpoint allowlist only vouches for the first hop,
       // so a 3xx comes back as a refusal.
       const transport: PushTransport = deps.transport ?? (async (url, init) => {
-        const response = await fetch(url, { method: init.method, headers: init.headers, body: new Uint8Array(init.body), redirect: "manual" });
+        const response = await fetch(url, { method: init.method, headers: init.headers, body: new Uint8Array(init.body), redirect: "manual", signal: AbortSignal.timeout(deps.pushTimeoutMs ?? 10_000) });
+        await response.body?.cancel().catch(() => undefined);
         return { status: response.status };
       });
       const notifier = new Notifier({
@@ -66,7 +70,9 @@ export function createNotifyPlugin(deps: NotifyPluginDeps = {}): PaperclipPlugin
 
       ctx.actions.register("notify.config", async (_params, context) => {
         const userId = userOf(context);
-        return { publicKey: vapid.publicKey, prefs: await store.prefs(userId), devices: (await store.devices(userId)).map(view) };
+        // Failure notices go to owners and admins of the host's company only (see routing.failureRecipients).
+        const role = context.companyId ? activeMembers(await ctx.access.members.list({ companyId: context.companyId })).find((member) => member.userId === userId)?.role : undefined;
+        return { publicKey: vapid.publicKey, prefs: await store.prefs(userId), devices: (await store.devices(userId)).map(view), canReceiveFailures: role === "owner" || role === "admin" };
       });
 
       ctx.actions.register("notify.subscribe", async (params, context) => {

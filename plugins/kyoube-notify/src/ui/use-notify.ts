@@ -4,7 +4,7 @@ import { browserSubscription, deviceLabel, deviceState, readDeviceEnv, sameKey, 
 
 export interface DeviceView { id: string; label: string; endpoint: string; createdAt: string; lastSuccessAt: string | null; lastError: string | null; lastErrorAt: string | null }
 export interface NotifyPrefs { failures: boolean; comments: boolean }
-export interface NotifyConfig { publicKey: string; prefs: NotifyPrefs; devices: DeviceView[] }
+export interface NotifyConfig { publicKey: string; prefs: NotifyPrefs; devices: DeviceView[]; canReceiveFailures?: boolean }
 
 export interface NotifyDevice {
   loading: boolean;
@@ -13,6 +13,7 @@ export interface NotifyDevice {
   config: NotifyConfig | null;
   thisDevice: DeviceView | null;
   error: string | null;
+  retry(): void;
   turnOn(): Promise<void>;
   turnOff(): Promise<void>;
   sendTest(deviceId: string): Promise<void>;
@@ -64,11 +65,12 @@ export function useNotifyDevice(): NotifyDevice {
     setEndpoint(subscription?.endpoint ?? null);
   }, []);
 
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let cancelled = false;
     load().catch((err: unknown) => { if (!cancelled) setError(message(err)); }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [load]);
+  }, [load, attempt]);
 
   const run = useCallback(async (work: () => Promise<unknown>) => {
     setBusy(true);
@@ -92,8 +94,10 @@ export function useNotifyDevice(): NotifyDevice {
     config,
     thisDevice,
     error,
+    retry: () => { setError(null); setLoading(true); setAttempt((n) => n + 1); },
     turnOn: () => run(async () => {
-      const json = await subscribeBrowser(config!.publicKey);
+      if (!config) throw new Error("The notification settings are not loaded yet.");
+      const json = await subscribeBrowser(config.publicKey);
       await ref.current.subscribe({ subscription: json, label: deviceLabel(navigator.userAgent) });
     }),
     turnOff: () => run(async () => {

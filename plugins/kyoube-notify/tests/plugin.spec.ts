@@ -20,7 +20,7 @@ let dir: string;
 beforeEach(async () => { dir = await mkdtemp(path.join(tmpdir(), "kyoube-notify-")); });
 afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
-interface SetupOptions { interactions?: Array<Record<string, unknown>>; issue?: Record<string, unknown>; statuses?: Array<number | Error>; members?: ReturnType<typeof member>[]; realTransport?: boolean; beforeSetup?: (harness: ReturnType<typeof createTestHarness>) => void }
+interface SetupOptions { interactions?: Array<Record<string, unknown>>; issue?: Record<string, unknown>; statuses?: Array<number | Error>; members?: ReturnType<typeof member>[]; realTransport?: boolean; pushTimeoutMs?: number; beforeSetup?: (harness: ReturnType<typeof createTestHarness>) => void }
 
 async function setup(options: SetupOptions = {}) {
   const harness = createTestHarness({ manifest });
@@ -34,7 +34,7 @@ async function setup(options: SetupOptions = {}) {
   });
   options.beforeSetup?.(harness);
   const { sent, transport } = fakeTransport(options.statuses ?? []);
-  const plugin = createNotifyPlugin({ ...(options.realTransport ? {} : { transport }), sleep: async () => {}, configPath: path.join(dir, "config.json"), testEndpointPath: path.join(dir, "push-test-endpoint") });
+  const plugin = createNotifyPlugin({ pushTimeoutMs: options.pushTimeoutMs, ...(options.realTransport ? {} : { transport }), sleep: async () => {}, configPath: path.join(dir, "config.json"), testEndpointPath: path.join(dir, "push-test-endpoint") });
   await plugin.definition.setup(harness.ctx);
   const devices = new Map<string, TestDevice>();
   const subscribe = async (userId: string) => {
@@ -185,6 +185,17 @@ describe("actions", () => {
     expect(first.prefs).toEqual({ failures: false, comments: false });
   });
 
+  it("tell the page whether the person can receive failure notices: owners and admins only", async () => {
+    const { harness } = await setup();
+    const config = (userId: string) => harness.performAction<{ canReceiveFailures: boolean }>("notify.config", {}, as(userId));
+    expect((await config("owner")).canReceiveFailures).toBe(true);
+    expect((await config("admin")).canReceiveFailures).toBe(true);
+    expect((await config("operator")).canReceiveFailures).toBe(false);
+    expect((await config("left")).canReceiveFailures).toBe(false);
+    expect((await config("stranger")).canReceiveFailures).toBe(false);
+    expect((await harness.performAction<{ canReceiveFailures: boolean }>("notify.config", {}, { actor: { type: "user", userId: "owner" } })).canReceiveFailures).toBe(false);
+  });
+
   it("refuse agents, unknown push services and someone else's device", async () => {
     const { harness, subscribe } = await setup();
     const device = makeDevice();
@@ -265,5 +276,17 @@ describe("the real transport", () => {
     const added = await harness.performAction<{ id: string }>("notify.subscribe", { subscription: makeDevice(first.url).subscription }, as("owner"));
     expect(await harness.performAction("notify.test", { deviceId: added.id }, as("owner"))).toMatchObject({ result: "failed", status: 302 });
     expect(second.hits()).toBe(0);
+  });
+
+  it("gives up on a push service that never answers", async () => {
+    const hung = createServer(() => { /* never answers */ });
+    await new Promise<void>((resolve) => hung.listen(0, "127.0.0.1", resolve));
+    servers.push(hung);
+    const url = `http://127.0.0.1:${(hung.address() as AddressInfo).port}/push`;
+    await writeFile(path.join(dir, "push-test-endpoint"), url);
+    const { harness } = await setup({ realTransport: true, pushTimeoutMs: 200 });
+    const added = await harness.performAction<{ id: string }>("notify.subscribe", { subscription: makeDevice(url).subscription }, as("owner"));
+    const outcome = await harness.performAction<{ result: string }>("notify.test", { deviceId: added.id }, as("owner"));
+    expect(outcome.result).toBe("failed");
   });
 });
