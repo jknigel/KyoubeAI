@@ -80,6 +80,17 @@ elif [[ "$BRAND_LIVE_RC" != "0" ]]; then
 fi
 echo "    title, manifest, loading icon, bundle text and the sign-in page are branded"
 
+echo "==> the app installs as a standalone PWA with KyoubeAI's push handlers"
+# docker/pwa ran at image build; this proves the server serves its output.
+curl -fsS "$BASE_URL/site.webmanifest" | jq -e '.display == "standalone"' >/dev/null \
+  || { echo "site.webmanifest is not standalone" >&2; exit 1; }
+grep -q 'name="apple-mobile-web-app-capable"' "$TMP/index.html" || { echo "index.html lacks the iOS Home Screen tag" >&2; exit 1; }
+curl -fsS "$BASE_URL/sw.js" | grep -q 'importScripts("/kyoube-push-sw.js")' || { echo "/sw.js does not import the push handlers" >&2; exit 1; }
+# The content type, not just the status: the SPA catch-all answers 200 with index.html for any path.
+PUSH_SW_STATUS="$(curl -sS -o "$TMP/push-sw.js" -w '%{http_code} %{content_type}' "$BASE_URL/kyoube-push-sw.js")"
+[[ "$PUSH_SW_STATUS" == "200 "*javascript* ]] && grep -q 'addEventListener("push"' "$TMP/push-sw.js" \
+  || { echo "/kyoube-push-sw.js is not served as JavaScript ($PUSH_SW_STATUS)" >&2; exit 1; }
+
 echo "==> the served UI carries the Studio theme"
 # docker/theme ran at image build before the rebrand: the stylesheet is linked
 # after the core's under a re-hashed name, the boot flag is inlined, the fonts
@@ -208,14 +219,16 @@ AGENT_RULES_SHIPPED="$(jq -r .version "$ROOT/plugins/kyoube-agent-rules/package.
 [[ "$AGENT_RULES_SHIPPED" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected kyoube.agent-rules version '$AGENT_RULES_SHIPPED' in package.json" >&2; exit 1; }
 LICENSE_SHIPPED="$(jq -r .version "$ROOT/plugins/kyoube-license/package.json")"
 [[ "$LICENSE_SHIPPED" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected kyoube.license version '$LICENSE_SHIPPED' in package.json" >&2; exit 1; }
+NOTIFY_SHIPPED="$(jq -r .version "$ROOT/plugins/kyoube-notify/package.json")"
+[[ "$NOTIFY_SHIPPED" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected kyoube.notify version '$NOTIFY_SHIPPED' in package.json" >&2; exit 1; }
 
 echo "==> install plugins via kyoube ensure-plugins"
-# Six plugins ship in the image (/opt/kyoube/plugins/{terminal,apps,files,studio,agent-rules,license}),
-# so the first pass installs all six — `installed 6`, nothing upgraded or
+# Seven plugins ship in the image (/opt/kyoube/plugins/{terminal,apps,files,studio,agent-rules,license,notify}),
+# so the first pass installs all seven — `installed 7`, nothing upgraded or
 # skipped.
 compose exec -T app kyoube ensure-plugins --api-key "$TOKEN" | tee "$TMP/ensure-first.log"
-grep -q 'installed 6, upgraded 0, skipped 0' "$TMP/ensure-first.log" \
-  || { echo "expected all six bundled plugins to install on the first pass:" >&2; cat "$TMP/ensure-first.log" >&2; exit 1; }
+grep -q 'installed 7, upgraded 0, skipped 0' "$TMP/ensure-first.log" \
+  || { echo "expected all seven bundled plugins to install on the first pass:" >&2; cat "$TMP/ensure-first.log" >&2; exit 1; }
 curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/plugins" \
   | jq -e 'map(select(.pluginKey == "kyoube.terminal")) | length == 1 and .[0].status == "ready"' >/dev/null
 wait_for_plugin kyoube.apps "$APPS_SHIPPED"
@@ -223,7 +236,8 @@ wait_for_plugin kyoube.files "$FILES_SHIPPED"
 wait_for_plugin kyoube.studio "$STUDIO_SHIPPED"
 wait_for_plugin kyoube.agent-rules "$AGENT_RULES_SHIPPED"
 wait_for_plugin kyoube.license "$LICENSE_SHIPPED"
-echo "    kyoube.terminal, kyoube.apps ${APPS_SHIPPED}, kyoube.files ${FILES_SHIPPED}, kyoube.studio ${STUDIO_SHIPPED}, kyoube.agent-rules ${AGENT_RULES_SHIPPED} and kyoube.license ${LICENSE_SHIPPED} are installed and ready"
+wait_for_plugin kyoube.notify "$NOTIFY_SHIPPED"
+echo "    kyoube.terminal, kyoube.apps ${APPS_SHIPPED}, kyoube.files ${FILES_SHIPPED}, kyoube.studio ${STUDIO_SHIPPED}, kyoube.agent-rules ${AGENT_RULES_SHIPPED}, kyoube.license ${LICENSE_SHIPPED} and kyoube.notify ${NOTIFY_SHIPPED} are installed and ready"
 
 echo "==> kyoube setup (real browser-approval onboarding)"
 # Run setup detached inside the container; it prints an approval URL and then
@@ -252,10 +266,10 @@ done
 compose exec -T app sh -c 'sed "s/^/    setup| /" /tmp/setup.log'
 [[ "$SETUP_EXIT" == "0" ]] || { echo "kyoube setup exited '${SETUP_EXIT:-<timeout>}'" >&2; exit 1; }
 # setup ends by running ensure-plugins with the key it just stored; the bundled
-# plugins are already installed at the on-disk version, so it skips all six.
+# plugins are already installed at the on-disk version, so it skips all seven.
 compose exec -T app sh -c 'cat /tmp/setup.log' >"$TMP/setup.log"
-grep -q 'installed 0, upgraded 0, skipped 6' "$TMP/setup.log" \
-  || { echo "expected setup's ensure-plugins to skip the six bundled plugins:" >&2; cat "$TMP/setup.log" >&2; exit 1; }
+grep -q 'installed 0, upgraded 0, skipped 7' "$TMP/setup.log" \
+  || { echo "expected setup's ensure-plugins to skip the seven bundled plugins:" >&2; cat "$TMP/setup.log" >&2; exit 1; }
 # No company exists at this point, so setup has nothing to verify and says so
 # rather than waiting for skills that cannot appear yet.
 grep -q 'no company exists yet' "$TMP/setup.log" \
@@ -281,9 +295,9 @@ grep -q 'kyoube.agent-rules skip' "$TMP/ensure-stored.log" \
 grep -q 'kyoube.license skip' "$TMP/ensure-stored.log" \
   || { echo "expected kyoube.license to be skipped:" >&2; cat "$TMP/ensure-stored.log" >&2; exit 1; }
 # All bundled plugins are already at the on-disk version by now, so the whole
-# run is a no-op: six skips, nothing installed or upgraded.
-grep -q 'installed 0, upgraded 0, skipped 6' "$TMP/ensure-stored.log" \
-  || { echo "expected 'installed 0, upgraded 0, skipped 6' in the summary:" >&2; cat "$TMP/ensure-stored.log" >&2; exit 1; }
+# run is a no-op: seven skips, nothing installed or upgraded.
+grep -q 'installed 0, upgraded 0, skipped 7' "$TMP/ensure-stored.log" \
+  || { echo "expected 'installed 0, upgraded 0, skipped 7' in the summary:" >&2; cat "$TMP/ensure-stored.log" >&2; exit 1; }
 sed 's/^/    /' "$TMP/ensure-stored.log"
 
 echo "==> licensing: five users free, the sixth refused, removing a user frees a seat, a key raises the limit"
@@ -933,6 +947,37 @@ UP_ID="$(jq -r '.id' "$TMP/resp.json")"
 as_agent "$R_KEY" POST "/api/companies/$COMPANY_ID/issues" "{\"title\":\"smoke: to a peer\",\"assigneeAgentId\":\"$P_ID\"}"
 [[ "$HTTP_STATUS" =~ ^2 ]] || { echo "a handoff to an agent without reports was refused: $HTTP_STATUS $(cat "$TMP/resp.json")" >&2; exit 1; }
 
+echo "==> push: subscribe a test device, send a test, and opt in to failures"
+# kyoube.notify accepts this one non-push-service endpoint only while the file below
+# names it (kyoube doctor fails a public instance that has it). The receiver runs
+# inside the container on 127.0.0.1.
+PUSH_ENDPOINT="http://127.0.0.1:39123/push"
+compose exec -T -u node app sh -c 'cat > /tmp/push-live-check.mjs' <"$ROOT/scripts/push-live-check.mjs"
+compose exec -T -u node app sh -c ': > /tmp/kyoube-push.jsonl'
+compose exec -d -u node app node /tmp/push-live-check.mjs receiver 39123 /tmp/kyoube-push.jsonl
+compose exec -T -u node app sh -c "printf '%s\n' '$PUSH_ENDPOINT' > /kyoubeai/kyoube/push-test-endpoint"
+node "$ROOT/scripts/push-live-check.mjs" keys >"$TMP/push-keys.json"
+notify_bridge() { curl -fsS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -X POST "$BASE_URL/api/plugins/kyoube.notify/actions/$1" --data "$2"; }
+PUSH_DEVICE_ID="$(notify_bridge notify.subscribe "$(jq -nc --arg c "$COMPANY_ID" --arg e "$PUSH_ENDPOINT" --slurpfile k "$TMP/push-keys.json" \
+  '{companyId: $c, params: {label: "smoke", subscription: {endpoint: $e, keys: {p256dh: $k[0].p256dh, auth: $k[0].auth}}}}')" | jq -r '.data.id')"
+[[ "$PUSH_DEVICE_ID" =~ ^[0-9a-f]{16}$ ]] || { echo "notify.subscribe did not return a device id" >&2; exit 1; }
+notify_bridge notify.prefs "{\"companyId\":\"$COMPANY_ID\",\"params\":{\"failures\":true}}" >/dev/null
+notify_bridge notify.test "{\"companyId\":\"$COMPANY_ID\",\"params\":{\"deviceId\":\"$PUSH_DEVICE_ID\"}}" | jq -e '.data.result == "delivered"' >/dev/null \
+  || { echo "notify.test was not delivered to the receiver" >&2; exit 1; }
+push_payloads() { # decrypts every push the receiver has had so far, one JSON object per line
+  compose exec -T -u node app cat /tmp/kyoube-push.jsonl >"$TMP/push-requests.jsonl"
+  node "$ROOT/scripts/push-live-check.mjs" decrypt "$TMP/push-requests.jsonl" "$TMP/push-keys.json" "$PUSH_ENDPOINT"
+}
+wait_push() { # jq-filter description — poll up to 90 s for a decrypted push matching the filter
+  for _ in $(seq 1 45); do
+    if push_payloads 2>"$TMP/push-errors.txt" | jq -e -s "map(select($1)) | length > 0" >/dev/null; then return 0; fi
+    sleep 2
+  done
+  echo "no push for $2 within 90 s; received:" >&2; push_payloads >&2 || true; cat "$TMP/push-errors.txt" >&2; return 1
+}
+wait_push '.title == "KyoubeAI test" and .url == "/"' "the test notification"
+echo "    test push delivered, decrypted and VAPID-signed"
+
 # Escalation: R's script creates a confirmation card and the escalation
 # decision, then hands the task to the person, as rule 3 says.
 TASK_ID="$(curl -fsS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -X POST "$BASE_URL/api/companies/$COMPANY_ID/issues" \
@@ -975,6 +1020,12 @@ for i in $(seq 1 90); do
   [[ $i -eq 90 ]] && { echo "smoke-report never handed the task back to the person:" >&2; jq -c '{status, assigneeAgentId, assigneeUserId}' "$TMP/task.json" >&2; compose logs --no-color --tail 80 app >&2; exit 1; }
 done
 
+# smoke-report's script asked a question on a task the admin created (the
+# confirmation card above). The core sends no event for that; kyoube.notify finds
+# it when smoke-report's run ends and tells the task's creator.
+wait_push '.title == "smoke-report is asking: Smoke confirmation" and (.url | test("/issues/"))' "smoke-report's question"
+echo "    the agent's question reached the task's creator as a push"
+
 # An agent's update to another task, and its answer to a card, count only
 # inside one of its own runs: without X-Paperclip-Run-Id the core refuses them
 # before it looks at the assignee or the card's resolver policy
@@ -991,6 +1042,9 @@ echo "    nothing moves up to a manager; a handoff to an agent without reports s
 CARD_ID="$(curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/issues/$TASK_ID/interactions" | jq -r '[(.interactions? // .)[] | select(.kind == "request_confirmation")][0].id')"
 M_RUN_ID="$(curl -fsS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -X POST "$BASE_URL/api/agents/$M_ID/wakeup" --data '{"reason":"smoke: a run to answer the card from"}' | jq -r '.id')"
 [[ -n "$M_RUN_ID" && "$M_RUN_ID" != "null" ]] || { echo "a board wakeup started no run for smoke-manager" >&2; exit 1; }
+# That run fails at once (no model signed in), and the admin opted in to failures above.
+wait_push '.title == "smoke-manager'"'"'s run failed"' "smoke-manager's failed run"
+echo "    a failed run reached an opted-in owner as a push"
 as_agent "$M_KEY" POST "/api/issues/$TASK_ID/interactions/$CARD_ID/accept" '{}' "$M_RUN_ID"
 if [[ "$HTTP_STATUS" != 403 ]] || ! jq -e '.code == "interaction_human_only"' "$TMP/resp.json" >/dev/null; then echo "an agent could answer a people-only card: $HTTP_STATUS $(cat "$TMP/resp.json")" >&2; exit 1; fi
 DECISION_ID="$(curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/companies/$COMPANY_ID/decisions" | jq -r '[(.decisions? // .items? // .)[] | select(.title == "Escalate the smoke task?")][0].id')"

@@ -3,7 +3,7 @@ import { mkdtemp } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import {
-  LEGACY_ENV_KEYS, agentRulesChecks, agentRulesDoctorChecks, claudeCredentialDetail, exposureWarning, formatCheck, harnessChecks, harnessesInUseCheck, legacyEnvCheck, legacyHomeLinkCheck, licenceCheck, licenceEnforcementCheck, skillsCheck, systemPackagesCheck,
+  LEGACY_ENV_KEYS, agentRulesChecks, agentRulesDoctorChecks, claudeCredentialDetail, exposureWarning, formatCheck, harnessChecks, harnessesInUseCheck, legacyEnvCheck, legacyHomeLinkCheck, licenceCheck, licenceEnforcementCheck, pushTestEndpointCheck, skillsCheck, systemPackagesCheck,
 } from "../src/commands/doctor.js";
 import { licenseStatus } from "@kyoube/license";
 import { HARNESSES, type HarnessStatus } from "../src/harnesses.js";
@@ -342,5 +342,19 @@ describe("licenceCheck", () => {
   });
   it("names the snapshot when the count came from it", () => {
     expect(licenceCheck(status(null, 2), "2026-10-03T00:00:00.000Z").detail).toBe("Free: 2 of 5 users (count from the user snapshot of 2026-10-03T00:00:00.000Z)");
+  });
+});
+
+describe("pushTestEndpointCheck", () => {
+  it("says nothing when the smoke test's file is absent", async () => {
+    expect(await pushTestEndpointCheck("/kyoubeai", {}, async () => false)).toBeNull();
+  });
+
+  it("warns on a private instance and fails a public one", async () => {
+    const seen: string[] = [];
+    const exists = async (file: string) => { seen.push(file); return true; };
+    expect(await pushTestEndpointCheck("/kyoubeai", {}, exists)).toMatchObject({ name: "push test endpoint", ok: true, warn: true });
+    expect(await pushTestEndpointCheck("/kyoubeai", { PAPERCLIP_DEPLOYMENT_EXPOSURE: "public" }, exists)).toMatchObject({ name: "push test endpoint", ok: false });
+    expect(seen[0]).toBe("/kyoubeai/kyoube/push-test-endpoint");
   });
 });
