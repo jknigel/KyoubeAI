@@ -33,6 +33,7 @@ describe("kyoube-push-sw.js", () => {
     const sw = load();
     await sw.fire("push", { data: { json: () => ({ title: "Ada is asking: Ship it?", body: "ACM-1 · Launch post", url: "/ACM/issues/ACM-1", tag: "issue:1" }) } });
     expect(sw.shown).toEqual([{ title: "Ada is asking: Ship it?", options: expect.objectContaining({ body: "ACM-1 · Launch post", tag: "issue:1", renotify: true, data: { url: "/ACM/issues/ACM-1" }, icon: "/android-chrome-192x192.png" }) }]);
+    expect(sw.shown[0].options).not.toHaveProperty("badge");
   });
 
   it("still shows something for an empty or unreadable push (iOS revokes permission for silent pushes)", async () => {

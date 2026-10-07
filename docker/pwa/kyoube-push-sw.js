@@ -30,7 +30,6 @@ self.addEventListener("push", (event) => {
       tag,
       renotify: Boolean(tag),
       icon: "/android-chrome-192x192.png",
-      badge: "/android-chrome-192x192.png",
       data: { url: kyoubeSafePath(data.url) },
     }),
   );
