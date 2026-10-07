@@ -162,6 +162,8 @@ export class Notifier {
     if (!issue) return;
     const reported = str(((event.payload ?? {}) as { _previous?: { status?: unknown } })._previous?.status);
     const stored = await this.deps.store.swapStatus(issue.id, issue.status);
+    // Trusting the stored status over `_previous` (when it equals the current one) can miss a transition
+    // that happened while the plugin was down; accepted to avoid duplicate notices.
     // Already seen in this status (a second event for the same change): nothing new to say.
     const previous = stored === issue.status ? issue.status : (reported ?? stored);
     const kind = statusTransition(issue.status, previous);
