@@ -20,6 +20,14 @@ describe("isAllowedEndpoint", () => {
     ["https://push.apple.com.evil.example/x", false],
     ["http://127.0.0.1:39123/push", false],
     ["not a url", false],
+    ["https://fcm.googleapis.com./fcm/send/a", false],
+    ["https://FCM.GOOGLEAPIS.COM/fcm/send/a", true],
+    ["https://evil.example\\@fcm.googleapis.com/x", false],
+    ["https://push.apple.com/x", false],
+    ["https://notify.windows.com/x", false],
+    ["https://fcm.googleapis.com:443/fcm/send/a", true],
+    ["https://[::1]/x", false],
+    ["https://142.250.0.1/x", false],
   ])("%s → %s", (endpoint, allowed) => {
     expect(isAllowedEndpoint(endpoint, null)).toBe(allowed);
   });
@@ -43,6 +51,14 @@ describe("parseSubscription", () => {
     expect(() => parseSubscription({ ...subscription, keys: { ...subscription.keys, auth: "AAAA" } }, null)).toThrow("16 bytes");
     expect(() => parseSubscription(null, null)).toThrow("invalid");
     expect(() => parseSubscription({ endpoint: `https://fcm.googleapis.com/${"x".repeat(2100)}`, keys: subscription.keys }, null)).toThrow("too long");
+  });
+
+  it("refuses a point that is not on the P-256 curve", () => {
+    const { subscription } = makeDevice();
+    const bad = Buffer.alloc(65, 1);
+    bad[0] = 4;
+    const badP256dh = bad.toString("base64url");
+    expect(() => parseSubscription({ ...subscription, keys: { ...subscription.keys, p256dh: badP256dh } }, null)).toThrow("uncompressed P-256");
   });
 });
 
