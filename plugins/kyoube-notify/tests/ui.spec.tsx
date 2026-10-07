@@ -2,6 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
 import { CARD_COPY, NotifyCard } from "../src/ui/NotifyCard.js";
+import { canReceiveFailures, notifyView } from "../src/ui/view.js";
 import { NotificationsPage, deliveryText } from "../src/ui/NotificationsPage.js";
 
 type BridgeGlobal = typeof globalThis & { __paperclipPluginBridge__?: { sdkUi?: Record<string, unknown> } };
@@ -46,5 +47,21 @@ describe("NotificationsPage", () => {
     expect(deliveryText(base, now)).toBe("Added 1 h ago");
     expect(deliveryText({ ...base, lastSuccessAt: "2026-10-07T10:08:00Z" }, now)).toBe("Last delivered 2 min ago");
     expect(deliveryText({ ...base, lastSuccessAt: "2026-10-07T10:00:00Z", lastError: "push service refused the request (403)", lastErrorAt: "2026-10-07T10:09:50Z" }, now)).toBe("Last attempt failed: push service refused the request (403)");
+  });
+});
+
+describe("notifyView", () => {
+  const config = { publicKey: "k", prefs: { failures: false, comments: false }, devices: [] };
+  it("shows the error with a retry, never Turn on or the toggles, when the config did not load", () => {
+    expect(notifyView({ loading: true, config: null })).toBe("loading");
+    expect(notifyView({ loading: false, config: null })).toBe("failed");
+    expect(notifyView({ loading: false, config })).toBe("ready");
+  });
+
+  it("offers Something broke only to people who can receive it", () => {
+    expect(canReceiveFailures({ ...config, canReceiveFailures: true })).toBe(true);
+    expect(canReceiveFailures({ ...config, canReceiveFailures: false })).toBe(false);
+    expect(canReceiveFailures(config)).toBe(false);
+    expect(canReceiveFailures(null)).toBe(false);
   });
 });

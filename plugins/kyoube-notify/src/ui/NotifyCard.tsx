@@ -4,11 +4,12 @@ import { NOTIFICATIONS_ROUTE } from "../manifest.js";
 import { useCompanyNavigation } from "./navigation.js";
 import { ensureStyles } from "./styles.js";
 import { useNotifyDevice } from "./use-notify.js";
+import { LOAD_FAILED_TEXT, notifyView } from "./view.js";
 
 export const CARD_COPY: Record<"off" | "ios-install" | "insecure" | "denied", { title: string; body: string }> = {
   off: { title: "Get notified on this device", body: "Hear when an agent asks you something, when an approval is waiting, and when one of your tasks is done or blocked." },
   "ios-install": { title: "Add KyoubeAI to your Home Screen", body: "iPhone and iPad send notifications only to apps on the Home Screen. Tap Share, then Add to Home Screen, then open KyoubeAI from there." },
-  insecure: { title: "Notifications need a secure address", body: "This KyoubeAI is open over http://. Phones only allow notifications from an https:// address. Your administrator can set one up (see docs/mobile.md)." },
+  insecure: { title: "Notifications need a secure address", body: "This KyoubeAI is opened with an http:// address. Phones only allow notifications from an https:// address. Your administrator can set one up (see docs/mobile.md)." },
   denied: { title: "Notifications are blocked", body: "This browser is blocking notifications from KyoubeAI. Allow them in the browser's or the phone's settings, then come back here." },
 };
 
@@ -28,7 +29,20 @@ export function NotifyCard(_props: PluginWidgetProps) {
   const device = useNotifyDevice();
   const navigation = useCompanyNavigation();
   const [dismissed, setDismissed] = useState(readDismissed);
-  if (device.loading || device.state === "unsupported") return <span data-kyoube-notify="hidden" />;
+  const view = notifyView(device);
+  if (view === "loading" || device.state === "unsupported") return <span data-kyoube-notify="hidden" />;
+  if (view === "failed") {
+    if (dismissed) return <span data-kyoube-notify="hidden" />;
+    return (
+      <div className="kn-card" data-kyoube-notify="card">
+        <h3>Notifications</h3>
+        <p className="kn-error">{device.error ?? LOAD_FAILED_TEXT}</p>
+        <div className="kn-actions">
+          <button type="button" className="kn-btn" onClick={() => { device.retry(); }}>Try again</button>
+        </div>
+      </div>
+    );
+  }
   const settings = navigation.linkProps(`/${NOTIFICATIONS_ROUTE}`);
   if (device.state === "on") {
     return <div className="kn-line" data-kyoube-notify="line">Notifications are on for this device · <a {...settings}>Settings</a></div>;

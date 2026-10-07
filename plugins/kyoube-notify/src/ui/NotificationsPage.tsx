@@ -2,12 +2,13 @@ import type { PluginPageProps } from "@paperclipai/plugin-sdk/ui";
 import type { DeviceState } from "./device.js";
 import { ensureStyles } from "./styles.js";
 import { useNotifyDevice, type DeviceView } from "./use-notify.js";
+import { LOAD_FAILED_TEXT, canReceiveFailures, notifyView } from "./view.js";
 
 const STATE_TEXT: Record<DeviceState, string> = {
   on: "Notifications are on for this device.",
   off: "Notifications are off for this device.",
   "ios-install": "Add KyoubeAI to your Home Screen first: tap Share, then Add to Home Screen, then open KyoubeAI from there.",
-  insecure: "This KyoubeAI is open over http://. Notifications need an https:// address (see docs/mobile.md).",
+  insecure: "This KyoubeAI is opened with an http:// address. Notifications need an https:// address (see docs/mobile.md).",
   denied: "This browser blocks notifications from KyoubeAI. Allow them in the browser's or the phone's settings.",
   unsupported: "This browser cannot receive push notifications.",
 };
@@ -30,7 +31,20 @@ export function deliveryText(device: DeviceView, now = Date.now()): string {
 export function NotificationsPage(_props: PluginPageProps) {
   ensureStyles();
   const device = useNotifyDevice();
-  if (device.loading) return <div className="kn-page" data-kyoube-page="notifications">Loading…</div>;
+  const view = notifyView(device);
+  if (view === "loading") return <div className="kn-page" data-kyoube-page="notifications">Loading…</div>;
+  if (view === "failed") {
+    return (
+      <div className="kn-page" data-kyoube-page="notifications">
+        <h1>Notifications</h1>
+        <p className="kn-error">{device.error ?? LOAD_FAILED_TEXT}</p>
+        <div className="kn-actions">
+          <button type="button" className="kn-btn" onClick={() => { device.retry(); }}>Try again</button>
+        </div>
+      </div>
+    );
+  }
+  const failuresAllowed = canReceiveFailures(device.config);
   const prefs = device.config?.prefs ?? { failures: false, comments: false };
   const others = device.config?.devices.filter((item) => item.id !== device.thisDevice?.id) ?? [];
   return (
@@ -58,8 +72,8 @@ export function NotificationsPage(_props: PluginPageProps) {
       <section className="kn-section">
         <h3>Also tell me</h3>
         <label className="kn-row">
-          <span>Something broke<small>An agent's run failed. Owners and admins only; at most one per agent every 30 minutes.</small></span>
-          <input type="checkbox" className="kn-toggle" checked={prefs.failures} disabled={device.busy} onChange={(event) => { void device.setPrefs({ failures: event.target.checked }); }} />
+          <span>Something broke<small>{failuresAllowed ? "An agent's run failed. At most one per agent every 30 minutes." : "Owners and admins only."}</small></span>
+          <input type="checkbox" className="kn-toggle" checked={failuresAllowed && prefs.failures} disabled={device.busy || !failuresAllowed} onChange={(event) => { void device.setPrefs({ failures: event.target.checked }); }} />
         </label>
         <label className="kn-row">
           <span>Comments on my tasks<small>A person or an agent commented on a task you created or are assigned.</small></span>
