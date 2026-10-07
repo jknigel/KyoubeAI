@@ -58,6 +58,15 @@ describe("runPwa on the 1.4.1 core", () => {
     expect(warnings.join("\n")).toContain('register("/sw.js")');
   });
 
+  it("warns instead of throwing when the assets directory is missing", async () => {
+    await coreTree();
+    await rm(path.join(root, "ui", "dist", "assets"), { recursive: true });
+    const warnings = [];
+    const result = await runPwa({ root, pwaDir: PWA_DIR, log: quiet, warn: (line) => warnings.push(line) });
+    expect(result.register).toBe(false);
+    expect(warnings.join("\n")).toContain('register("/sw.js")');
+  });
+
   it("keeps a meta tag upstream already added instead of doubling it", async () => {
     const index = (await fixture("index.html")).replace("<meta name=\"apple-mobile-web-app-title\"", '<meta name="mobile-web-app-capable" content="yes" />\n    <meta name="apple-mobile-web-app-title"');
     await coreTree({ index });
@@ -72,6 +81,8 @@ describe("runPwa stops the build when the core changed", () => {
     ["sw.js has no fetch listener", { sw: "self.addEventListener('install', () => {});" }, "expected one fetch listener"],
     ["the core handles push itself", { sw: 'self.addEventListener("fetch", () => {});\nself.addEventListener("push", () => {});' }, "now handles push itself"],
     ["the manifest is not JSON", { manifest: "{ nope" }, "site.webmanifest is not valid JSON"],
+    ["the manifest is null", { manifest: "null" }, "site.webmanifest is not a JSON object"],
+    ["the manifest is an array", { manifest: "[]" }, "site.webmanifest is not a JSON object"],
     ["the iOS title tag is gone", { index: "<html><head></head></html>" }, 'apple-mobile-web-app-title" matched 0'],
   ];
   it.each(cases)("%s", async (_name, change, message) => {
@@ -79,6 +90,13 @@ describe("runPwa stops the build when the core changed", () => {
     const error = await runPwa({ root, pwaDir: PWA_DIR, log: quiet, warn: quiet }).catch((err) => err);
     expect(error).toBeInstanceOf(PwaError);
     expect(error.message).toContain(message);
+  });
+
+  it("writes nothing when the service worker check fails", async () => {
+    await coreTree({ sw: "self.addEventListener('install', () => {});" });
+    await runPwa({ root, pwaDir: PWA_DIR, log: quiet, warn: quiet }).catch(() => {});
+    expect(await read("sw.js")).toBe("self.addEventListener('install', () => {});");
+    expect(JSON.parse(await read("site.webmanifest")).display).toBe("browser");
   });
 
   it("writes nothing when a check fails", async () => {

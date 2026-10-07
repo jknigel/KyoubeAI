@@ -63,6 +63,7 @@ export async function runPwa({ root, pwaDir, report = false, log = console.log, 
   const manifestText = await readOptional(manifestPath);
   try {
     manifest = JSON.parse(manifestText ?? "");
+    if (manifest === null || typeof manifest !== "object" || Array.isArray(manifest)) problems.push("ui/dist/site.webmanifest is not a JSON object");
   } catch {
     problems.push("ui/dist/site.webmanifest is not valid JSON");
   }
@@ -75,7 +76,8 @@ export async function runPwa({ root, pwaDir, report = false, log = console.log, 
 
   let register = false;
   const assets = path.join(dist, "assets");
-  for (const name of (await readdir(assets)).filter((file) => file.endsWith(".js"))) {
+  const bundles = (await readdir(assets).catch(() => [])).filter((file) => file.endsWith(".js"));
+  for (const name of bundles) {
     if ((await readFile(path.join(assets, name), "utf8")).includes('register("/sw.js")')) { register = true; break; }
   }
   if (!register) warn('pwa: warning: the core bundle no longer calls register("/sw.js"); the kyoube.notify card registers it, so push still works');

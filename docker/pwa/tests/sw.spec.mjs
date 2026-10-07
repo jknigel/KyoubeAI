@@ -44,10 +44,10 @@ describe("kyoube-push-sw.js", () => {
 
   it("only ever links to a path on this site", async () => {
     const sw = load();
-    for (const url of ["https://evil.example.com/x", "//evil.example.com/x", "javascript:alert(1)", 42]) {
+    for (const url of ["https://evil.example.com/x", "//evil.example.com/x", "javascript:alert(1)", 42, "/\\evil.example.com/x", "/\t/evil.example.com", "/\n/evil.example.com"]) {
       await sw.fire("push", { data: { json: () => ({ title: "t", url }) } });
     }
-    expect(sw.shown.map((item) => item.options.data.url)).toEqual(["/", "/", "/", "/"]);
+    expect(sw.shown.map((item) => item.options.data.url)).toEqual(["/", "/", "/", "/", "/", "/", "/"]);
   });
 
   it("focuses an open KyoubeAI window and takes it to the page", async () => {
@@ -64,5 +64,18 @@ describe("kyoube-push-sw.js", () => {
     const sw = load();
     await sw.fire("notificationclick", { notification: { data: { url: "/ACM/approvals/a1" }, close: () => {} } });
     expect(sw.opened).toEqual(["https://kyoube.example.com/ACM/approvals/a1"]);
+  });
+
+  it("never opens an off-site page from a notification's stored url", async () => {
+    const sw = load();
+    await sw.fire("notificationclick", { notification: { data: { url: "/\\evil.example.com/x" }, close: () => {} } });
+    expect(sw.opened).toEqual(["https://kyoube.example.com/"]);
+  });
+
+  it("opens a window when an open client cannot be navigated", async () => {
+    const win = { url: "https://kyoube.example.com/", focus: async () => {}, navigate: async () => { throw new Error("uncontrolled"); } };
+    const sw = load({ windows: [win] });
+    await sw.fire("notificationclick", { notification: { data: { url: "/ACM/issues/ACM-1" }, close: () => {} } });
+    expect(sw.opened).toEqual(["https://kyoube.example.com/ACM/issues/ACM-1"]);
   });
 });
