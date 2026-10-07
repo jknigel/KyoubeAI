@@ -363,6 +363,39 @@ page sends and is cosmetic only: the Terminal and Plugins pages it links to enfo
 that the getting-started strip was dismissed. Agent characters are SVG generated from a fixed set of
 shapes; an agent's name only picks among them and is never put into the markup.
 
+## Push notifications
+
+`kyoube.notify` sends Web Push from the instance to the push services of people's browsers (see
+`docs/mobile.md`).
+
+**Where it sends.** Only to a device's push endpoint, and only if the endpoint is `https://` on
+`fcm.googleapis.com`, `*.push.apple.com`, `updates.push.services.mozilla.com` or `*.notify.windows.com`,
+with no port and no credentials in the URL. Anything else is refused when a device is added and again on
+every send. This is what stops a crafted "subscription" from making the server post to an address of
+someone's choosing. Browser keys that are not on the P-256 curve are refused too.
+
+**How it sends.** The push goes out through Node's own `fetch` with redirects refused, not the host's
+`ctx.http.fetch`. The SDK bridge turns a request body into a string and drops every other option, so it
+cannot carry an encrypted binary body or refuse a redirect. The endpoint allowlist is therefore the only
+gate on where a push goes, and the plugin's tests cover it. The manifest does not declare `http.outbound`.
+
+**What is in a notification.** An agent's name, a task identifier and title, or an approval's type and
+name, and a question's title or a fixed label. Never comment text, a question's summary or body, or app
+data, because a lock screen is visible to others. Only active company members are sent anything, and
+checked on every send; viewers are not sent approvals.
+
+**What the push services see.** That a notification was sent to a device, when, and its size. The
+payload is encrypted (RFC 8291) to the device's own keys, so they cannot read it.
+
+**The VAPID private key** lives in the plugin's state, inside the core database, so it is in backups of
+it. Restoring someone else's backup changes the instance's keys; devices then need turning off and on
+(`docs/mobile.md`, Troubleshooting).
+
+**The test endpoint file.** For the smoke test only, the worker also accepts exactly the one URL named in
+`/kyoubeai/kyoube/push-test-endpoint`, so a local receiver can prove a real push decrypts. Only
+`scripts/smoke.sh` writes it. `kyoube doctor` fails a public instance that has the file and warns on a
+private one.
+
 ## Telemetry
 
 **Licensing is offline.** Licence keys are checked on the instance against public keys built into the

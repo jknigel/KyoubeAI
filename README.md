@@ -241,6 +241,8 @@ Studio has two parts, and neither edits the core: `docker/theme/` (a build-time 
 and label renames, checked against every core bump) and the `kyoube.studio` plugin. Without the
 plugin, the app falls back to the stock layout. [docs/theme.md](docs/theme.md) has the details.
 
+Installs on phones and computers as an app, with push notifications when an agent needs you ([docs/mobile.md](docs/mobile.md)).
+
 ### Agent working rules
 
 An agent finishes the task you give it, asks you (and only you) when it needs approval, and moves

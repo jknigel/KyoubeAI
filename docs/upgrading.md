@@ -288,6 +288,24 @@ tracked, so `bump-core.sh` cannot touch it) and `docker compose up -d --build`.
   design relies on; nothing was written. `docs/theme.md` ("After a core bump") says what to change for
   each message. Never relax a rule's `expect` to make the build pass. When it passes, look at the
   `studio-screenshots` the smoke leaves (CI artifact, or `STUDIO_SHOTS_DIR` locally).
+- **The image build stops at the `pwa` step** with `pwa verification failed:` and one or more lines.
+  The core changed something the installable app and push notifications rely on; nothing was written.
+  Each line names the file; read the new one in the core before changing anything:
+  - `ui/dist/sw.js is missing` or `core sw.js changed: expected one fetch listener, found N`: the core's
+    service worker moved or was rewritten. Read the new `sw.js` and decide whether
+    `importScripts("/kyoube-push-sw.js")` still belongs at its end.
+  - `core sw.js now handles push itself`: the core added its own push handler. Delete the import
+    (`docker/pwa`) rather than run two push handlers, and check what the core's push does.
+  - `site.webmanifest is not valid JSON` or `is not a JSON object`: the core's manifest changed form.
+    Look at the new file.
+  - `<meta name="apple-mobile-web-app-title" matched N time(s)`: the core's `index.html` changed
+    its iOS tags. Look at the new `index.html` and move the anchor.
+  - `sw.js already imports kyoube-push-sw.js`: the step ran twice on the same core layer. Rebuild from
+    a clean core layer.
+
+  A warning that the bundle no longer calls `register("/sw.js")` does not stop the build: the
+  Notifications card registers the worker itself. See [`mobile.md`](mobile.md) and never relax a check
+  to make the build pass.
 - **A capability was renamed or removed upstream.** The plugin install fails outright. Fix the
   manifest in `plugins/*/src/manifest.ts`.
 - **The plugin host changed a bridge or route shape.** Usually surfaces as a plugin that installs

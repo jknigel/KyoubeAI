@@ -36,7 +36,8 @@ docker compose
 │   │    │     ├─ worker  kyoube.apps       — DataService + AppService
 │   │    │     ├─ worker  kyoube.files      — WorkspaceFiles over each project's folder
 │   │    │     ├─ worker  kyoube.agent-rules — protected manager agents (docs/agent-rules.md)
-│   │    │     └─ worker  kyoube.license    — the Licence page (docs/licensing.md); reads files on the home volume, never the core database
+│   │    │     ├─ worker  kyoube.license    — the Licence page (docs/licensing.md); reads files on the home volume, never the core database
+│    │     └─ worker  kyoube.notify     — Web Push (docs/mobile.md); reads events, never writes core data
 │   │    └─ plugin API routes  ◀── agent runs (Claude Code, pi, Hermes) over REST
 │   │
 │   ├─ CLIs on PATH: yours in /kyoubeai/.local/bin, then the core image's claude, codex, gemini, kimi, opencode
@@ -55,16 +56,18 @@ docker compose
         ▲ :3100 (KYOUBE_PORT) — browser: KyoubeAI UI (core pages + Terminal, Data, Apps, project Files tab)
 ```
 
-Six plugins ship in the image: `@kyoube/plugin-terminal` (`plugins/kyoube-terminal`),
+Seven plugins ship in the image: `@kyoube/plugin-terminal` (`plugins/kyoube-terminal`),
 `@kyoube/plugin-apps` (`plugins/kyoube-apps`), which carries the Data layer, the Apps module and typed
 decisions (`docs/decisions.md`) in one worker because apps need in-process access to the data service and
 plugins cannot call each other, `@kyoube/plugin-files` (`plugins/kyoube-files`), the Files tab on project
 pages, `@kyoube/plugin-studio` (`plugins/kyoube-studio`), the Studio layout,
 `@kyoube/plugin-agent-rules` (`plugins/kyoube-agent-rules`), described below, and
 `@kyoube/plugin-license` (`plugins/kyoube-license`), the Licence page (`kyoube.license`: it reads files on
-the home volume and never the core database). The apps plugin is the only one that calls out of the
-server: `ctx.http.fetch` to the company's chosen `/v1/systemone` provider, with the key read through
-`ctx.secrets`. Everything Kyoube adds
+the home volume and never the core database) and `@kyoube/plugin-notify` (`plugins/kyoube-notify`), which
+sends Web Push notifications to people's phones and computers (`docs/mobile.md`). The apps plugin calls
+out of the server through `ctx.http.fetch`, to the company's chosen `/v1/systemone` provider, with the key
+read through `ctx.secrets`; the notify plugin calls out only to browsers' push services, through Node's
+own `fetch` (see "Core event → push"). Everything Kyoube adds
 is one of these plugins, the `@kyoube/app-sdk` package the apps plugin injects into apps
 (`packages/kyoube-app-sdk`), and the `kyoube` bootstrap CLI (`docker/bootstrap`) that installs them.
 
@@ -144,6 +147,25 @@ most 5 may be toasts). The runner forwards a data call as the `apps.data` action
 app's, and narrowed to the app manifest's declared tables intersected with the viewer's own access level
 — so an app can never do more than the person using it could already do on the Data page. Full detail,
 including the residuals this sandbox knowingly accepts: `apps.md` and `../SECURITY.md`.
+
+### Core event → push
+
+The core raises a plugin event from its activity log: `approval.created`, `issue.updated`,
+`issue.comment.created`, `agent.run.finished` or `agent.run.failed`. `kyoube.notify` treats the event
+only as a trigger. It re-reads the approval, issue or interactions through the SDK clients
+(`ctx.approvals`, `ctx.issues`), because the clients are the documented contract and event payloads are
+looser. An agent's question has no plugin event of its own, so the worker lists the task's interactions
+when a run ends or a comment lands and notifies each open one it has not seen. Routing checks active
+membership through `ctx.access.members` on every send (`plugins/kyoube-notify/src/routing.ts`). The
+message is encrypted (`aes128gcm`, RFC 8291) and signed with the instance's VAPID key (RFC 8292), both
+with `node:crypto`, and posted to the device's push endpoint, which must be on the allowlist of push
+services (`src/webpush/endpoints.ts`).
+
+The post uses Node's own `fetch` with `redirect: "manual"`, not `ctx.http.fetch`. The SDK's worker
+bridge sends a request body to the host as `String(body)` and drops every option but method, headers and
+body, so a binary encrypted body cannot pass through it and a no-redirect rule cannot be enforced. The
+endpoint allowlist is the only gate. The manifest therefore does not declare `http.outbound`. See
+`SECURITY.md`, "Push notifications".
 
 ### Terminal → PTY
 
@@ -320,6 +342,10 @@ The `kyoube.studio` plugin draws Home, the sidebar's Build group and Team roster
 the Workspace page through the public SDK, and every skin rule that hides or moves core UI is gated on that plugin
 being present, so without it the stock layout shows. See [`theme.md`](theme.md).
 
+`docker/pwa/pwa.mjs` runs after the rebrand. It makes the web manifest standalone, adds the iOS meta tags
+and appends one `importScripts` line to the core's service worker so KyoubeAI's push handlers run
+beside the core's. Like the theme, it checks every anchor first. See [`mobile.md`](mobile.md).
+
 ## Further reading
 
 - [`apps.md`](apps.md) — app authoring guide: the manifest, `window.kyoube`, the sandbox in full detail.
@@ -328,5 +354,6 @@ being present, so without it the stock layout shows. See [`theme.md`](theme.md).
 - [`governance.md`](governance.md) — Kyoube's grant levels alongside the core's tool profiles/policies.
 - [`branding.md`](branding.md) — the build-time branding transform: what it changes and what it leaves alone.
 - [`theme.md`](theme.md) — the Studio design: the build-time theme, the Studio plugin, and what to do after a core bump.
+- [`mobile.md`](mobile.md) — installing KyoubeAI as a phone app, push notifications, and what to do after a core bump.
 - [`../SECURITY.md`](../SECURITY.md) — the full security model built on the trust zones above.
 - [`../CONTRIBUTING.md`](../CONTRIBUTING.md) — local setup, conventions, and how to add a tool.
