@@ -5,6 +5,9 @@ import { SidebarEntry } from "../../src/ui/SidebarEntry.js";
 import { DataAccessSettingsPage } from "../../src/ui/DataAccessSettingsPage.js";
 import { AppRunner } from "../../src/ui/apps/AppRunner.js";
 import { APP_CSP } from "../../src/ui/apps/srcdoc.js";
+import { AppsPage } from "../../src/ui/apps/AppsPage.js";
+import { DataPage } from "../../src/ui/DataPage.js";
+import { appNameOf } from "../../src/ui/phone.js";
 
 type BridgeGlobal = typeof globalThis & { __paperclipPluginBridge__?: { sdkUi?: Record<string, unknown> } };
 const context = { companyId: "c1", companyPrefix: "acme", projectId: null, entityId: null, entityType: null, userId: "u1" };
@@ -25,6 +28,25 @@ function installBridge(overrides: Record<string, unknown> = {}) {
 afterEach(() => { delete (globalThis as BridgeGlobal).__paperclipPluginBridge__; });
 
 describe("UI", () => {
+  it("the runner's header has a phone menu and keeps its wide buttons for larger screens", () => {
+    installBridge({ useHostLocation: () => ({ pathname: "/acme/app-artifact/contacts", search: "", hash: "" }) });
+    const html = renderToStaticMarkup(createElement(AppsPage, { context }));
+    expect(html).toContain('data-kyoube-runner=""');
+    expect(html).toContain('data-kyoube-runner-bar=""');
+    expect(html).toMatch(/class="[^"]*kyoube-wide-only[^"]*"[^>]*>Source &amp; versions/);
+    expect(html).toMatch(/class="[^"]*kyoube-phone-only[^"]*"[^>]*aria-label="More"/);
+  });
+
+  it("the Data page starts on the table list on a phone", () => {
+    installBridge({ usePluginData: () => ({ data: [{ name: "contacts", displayName: "Contacts", fields: [] }], loading: false, error: null, refresh: () => {} }) });
+    expect(renderToStaticMarkup(createElement(DataPage, { context }))).toContain('data-kyoube-data-view="list"');
+  });
+
+  it("names the app from its runtime context", () => {
+    expect(appNameOf({ app: { slug: "contacts", name: "Contacts", version: 1 } }, "contacts")).toBe("Contacts");
+    expect(appNameOf(null, "contacts")).toBe("contacts");
+    expect(appNameOf({ app: { name: 7 } }, "contacts")).toBe("contacts");
+  });
   it("SidebarEntry links to the data page for members with read access", () => {
     installBridge();
     expect(renderToStaticMarkup(createElement(SidebarEntry, { context }))).toContain('href="/acme/data"');

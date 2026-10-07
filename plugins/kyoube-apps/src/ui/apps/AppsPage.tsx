@@ -6,6 +6,7 @@ import { errorText } from "../format.js";
 import { button, input } from "../forms.js";
 import { AppRunner } from "./AppRunner.js";
 import { PublishDialog, type PublishPreviewData } from "./PublishDisclosure.js";
+import { appNameOf, ensurePhoneStyles } from "../phone.js";
 import { appErrorPayload, parseAppsPath } from "./bridge.js";
 
 interface AppRecord { slug: string; name: string; description: string | null; icon: string | null; status: string; currentVersion: number | null; latestVersion: number }
@@ -68,6 +69,7 @@ function Gallery(props: { companyId: string; userId: string | null }) {
 }
 
 function Runner(props: { companyId: string; userId: string | null; slug: string }) {
+  ensurePhoneStyles();
   const navigation = useHostNavigation();
   const toast = usePluginToast();
   const runtime = usePluginAction("apps.runtime");
@@ -77,6 +79,7 @@ function Runner(props: { companyId: string; userId: string | null; slug: string 
   const [state, setState] = useState<{ context: unknown; source: string } | null>(null);
   const [error, setError] = useState<{ code: string; message: string } | null>(null);
   const [showSource, setShowSource] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   // Ruling P1-R15: both actions are read through refs so neither `load` nor
   // the effect below has to depend on an unstable function identity.
   const actionsRef = useRef({ runtime, data, decide, outcome });
@@ -96,14 +99,21 @@ function Runner(props: { companyId: string; userId: string | null; slug: string 
   const reload = () => { setState(null); void load(); };
 
   return (
-    <div className="flex h-full flex-col gap-2 p-4" data-kyoube-page="apps">
-      <div className="flex items-center gap-2 text-sm">
-        <a {...navigation.linkProps(appsPagePath())} className="underline">← Apps</a>
-        <strong>{props.slug}</strong>
+    <div className="flex h-full flex-col gap-2 p-4" data-kyoube-page="apps" data-kyoube-runner="">
+      <div className="flex items-center gap-2 text-sm" data-kyoube-runner-bar="">
+        <a {...navigation.linkProps(appsPagePath())} className="underline" aria-label="Back to Apps">←<span className="kyoube-wide-only"> Apps</span></a>
+        <strong>{appNameOf(state?.context, props.slug)}</strong>
         <span className="flex-1" />
-        <button type="button" className={button} onClick={() => setShowSource((value) => !value)}>{showSource ? "Hide source" : "Source & versions"}</button>
-        <button type="button" className={button} onClick={reload}>Reload</button>
+        <button type="button" className={`${button} kyoube-wide-only`} onClick={() => setShowSource((value) => !value)}>{showSource ? "Hide source" : "Source & versions"}</button>
+        <button type="button" className={`${button} kyoube-wide-only`} onClick={reload}>Reload</button>
+        <button type="button" className={`${button} kyoube-phone-only`} aria-label="More" aria-expanded={menuOpen} onClick={() => setMenuOpen((value) => !value)}>⋯</button>
       </div>
+      {menuOpen && (
+        <div className="kyoube-phone-menu kyoube-phone-only">
+          <button type="button" className={button} onClick={() => { setMenuOpen(false); setShowSource((value) => !value); }}>{showSource ? "Hide source" : "Source & versions"}</button>
+          <button type="button" className={button} onClick={() => { setMenuOpen(false); reload(); }}>Reload</button>
+        </div>
+      )}
       {error && <div className="text-sm text-red-600">{error.code === "not_found" ? "This app is not published yet." : error.message}</div>}
       {showSource && <SourcePanel companyId={props.companyId} userId={props.userId} slug={props.slug} onChanged={reload} />}
       {state && (
