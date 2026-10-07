@@ -54,10 +54,20 @@ export function isOpenAgentQuestion(interaction: InteractionLike): boolean {
   return !(interaction.addresseeAgentId && !interaction.addresseeUserId);
 }
 
-/** The person asked: the addressee, else the task's creator, else its assignee. An addressee who left gets nothing (no fallback). */
+/** The person asked: the addressee (strict; left → nobody), or the first active member among creator and assignee. */
 export function askRecipients(interaction: InteractionLike, issue: IssueLike, members: ActiveMember[]): string[] {
-  const target = interaction.addresseeUserId ?? issue.createdByUserId ?? issue.assigneeUserId ?? null;
-  return only(members, [target], null);
+  if (interaction.addresseeUserId) {
+    return only(members, [interaction.addresseeUserId], null);
+  }
+  // Find the first active member among creator and assignee
+  const active = new Set(members.map((member) => member.userId));
+  if (issue.createdByUserId && active.has(issue.createdByUserId)) {
+    return [issue.createdByUserId];
+  }
+  if (issue.assigneeUserId && active.has(issue.assigneeUserId)) {
+    return [issue.assigneeUserId];
+  }
+  return [];
 }
 
 /** The core lets any member with write access decide an approval, so: every active member except viewers. */

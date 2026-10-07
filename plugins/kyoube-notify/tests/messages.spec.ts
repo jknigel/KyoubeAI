@@ -12,6 +12,13 @@ describe("messages", () => {
     expect(askMessage({ prefix: "ACM", agentName: "Ada", interaction: { id: "q1", kind: "ask_user_questions", status: "pending" }, issue }).title).toBe("Ada is asking: some questions");
   });
 
+  it("never carries question summaries, even if present", () => {
+    const msg = askMessage({ prefix: "ACM", agentName: "Ada", interaction: { id: "q1", kind: "request_confirmation", status: "pending", summary: "Please review the attached contract terms…" }, issue });
+    expect(msg.title).toBe("Ada is asking: a confirmation");
+    expect(msg.body).not.toContain("contract");
+    expect(msg.body).not.toContain("summary");
+  });
+
   it("names the approval and who asked for it", () => {
     expect(approvalMessage({ prefix: "ACM", approval: { id: "a1", type: "hire_agent", payload: { name: "Mo", role: "designer" } }, agentName: "Ada" })).toEqual({
       title: "Approval needed: Hire an agent", body: "Mo · requested by Ada", url: "/ACM/approvals/a1", tag: "approval:a1", urgency: "high",
