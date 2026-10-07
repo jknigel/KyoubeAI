@@ -370,14 +370,18 @@ shapes; an agent's name only picks among them and is never put into the markup.
 
 **Where it sends.** Only to a device's push endpoint, and only if the endpoint is `https://` on
 `fcm.googleapis.com`, `*.push.apple.com`, `updates.push.services.mozilla.com` or `*.notify.windows.com`,
-with no port and no credentials in the URL. Anything else is refused when a device is added and again on
-every send. This is what stops a crafted "subscription" from making the server post to an address of
-someone's choosing. Browser keys that are not on the P-256 curve are refused too.
+with no port and no credentials in the URL. The check runs when a device is added (`notify.subscribe`,
+`parseSubscription` in `src/webpush/endpoints.ts`), and anything else is refused there. Stored device
+records are written only through that action, so every stored endpoint has passed it; a send uses the
+stored endpoint and does not check it again. This is what stops a crafted "subscription" from making
+the server post to an address of someone's choosing. Browser keys that are not on the P-256 curve are
+refused at the same point.
 
 **How it sends.** The push goes out through Node's own `fetch` with redirects refused, not the host's
 `ctx.http.fetch`. The SDK bridge turns a request body into a string and drops every other option, so it
-cannot carry an encrypted binary body or refuse a redirect. The endpoint allowlist is therefore the only
-gate on where a push goes, and the plugin's tests cover it. The manifest does not declare `http.outbound`.
+cannot carry an encrypted binary body or refuse a redirect. The endpoint allowlist, applied when a device
+is added, is therefore the only gate on where a push goes. The plugin's tests cover the allowlist and the
+subscription checks; they do not re-check endpoints at send time, because the send path has no such check. The manifest does not declare `http.outbound`.
 
 **What is in a notification.** An agent's name, a task identifier and title, or an approval's type and
 name, and a question's title or a fixed label. Never comment text, a question's summary or body, or app

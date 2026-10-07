@@ -303,9 +303,9 @@ tracked, so `bump-core.sh` cannot touch it) and `docker compose up -d --build`.
   - `sw.js already imports kyoube-push-sw.js`: the step ran twice on the same core layer. Rebuild from
     a clean core layer.
 
-  A warning that the bundle no longer calls `register("/sw.js")` does not stop the build: the
-  Notifications card registers the worker itself. See [`mobile.md`](mobile.md) and never relax a check
-  to make the build pass.
+  A warning that the bundle no longer calls `register("/sw.js")` does not stop the build:
+  **Turn on** (Home card and Notifications page) registers the worker itself. See
+  [`mobile.md`](mobile.md), and never relax a check to make the build pass.
 - **A capability was renamed or removed upstream.** The plugin install fails outright. Fix the
   manifest in `plugins/*/src/manifest.ts`.
 - **The plugin host changed a bridge or route shape.** Usually surfaces as a plugin that installs

@@ -37,7 +37,7 @@ docker compose
 │   │    │     ├─ worker  kyoube.files      — WorkspaceFiles over each project's folder
 │   │    │     ├─ worker  kyoube.agent-rules — protected manager agents (docs/agent-rules.md)
 │   │    │     ├─ worker  kyoube.license    — the Licence page (docs/licensing.md); reads files on the home volume, never the core database
-│    │     └─ worker  kyoube.notify     — Web Push (docs/mobile.md); reads events, never writes core data
+│   │    │     └─ worker  kyoube.notify     — Web Push (docs/mobile.md); reads events, never writes core data
 │   │    └─ plugin API routes  ◀── agent runs (Claude Code, pi, Hermes) over REST
 │   │
 │   ├─ CLIs on PATH: yours in /kyoubeai/.local/bin, then the core image's claude, codex, gemini, kimi, opencode
