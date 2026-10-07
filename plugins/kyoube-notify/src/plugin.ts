@@ -44,14 +44,11 @@ export function createNotifyPlugin(deps: NotifyPluginDeps = {}): PaperclipPlugin
       const store = new NotifyStore(ctx.state, now);
       const vapid = await store.vapid();
       const subject = vapidSubject(await readPublicUrl(deps.configPath));
-      // The smoke test's receiver is on 127.0.0.1, which ctx.http.fetch refuses (private
-      // address), so that one URL goes through Node's fetch. Real push services go through
-      // the host, which traces and audits them.
+      // Node's fetch, not ctx.http.fetch: the SDK bridge stringifies a binary body ("12,255,...")
+      // and drops `redirect`. No redirects: the endpoint allowlist only vouches for the first hop,
+      // so a 3xx comes back as a refusal.
       const transport: PushTransport = deps.transport ?? (async (url, init) => {
-        const testEndpoint = await readTestEndpoint(deps.testEndpointPath);
-        // No redirects: the endpoint allowlist only vouches for the first hop. A 3xx comes back as a refusal.
-        const request: RequestInit = { method: init.method, headers: init.headers, body: init.body as unknown as BodyInit, redirect: "manual" };
-        const response = testEndpoint && url === testEndpoint ? await fetch(url, request) : await ctx.http.fetch(url, request);
+        const response = await fetch(url, { method: init.method, headers: init.headers, body: new Uint8Array(init.body), redirect: "manual" });
         return { status: response.status };
       });
       const notifier = new Notifier({

@@ -150,14 +150,13 @@ export class NotifyStore {
     });
   }
 
-  async lastStatus(issueId: string): Promise<string | null> {
-    const value = await this.state.get(this.key(`issue-status:${issueId}`));
-    return typeof value === "string" ? value : null;
-  }
-
-  async setStatus(issueId: string, status: string): Promise<void> {
+  /** Stores the task's status and returns the one stored before (null if none), atomically. */
+  async swapStatus(issueId: string, status: string): Promise<string | null> {
     return this.exclusive(async () => {
-      await this.state.set(this.key(`issue-status:${issueId}`), status);
+      const key = this.key(`issue-status:${issueId}`);
+      const value = await this.state.get(key);
+      if (value !== status) await this.state.set(key, status);
+      return typeof value === "string" ? value : null;
     });
   }
 

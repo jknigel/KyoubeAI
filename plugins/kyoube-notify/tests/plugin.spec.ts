@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { createServer, type IncomingMessage, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -18,7 +20,7 @@ let dir: string;
 beforeEach(async () => { dir = await mkdtemp(path.join(tmpdir(), "kyoube-notify-")); });
 afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
-interface SetupOptions { interactions?: Array<Record<string, unknown>>; issue?: Record<string, unknown>; statuses?: Array<number | Error>; members?: ReturnType<typeof member>[] }
+interface SetupOptions { interactions?: Array<Record<string, unknown>>; issue?: Record<string, unknown>; statuses?: Array<number | Error>; members?: ReturnType<typeof member>[]; realTransport?: boolean; beforeSetup?: (harness: ReturnType<typeof createTestHarness>) => void }
 
 async function setup(options: SetupOptions = {}) {
   const harness = createTestHarness({ manifest });
@@ -30,8 +32,9 @@ async function setup(options: SetupOptions = {}) {
     approvals: [{ id: "ap1", companyId: COMPANY, type: "hire_agent", status: "pending", requestedByAgentId: AGENT, payload: { name: "Mo" } } as never],
     accessMembers: (options.members ?? [member("owner", "owner"), member("admin", "admin"), member("operator", "operator"), member("viewer", "viewer"), member("left", "admin", "archived")]) as never,
   });
+  options.beforeSetup?.(harness);
   const { sent, transport } = fakeTransport(options.statuses ?? []);
-  const plugin = createNotifyPlugin({ transport, sleep: async () => {}, configPath: path.join(dir, "config.json"), testEndpointPath: path.join(dir, "push-test-endpoint") });
+  const plugin = createNotifyPlugin({ ...(options.realTransport ? {} : { transport }), sleep: async () => {}, configPath: path.join(dir, "config.json"), testEndpointPath: path.join(dir, "push-test-endpoint") });
   await plugin.definition.setup(harness.ctx);
   const devices = new Map<string, TestDevice>();
   const subscribe = async (userId: string) => {
@@ -208,5 +211,59 @@ describe("actions", () => {
     expect(await harness.performAction("notify.test", { deviceId: devices[0]!.id }, as("owner"))).toEqual({ result: "delivered", status: 201 });
     expect(pushes()[0]!.payload.title).toBe("KyoubeAI test");
     await expect(harness.performAction("notify.test", { deviceId: devices[0]!.id }, as("admin"))).rejects.toThrow("not_found");
+  });
+});
+
+describe("robustness of questions", () => {
+  it("still sends an opted-in failure when the question check throws", async () => {
+    const { harness, subscribe, pushes, emit } = await setup({ beforeSetup: (h) => { (h.ctx.issues as { listInteractions: unknown }).listInteractions = async () => { throw new Error("down"); }; } });
+    await subscribe("owner");
+    await harness.performAction("notify.prefs", { failures: true }, { actor: { type: "user", userId: "owner" }, companyId: COMPANY });
+    await emit("agent.run.failed", { entityType: "heartbeat_run", entityId: "r1", actorType: "agent", actorId: AGENT }, { runId: "r1", agentId: AGENT, issueId: ISSUE });
+    expect(pushes().map((p) => p.payload.title)).toEqual(["Ada's run failed"]);
+  });
+});
+
+describe("the real transport", () => {
+  const servers: Server[] = [];
+  const listen = async (handler: (req: IncomingMessage, chunks: Buffer[]) => { status: number; location?: string }) => {
+    const received: Buffer[] = [];
+    let hits = 0;
+    const server = createServer((req, res) => {
+      hits += 1;
+      const chunks: Buffer[] = [];
+      req.on("data", (c: Buffer) => chunks.push(c));
+      req.on("end", () => {
+        received.push(Buffer.concat(chunks));
+        const out = handler(req, chunks);
+        res.writeHead(out.status, out.location ? { location: out.location } : {});
+        res.end();
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    servers.push(server);
+    return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/push`, received, hits: () => hits };
+  };
+  afterEach(async () => { await Promise.all(servers.splice(0).map((s) => new Promise<void>((resolve) => s.close(() => resolve())))); });
+  const as = (userId: string) => ({ actor: { type: "user" as const, userId }, companyId: COMPANY });
+
+  it("delivers the encrypted body byte for byte", async () => {
+    const target = await listen(() => ({ status: 201 }));
+    await writeFile(path.join(dir, "push-test-endpoint"), target.url);
+    const { harness } = await setup({ realTransport: true });
+    const device = makeDevice(target.url);
+    const added = await harness.performAction<{ id: string }>("notify.subscribe", { subscription: device.subscription }, as("owner"));
+    expect(await harness.performAction("notify.test", { deviceId: added.id }, as("owner"))).toEqual({ result: "delivered", status: 201 });
+    expect(JSON.parse(decryptBody(target.received[0]!, device))).toMatchObject({ title: "KyoubeAI test" });
+  });
+
+  it("does not follow a redirect", async () => {
+    const second = await listen(() => ({ status: 201 }));
+    const first = await listen(() => ({ status: 302, location: second.url }));
+    await writeFile(path.join(dir, "push-test-endpoint"), first.url);
+    const { harness } = await setup({ realTransport: true });
+    const added = await harness.performAction<{ id: string }>("notify.subscribe", { subscription: makeDevice(first.url).subscription }, as("owner"));
+    expect(await harness.performAction("notify.test", { deviceId: added.id }, as("owner"))).toMatchObject({ result: "failed", status: 302 });
+    expect(second.hits()).toBe(0);
   });
 });

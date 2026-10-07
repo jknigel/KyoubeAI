@@ -45,7 +45,6 @@ const manifest: PaperclipPluginManifestV1 = {
     "access.members.read",
     "plugin.state.read",
     "plugin.state.write",
-    "http.outbound",
     "ui.page.register",
     "ui.dashboardWidget.register",
     "ui.action.register",
