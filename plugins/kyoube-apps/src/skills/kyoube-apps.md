@@ -133,7 +133,7 @@ or nothing; branch on `viewer.level` (`read`, `write`, `schema`) to hide control
 - Start with `<!doctype html>`; put CSS in `<style>` and JS in `<script>` — no `src=`, `href=` to the network, no `fetch`.
 - No `eval` and no `new Function`: the policy carries no `'unsafe-eval'`, so both throw.
 - Use `kyoube.ready()` before the first data call; render loading and error states; keep lists paged (`limit` ≤ 200).
-- Use semantic HTML and plain CSS; it must be readable on a 1024px-wide panel and in dark mode (`prefers-color-scheme`).
+- Use semantic HTML and plain CSS; it must be readable on a 1024px-wide panel, on a 375px-wide phone, and in dark mode (`prefers-color-scheme`). On a phone: forms wrap (`flex-wrap: wrap`), wide tables scroll inside their own box (`overflow-x: auto`) or become one card per row, and every button and input is at least 44px tall.
 - **Never navigate the frame.** Assigning `location`, linking to another document, or submitting a form
   stops the app: a second page load is treated as the app navigating away, the `window.kyoube` bridge
   dies, and the frame is replaced with a notice. Use `kyoube.ui.openApp(slug)` to open another app, keep
@@ -161,11 +161,11 @@ or nothing; branch on `viewer.level` (`read`, `write`, `schema`) to hide control
 ```html
 <!doctype html>
 <html><head><meta charset="utf-8"><title>Contacts</title>
-<style>body{font:14px system-ui;margin:16px}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #ddd;padding:6px;text-align:left}form{display:flex;gap:8px;margin:12px 0}@media(prefers-color-scheme:dark){body{background:#111;color:#eee}td,th{border-color:#333}}</style>
+<style>body{font:14px system-ui;margin:16px}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #ddd;padding:6px;text-align:left}form{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}input{flex:1 1 140px;min-width:0;min-height:44px}button{min-height:44px}.scroll{overflow-x:auto}@media(prefers-color-scheme:dark){body{background:#111;color:#eee}td,th{border-color:#333}}</style>
 </head><body>
 <h1>Contacts</h1>
 <form id="f"><input name="name" placeholder="Name" required><input name="email" placeholder="Email"><button>Add</button></form>
-<table><thead><tr><th>Name</th><th>Email</th><th></th></tr></thead><tbody id="rows"></tbody></table>
+<div class="scroll"><table><thead><tr><th>Name</th><th>Email</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>
 <script>
 const rowsEl = document.getElementById("rows");
 async function load() {

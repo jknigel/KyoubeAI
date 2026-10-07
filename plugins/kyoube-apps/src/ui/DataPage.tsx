@@ -3,12 +3,14 @@ import type { PluginPageProps } from "@paperclipai/plugin-sdk/ui";
 import { useHostContext, usePluginAction, usePluginData, usePluginToast } from "@paperclipai/plugin-sdk/ui";
 import { acceptable, AiColumnEditor, AiColumnHeader, aiDraftToSpec, emptyAiColumnDraft, ReviewCell, rowFormFields, suggestionValue, type AiColumnDraft, type UiCellCounts } from "./AiColumns.js";
 import { errorText, formatCell, emptyRow, nextSelectedAfterDrop, resolveSelectedTable, type UiField, type UiTable } from "./format.js";
+import { ensurePhoneStyles } from "./phone.js";
 import { button, CellInput, emptyFieldDraft, FieldEditor, fieldDraftToSpec, input, RowForm, type FieldDraft } from "./forms.js";
 
 const PAGE_SIZE = 50;
 type Row = Record<string, unknown>;
 
 export function DataPage({ context }: PluginPageProps) {
+  ensurePhoneStyles();
   const host = useHostContext();
   const companyId = context.companyId ?? host.companyId ?? "";
   const toast = usePluginToast();
@@ -20,6 +22,9 @@ export function DataPage({ context }: PluginPageProps) {
   const access = usePluginData<{ level: string; hint: string }>("data.access", scopeParams);
   const tables = usePluginData<UiTable[]>("data.tables", scopeParams);
   const [selected, setSelected] = useState<string | null>(null);
+  // On a phone the page is two steps: the table list, then one table full width.
+  // Separate from `selected`, which always names a table once any exists.
+  const [phoneView, setPhoneView] = useState<"list" | "table">("list");
   const table = useMemo(() => tables.data?.find((item) => item.name === selected) ?? null, [tables.data, selected]);
   const canWrite = access.data?.level === "write" || access.data?.level === "schema";
   const canSchema = access.data?.level === "schema";
@@ -35,17 +40,18 @@ export function DataPage({ context }: PluginPageProps) {
   if (access.data && access.data.level === "none") return <div className="p-4 text-sm">You do not have access to this company's data. {access.data.hint}</div>;
 
   return (
-    <div className="flex h-full gap-4 p-4" data-kyoube-page="data">
+    <div className="flex h-full gap-4 p-4" data-kyoube-page="data" data-kyoube-data-view={phoneView}>
       <aside className="w-56 shrink-0">
         <div className="mb-2 flex items-center justify-between"><strong>Tables</strong>{canSchema && <CreateTableButton companyId={companyId} onCreated={(name) => { tables.refresh(); setSelected(name); notify(`Created ${name}`); }} />}</div>
         <ul className="space-y-1 text-sm">
           {(tables.data ?? []).map((item) => (
-            <li key={item.name}><button type="button" className={`w-full rounded px-2 py-1 text-left ${item.name === selected ? "bg-accent" : "hover:bg-accent/50"}`} onClick={() => setSelected(item.name)}>{item.displayName} <span className="text-foreground/50">({item.name})</span></button></li>
+            <li key={item.name}><button type="button" className={`w-full rounded px-2 py-1 text-left ${item.name === selected ? "bg-accent" : "hover:bg-accent/50"}`} onClick={() => { setSelected(item.name); setPhoneView("table"); }}>{item.displayName} <span className="text-foreground/50">({item.name})</span></button></li>
           ))}
           {tables.data && tables.data.length === 0 && <li className="text-foreground/60">No tables yet.{canSchema ? " Create one, or ask an agent to." : ""}</li>}
         </ul>
       </aside>
       <main className="min-w-0 flex-1">
+        <button type="button" className={`${button} kyoube-phone-only`} onClick={() => setPhoneView("list")}>← Tables</button>
         {table ? <TableView key={table.name} companyId={companyId} userId={host.userId} table={table} allTables={(tables.data ?? []).map((item) => item.name)} canWrite={canWrite} canSchema={canSchema} onSchemaChange={() => tables.refresh()} onDropped={(droppedName) => { tables.refresh(); setSelected(nextSelectedAfterDrop(tables.data ?? null, droppedName)); }} notify={notify} /> : <div className="text-sm text-foreground/60">Select a table.</div>}
       </main>
     </div>
