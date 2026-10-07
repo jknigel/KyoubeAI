@@ -82,4 +82,35 @@ describe("NotifyStore", () => {
     await store.setStatus("issue-1", "blocked");
     expect(await store.lastStatus("issue-1")).toBe("blocked");
   });
+
+  it("ensures exactly one concurrent claimInteraction returns true", async () => {
+    const { store } = setup();
+    const results = await Promise.all([store.claimInteraction("i1"), store.claimInteraction("i1")]);
+    expect(results.filter((r) => r === true)).toHaveLength(1);
+  });
+
+  it("returns equal keys from concurrent vapid calls", async () => {
+    const { store } = setup();
+    const keys = await Promise.all([store.vapid(), store.vapid()]);
+    expect(keys[0]).toEqual(keys[1]);
+  });
+
+  it("keeps both devices from concurrent addDevice of different targets", async () => {
+    const { store } = setup();
+    const t1 = target();
+    const t2 = target();
+    await Promise.all([store.addDevice("u1", t1, "d1"), store.addDevice("u1", t2, "d2")]);
+    const devices = await store.devices("u1");
+    expect(devices).toHaveLength(2);
+    expect(devices.map((d) => d.id).sort()).toEqual([deviceIdOf(t1.endpoint), deviceIdOf(t2.endpoint)].sort());
+  });
+
+  it("treats a future timestamp in claimFailure as expired", async () => {
+    const { store, advance } = setup();
+    expect(await store.claimFailure("agent-1", 30 * 60_000)).toBe(true);
+    advance(35 * 60_000);
+    expect(await store.claimFailure("agent-1", 30 * 60_000)).toBe(true);
+    advance(-10 * 60_000);
+    expect(await store.claimFailure("agent-1", 30 * 60_000)).toBe(true);
+  });
 });
