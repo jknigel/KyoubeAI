@@ -306,3 +306,11 @@ main div:has(> div > div > [data-kyoube-studio="home"]) > * { margin-block: 0; }
 main div:has(> div > div > [data-kyoube-studio="home"]) > div:has(> div > [data-kyoube-studio="home"]) { order: -1; display: block; }
 main div:has(> [data-kyoube-studio="home"]) { border: 0; padding: 0; background: none; box-shadow: none; border-radius: 0; }
 main div:has(> div > div > [data-kyoube-studio="home"]) > div:not([class]):has(> h3) { display: none; }
+
+/* Phones: the core stacks up to five toasts full width over the page (and 12px past its right
+   edge). Show the newest two (the core keeps the newest first) above the bottom tab bar; the
+   rest are in Inbox. Gated on the boot flag like every rule that hides core UI. */
+@media (max-width: 639px) {
+  :root[data-kyoube-shell="studio"] aside[aria-live="polite"][aria-atomic="false"] { bottom: calc(76px + env(safe-area-inset-bottom)); right: 12px; width: auto; }
+  :root[data-kyoube-shell="studio"] aside[aria-live="polite"][aria-atomic="false"] > ol > :nth-child(n+3) { display: none; }
+}

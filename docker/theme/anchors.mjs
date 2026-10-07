@@ -33,6 +33,10 @@ export const ANCHORS = [
   { id: "agent-page-content", files: BUNDLE, literal: '"agent-settings-content ', min: 1, why: "the core agent page is recognised by its agent-settings-content wrapper, whose header holds the name and avatar" },
   { id: "agent-page-view-class", files: BUNDLE, literal: "`agent-settings-${", min: 1, why: "the wrapper also carries agent-settings-<view>; the overview's sections are found by agent-settings-overview" },
   { id: "agent-avatar-label", files: BUNDLE, literal: "} avatar`", min: 1, why: "the agent's character is painted over the header avatar, found by its aria-label \"<name> avatar\"" },
+  { id: "toast-viewport", files: BUNDLE, literal: '"aria-live":"polite","aria-atomic":"false",className:"pointer-events-none fixed bottom-3 left-3', min: 1, why: "the phone toast cap targets the core's toast viewport (an aside with these attributes)" },
+  // The core keeps the newest toast first (ui/src/context/ToastContext.tsx, `[nextToast, ...withoutCurrent]`),
+  // and this column-reverse list shows it at the bottom, so :nth-child(n+3) are the older ones.
+  { id: "toast-list", files: BUNDLE, literal: 'className:"flex w-full flex-col-reverse gap-2"', min: 1, why: "the phone toast cap hides all but the first two items of this list" },
   { id: "theme-boot-script", files: ["ui/dist/index.html"], literal: 'const key = "paperclip.theme";', min: 1, why: "the dark-by-default boot script" },
 ];
 
