@@ -85,11 +85,13 @@ echo "==> the app installs as a standalone PWA with KyoubeAI's push handlers"
 curl -fsS "$BASE_URL/site.webmanifest" | jq -e '.display == "standalone"' >/dev/null \
   || { echo "site.webmanifest is not standalone" >&2; exit 1; }
 grep -q 'name="apple-mobile-web-app-capable"' "$TMP/index.html" || { echo "index.html lacks the iOS Home Screen tag" >&2; exit 1; }
-curl -fsS -o "$TMP/sw.js" "$BASE_URL/sw.js" && grep -q 'importScripts("/kyoube-push-sw.js")' "$TMP/sw.js" || { echo "/sw.js does not import the push handlers" >&2; exit 1; }
+curl -fsS -o "$TMP/sw.js" "$BASE_URL/sw.js"
+grep -q 'importScripts("/kyoube-push-sw.js")' "$TMP/sw.js" || { echo "/sw.js does not import the push handlers" >&2; exit 1; }
 # The content type, not just the status: the SPA catch-all answers 200 with index.html for any path.
 PUSH_SW_STATUS="$(curl -sS -o "$TMP/push-sw.js" -w '%{http_code} %{content_type}' "$BASE_URL/kyoube-push-sw.js")"
-[[ "$PUSH_SW_STATUS" == "200 "*javascript* ]] && grep -q 'addEventListener("push"' "$TMP/push-sw.js" \
-  || { echo "/kyoube-push-sw.js is not served as JavaScript ($PUSH_SW_STATUS)" >&2; exit 1; }
+if [[ "$PUSH_SW_STATUS" != "200 "*javascript* ]] || ! grep -q 'addEventListener("push"' "$TMP/push-sw.js"; then
+  echo "/kyoube-push-sw.js is not served as JavaScript ($PUSH_SW_STATUS)" >&2; exit 1
+fi
 
 echo "==> the served UI carries the Studio theme"
 # docker/theme ran at image build before the rebrand: the stylesheet is linked
