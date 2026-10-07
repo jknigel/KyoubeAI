@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, type ReactNode } from "react";
-import { useHostContext, useHostLocation, useHostNavigation, usePluginData } from "@paperclipai/plugin-sdk/ui";
+import { useHostContext, useHostLocation, useHostNavigation, usePluginData, type HostNavigation } from "@paperclipai/plugin-sdk/ui";
 import { characterFor } from "../characters.js";
 import type { AgentState } from "../model.js";
 import { Icon, type IconName } from "./icons.js";
@@ -35,6 +35,31 @@ export function usePolledData<T>(key: string, params: Record<string, unknown>, i
 export function useCompanyParams(): Record<string, unknown> {
   const host = useHostContext();
   return useMemo(() => ({ companyId: host.companyId, userId: host.userId }), [host.companyId, host.userId]);
+}
+
+/**
+ * `useHostNavigation()`, with links that keep the company. The core's Dashboard
+ * renders its widgets with only `{ companyId }` as context (pages/Dashboard.tsx,
+ * core 2026.916), so `companyPrefix` is null there and the host leaves
+ * `/team/<agent>` as it is: the core then reads "team" as a company and answers
+ * "Organization not found". On a company page the URL's first segment is the
+ * company's prefix, so the link gets it from there.
+ */
+export function useCompanyNavigation(): HostNavigation {
+  const navigation = useHostNavigation();
+  const host = useHostContext();
+  const location = useHostLocation();
+  const segments = location.pathname.split("/").filter(Boolean);
+  const prefix = !host.companyPrefix && segments.length > 1 ? segments[0]! : null;
+  return useMemo(() => {
+    if (!prefix) return navigation;
+    const withPrefix = (to: string) => (to.startsWith("/") && !to.startsWith("//") && !to.startsWith(`/${prefix}/`) ? `/${prefix}${to}` : to);
+    return {
+      resolveHref: (to) => navigation.resolveHref(withPrefix(to)),
+      navigate: (to, options) => navigation.navigate(withPrefix(to), options),
+      linkProps: (to, options) => navigation.linkProps(withPrefix(to), options),
+    };
+  }, [navigation, prefix]);
 }
 
 /** True when `href` (a full company-prefixed link) is the current page or a page under it. */
