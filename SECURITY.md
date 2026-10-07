@@ -35,15 +35,15 @@ KyoubeAI's design rests on three zones of trust, each with a different guarantee
    model (auth, deployment modes, the MCP tool gateway) is documented upstream — see
    [Out of scope](#out-of-scope). The image build does change it in three ways: the rebrand and the
    theme (presentation only, `docs/branding.md`, `docs/theme.md`), and the fixes in
-   `docker/core-patches/patches.mjs`. There are seven: five in the served UI (the first-run wizard's
-   "Skip for now" and a pi transcript display fix) and, new in 1.1, two in the compiled server code.
+   `docker/core-patches/patches.mjs`. There are eleven: nine in the served UI (the first-run wizard's
+   "Skip for now", and display fixes for the pi and Hermes task chat), one in the Hermes adapter's
+   server source (`hermes-quiet-default`: an unset Quiet output passes Hermes `-Q`, as the agent form
+   already showed) and, new in 1.1, one in the compiled server code.
    `anthropic-signin-setup-token` changes the command the server presents for a Claude subscription
    sign-in, in `server/dist/services/local-ai-login.js`: `claude auth login` becomes
-   `kyoube connect claude`, which runs `claude setup-token` in the same sign-in folder.
-   `adapter-test-unsaved-harness-switch` backports upstream commit 9335b7d to the agent Test route in
-   `server/dist/routes/agents.js`, so a harness switch can be tested before it is saved; the route still
-   checks that the caller may update the agent, and the saved agent's hidden environment values are
-   restored only when the harness is the same. Each patch has to match the core's code exactly once, or
+   `kyoube connect claude`, which runs `claude setup-token` in the same sign-in folder. (The agent Test
+   route fix that 1.1 also carried, `adapter-test-unsaved-harness-switch`, is upstream since core
+   2026.1001, upstream commit 9335b7d, and was deleted.) Each patch has to match the core's code exactly once, or
    the image build fails and names the patch, so a core bump cannot carry one over silently. A flaw in
    one of these patches is in scope here.
 2. **Kyoube plugins — trusted code.** `kyoube.terminal`, `kyoube.apps` and `kyoube.files` are first-party
@@ -152,7 +152,7 @@ Terminal output is pulled, never pushed: the page polls `terminal.wait`, which i
 session's owner and company exactly like `attach` (a session in another company answers `not_found`,
 another user's `forbidden`), so there is no per-session secret to guard and no channel that could be
 listed or guessed. The SSE stream channel the original design relied on is gone: upstream core
-(2026.831.1 through 2026.916.1) never wires its plugin stream bridge (the route answers 501), which is why the terminal
+(2026.831.1 through 2026.1005.0) never wires its plugin stream bridge (the route answers 501), which is why the terminal
 does not use it.
 
 ## Data
@@ -279,7 +279,7 @@ against the plugin's `readRoles` (default: every role) or `writeRoles` (default:
 `viewer`) under **Settings → Plugins → Kyoube Files**. Reads take the same 30-second membership cache as
 the Data page; every mutation reads the members API afresh, so a demoted or removed member can browse
 for at most 30 more seconds and can change nothing from the moment the change lands. Project
-visibility in core 2026.831.1 through 2026.916.1 is company-wide (`project:read` is granted to every active member in its
+visibility in core 2026.831.1 through 2026.1005.0 is company-wide (`project:read` is granted to every active member in its
 simple permissions mode), so the company role is the right unit here; if a future core adds
 per-project membership the plugin will need to consult it, and this section will say so. The project
 must be in the host's company scope: `getPrimaryWorkspace` answers `null` otherwise, and a

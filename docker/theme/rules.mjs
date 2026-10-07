@@ -56,7 +56,9 @@ export const TEXT_RULES = [
   {
     id: "home-command-palette",
     files: BUNDLE,
-    pattern: /(\("\/dashboard"\),children:\[\(0,[\w$]+\.jsx\)\([\w$]+,\{className:"mr-2 h-4 w-4"\}\),)"Dashboard"\]/g,
+    // Since core 2026.1005 the onSelect arrow is wrapped by esbuild keepNames:
+    // `onSelect:<name>(()=>T("/dashboard"),"onSelect"),children:…`.
+    pattern: /(\("\/dashboard"\)(?:,"onSelect"\))?,children:\[\(0,[\w$]+\.jsx\)\([\w$]+,\{className:"mr-2 h-4 w-4"\}\),)"Dashboard"\]/g,
     replacement: '$1"Home"]',
     expect: 1,
   },

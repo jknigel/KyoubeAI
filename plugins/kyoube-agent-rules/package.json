@@ -18,7 +18,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@paperclipai/plugin-sdk": "2026.916.1"
+    "@paperclipai/plugin-sdk": "2026.1005.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

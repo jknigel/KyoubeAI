@@ -16,12 +16,32 @@ const DOCKERFILE = path.join(HERE, "..", "..", "Dockerfile");
 // lives in a code-split chunk (AiConnectionCredentialStep-DHV6zd1f.js); the
 // onboarding wizard in the main bundle (index-5zyW-AFc.js).
 
-// The message_update / message_end / tool_execution_start branches of the pi
-// transcript parser, so the pattern is proven to anchor on message_end alone.
+// The agent_end through message_end branches of the pi transcript parser, then
+// the head of tool_execution_start, so the patterns are proven to anchor on
+// their own branch alone.
 const PI_HANDLER_2026_916_1 =
+  'if(r==="agent_end"){const s=[],o=n.messages;if(o&&o.length>0){const a=o[o.length-1];if(a?.role==="assistant"){const l=a.content,{text:c,thinking:u}=gn(l);u&&s.push({kind:"thinking",ts:t,text:u}),c&&s.push({kind:"assistant",ts:t,text:c});const d=hn(a.usage);if(d){const m=d.inputTokens??d.input??0,p=d.outputTokens??d.output??0,h=d.cacheRead??d.cachedInputTokens??0,x=hn(d.cost)?.total??d.costUsd??0;(m>0||p>0)&&s.push({kind:"result",ts:t,text:"Run completed",inputTokens:m,outputTokens:p,cachedTokens:h,costUsd:x,subtype:"end",isError:!1,errors:[]})}}}return s.length===0&&s.push({kind:"system",ts:t,text:"✅ Pi agent finished"}),s}' +
+  'if(r==="turn_start")return[];' +
+  'if(r==="turn_end"){const s=hn(n.message),o=n.toolResults,a=[];if(s){const l=s.content,{text:c,thinking:u}=gn(l);u&&a.push({kind:"thinking",ts:t,text:u}),c&&a.push({kind:"assistant",ts:t,text:c})}if(o)for(const l of o){const c=tt(l.toolCallId,`tool-${Date.now()}`),u=l.content,d=l.isError===!0;let m;typeof u=="string"?m=u:Array.isArray(u)?m=gn(u).text||JSON.stringify(u):m=JSON.stringify(u);const p=Ur.get(c),h=tt(l.toolName,p?.toolName||"tool");a.push({kind:"tool_result",ts:t,toolUseId:c,toolName:h,content:m,isError:d}),Ur.delete(c)}return a}' +
   'if(r==="message_start")return[];if(r==="message_update"){const s=hn(n.assistantMessageEvent);if(s){const o=tt(s.type);if(o==="thinking_delta"){const a=tt(s.delta);if(a)return[{kind:"thinking",ts:t,text:a,delta:!0}]}if(o==="text_delta"){const a=tt(s.delta);if(a)return[{kind:"assistant",ts:t,text:a,delta:!0}]}if(o==="thinking_end"){const a=tt(s.content);if(a)return[{kind:"thinking",ts:t,text:a}]}if(o==="text_end"){const a=tt(s.content);if(a)return[{kind:"assistant",ts:t,text:a}]}}return[]}' +
   'if(r==="message_end"){const s=hn(n.message);if(s){const o=s.content,{text:a,thinking:l}=gn(o),c=[];return l&&c.push({kind:"thinking",ts:t,text:l}),a&&c.push({kind:"assistant",ts:t,text:a}),c}return[]}' +
   'if(r==="tool_execution_start"){return[{kind:"tool_call",ts:t,name:"x"}]}';
+
+// The last branch of the Hermes transcript parser (the same chunk): thinking,
+// errors, and every other line as agent text.
+const HERMES_TAIL_2026_916_1 =
+  'return sw(n)?[{kind:"thinking",ts:t,text:n.replace(/^💭\\s*/,"")}]:n.startsWith("Error:")||n.startsWith("ERROR:")||n.startsWith("Traceback")?[{kind:"stderr",ts:t,text:n}]:[{kind:"assistant",ts:t,text:n}]';
+
+// The Hermes runner's quiet switch, packages/adapters/hermes/src/server/execute.ts
+// (TypeScript source: the server runs the adapters' src through tsx).
+const HERMES_QUIET_2026_916_1 =
+  '  // Use -Q (quiet) to get clean output: just response + session_id line\n' +
+  '  const useQuiet = cfgBoolean(config.quiet) === true; // default false\n' +
+  '  const args: string[] = ["chat", "-q", prompt];\n' +
+  '  if (useQuiet) args.push("-Q");\n';
+
+// Upstream PR #12016's version of that line.
+const HERMES_QUIET_UPSTREAM_FIX = '  const useQuiet = cfgBoolean(config.quiet) !== false;\n';
 
 // The Connect step's primary action (`handleConnectStepPrimary`).
 const CONNECT_PRIMARY_2026_916_1 =
@@ -41,6 +61,13 @@ const ERROR_AND_FOOTER_2026_916_1 =
   'tn&&(0,t.jsx)("div",{className:"mt-3",children:(0,t.jsx)("p",{className:"text-xs text-destructive",children:tn})}),' +
   '(Y||_===1)&&(0,t.jsx)(Pwe,{onBack:_===4&&Je!=="idle"?Vs:Mze({currentStep:_,entryStep:S})?()=>I(Ha(_)):void 0,primaryLabel:_===1?"Continue":_===5?"Get started":_===4?Hn.label:"Next",primaryIcon:_===4?Hn.icon:void 0,loadingLabel:_===1?"Creating...":_===4?"Connecting":"Launching...",loading:_===3||_===4?!1:B,primaryDisabled:_===1?!M.trim()||B:_===3?!H.trim():_===4?Hn.disabled||B:B||en,onPrimary:()=>{_===1?kr():_===3?I(4):_===4?pn():Gn()}})';
 
+// The same two children in core 2026.1005.0 (index-ChaaJ8xT.js), which is
+// built with esbuild keepNames: the onPrimary arrow is wrapped by the bundle's
+// name helper (`r`).
+const ERROR_AND_FOOTER_2026_1005_0 =
+  'qr&&(0,t.jsx)("div",{className:"mt-3",children:(0,t.jsx)("p",{className:"text-xs text-destructive",children:qr})}),' +
+  '(vr||_===1)&&(0,t.jsx)(Yxe,{onBack:_===4&&Be!=="idle"?js:LYe({currentStep:_,entryStep:I})?()=>R(mr(_)):void 0,primaryLabel:_===1?"Continue":_===5?"Get started":_===4?ns.label:"Next",primaryIcon:_===4?ns.icon:void 0,loadingLabel:_===1?"Creating...":_===4?"Connecting":"Launching...",loading:_===3||_===4?!1:B,primaryDisabled:_===1?!Z.trim()||B:_===3?!he.trim():_===4?ns.disabled||B:B||Ht,onPrimary:r(()=>{_===1?Qe():_===3?R(4):_===4?As():ur()},"onPrimary")})';
+
 // Excerpts of core 2026.916.1's compiled server (server/dist), copied verbatim.
 const SIGNIN_COMMAND_2026_916_1 =
   '        command: provider === "openai"\n' +
@@ -48,29 +75,6 @@ const SIGNIN_COMMAND_2026_916_1 =
   '            : provider === "anthropic"\n' +
   '                ? `(export CLAUDE_CONFIG_DIR=${shellQuote(directory)} && mkdir -p "$CLAUDE_CONFIG_DIR" && claude auth login)`\n' +
   '                : `(export GROK_HOME=${shellQuote(directory)} && mkdir -p "$GROK_HOME" && grok login --device-auth)`,\n';
-
-const TEST_GUARD_2026_916_1 =
-  '            if (savedAgent.adapterType !== type && providerAdapter !== type) {\n' +
-  '                throw unprocessable("Saved agent is not compatible with the adapter being tested");\n' +
-  '            }\n' +
-  '            await assertCanUpdateAgent(req, savedAgent);\n' +
-  '            adapterConfigForTest = restoreRedactedAgentEnv(inputAdapterConfig, savedAgent.adapterConfig);\n';
-
-// The same route in core 2026.921.0-beta.1 (server/dist/routes/agents.js), which carries upstream 9335b7d: the
-// fix the adapter-test-unsaved-harness-switch patch makes, in upstream's own words.
-const UPSTREAM_FIX_2026_921_0_BETA_1 =
-  '            const canRestoreEnv = savedAgent.adapterType === type || providerAdapter === type;\n' +
-  '            // Permit testing a prospective adapter switch, but do not transfer\n' +
-  '            // hidden values from the saved adapter into an unrelated harness.\n' +
-  '            if (!canRestoreEnv && Object.values(parseObject(inputAdapterConfig.env)).some(value => {\n' +
-  '                const binding = asRecord(value);\n' +
-  '                return binding?.type === "plain" && binding.value === REDACTED_EVENT_VALUE;\n' +
-  '            })) {\n' +
-  '                throw unprocessable("Re-enter environment values when testing a different adapter");\n' +
-  '            }\n' +
-  '            adapterConfigForTest = canRestoreEnv\n' +
-  '                ? restoreRedactedAgentEnv(inputAdapterConfig, savedAgent.adapterConfig)\n' +
-  '                : inputAdapterConfig;\n';
 
 // The auth module's imports and the start of authConfig in core 2026.916.1's
 // server/dist/auth/better-auth.js, copied verbatim.
@@ -102,10 +106,15 @@ const primaryPatch = patch("onboarding-skip-harness-primary");
 const loginPatch = patch("onboarding-skip-harness-login");
 const gatePatch = patch("onboarding-skip-harness-gate");
 const buttonPatch = patch("onboarding-skip-harness-button");
+const piAgentEndPatch = patch("pi-transcript-once-agent-end");
+const piTurnEndPatch = patch("pi-transcript-once-turn-end");
+const piStreamPatch = patch("pi-transcript-once-stream");
+const hermesQuietPatch = patch("hermes-quiet-default");
+const hermesLinesPatch = patch("hermes-transcript-one-message");
 
 /** A bundle fragment carrying every region the declared patches target, once each. */
 const FULL_BUNDLE_2026_916_1 =
-  `const x=1;${PI_HANDLER_2026_916_1};${CONNECT_PRIMARY_2026_916_1}` +
+  `const x=1;function vw(r,n,t){${PI_HANDLER_2026_916_1}}function hw(n,t){${HERMES_TAIL_2026_916_1}}${CONNECT_PRIMARY_2026_916_1}` +
   `async function ma(){try{${LOCAL_LOGIN_2026_916_1}${ENV_GATE_2026_916_1}}catch{}}const y=[${ERROR_AND_FOOTER_2026_916_1}];`;
 
 function declaredSafely(entry) {
@@ -154,6 +163,225 @@ describe("pi-transcript-non-assistant-messages", () => {
     expect(runPiHandler(after, { role: "toolResult", content: text("=== doc revisions ===") })).toEqual([]);
     expect(runPiHandler(after, { role: "assistant", content: text("Done — the pack is sent.") })).toEqual([{ kind: "assistant", ts: "2026-09-24T00:00:00Z", text: "Done — the pack is sent." }]);
     expect(runPiHandler(after, null)).toEqual([]);
+  });
+});
+
+/** The pi patches in the order patches.mjs applies them, starting from the one already shipped. */
+const PI_PATCHES = () => [piPatch, piAgentEndPatch, piTurnEndPatch, piStreamPatch];
+
+function applyAll(text, patches) {
+  return patches.reduce((current, entry) => {
+    const { text: next, count } = applyToText(current, entry);
+    expect(count, entry.id).toBe(1);
+    return next;
+  }, text);
+}
+
+/**
+ * Feeds a pi event stream through the (patched or unpatched) handler, merging
+ * deltas the way the UI's transcript builder does (appendTranscriptEntry), and
+ * returns the entries the task chat would get.
+ */
+function runPiStream(code, events) {
+  const hn = (value) => (typeof value === "object" && value !== null && !Array.isArray(value) ? value : null);
+  const tt = (value, fallback = "") => (typeof value === "string" ? value : fallback);
+  const gn = (content) => ({
+    text: content.filter((c) => c.type === "text").map((c) => c.text).join(""),
+    thinking: content.filter((c) => c.type === "thinking").map((c) => c.thinking).join(""),
+  });
+  const handler = new Function("hn", "tt", "gn", "Ur", `return (r,n,t)=>{${code};return[{kind:"stdout",ts:t,text:"?"}]}`)(hn, tt, gn, new Map());
+  const entries = [];
+  for (const event of events) {
+    for (const entry of handler(event.type, event, "2026-10-07T00:00:00Z")) {
+      const last = entries[entries.length - 1];
+      if ((entry.kind === "assistant" || entry.kind === "thinking") && entry.delta && last?.kind === entry.kind && last.delta) {
+        last.text += entry.text;
+      } else {
+        entries.push({ ...entry });
+      }
+    }
+  }
+  return entries;
+}
+
+/** One assistant message as pi 0.87 streams it: thinking, then text, each as deltas then whole again. */
+function piMessage({ thinking, text, toolCall }) {
+  const content = [
+    ...(thinking ? [{ type: "thinking", thinking }] : []),
+    ...(text ? [{ type: "text", text }] : []),
+  ];
+  const half = (s) => [s.slice(0, Math.ceil(s.length / 2)), s.slice(Math.ceil(s.length / 2))];
+  const message = { role: "assistant", content };
+  return [
+    { type: "turn_start" },
+    { type: "message_start", message: { role: "assistant", content: [] } },
+    ...(thinking ? [
+      ...half(thinking).map((delta) => ({ type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta } })),
+      { type: "message_update", assistantMessageEvent: { type: "thinking_end", content: thinking } },
+    ] : []),
+    ...(text ? [
+      ...half(text).map((delta) => ({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta } })),
+      { type: "message_update", assistantMessageEvent: { type: "text_end", content: text } },
+    ] : []),
+    { type: "message_end", message },
+    ...(toolCall ? [
+      { type: "tool_execution_start", toolCallId: toolCall, toolName: "bash", args: {} },
+      { type: "message_start", message: { role: "toolResult", content: [{ type: "text", text: "exit 0" }] } },
+      { type: "message_end", message: { role: "toolResult", content: [{ type: "text", text: "exit 0" }] } },
+    ] : []),
+    { type: "turn_end", message, toolResults: toolCall ? [{ toolCallId: toolCall, toolName: "bash", content: "exit 0" }] : [] },
+  ];
+}
+
+const PI_RUN = [
+  { type: "agent_start" },
+  { type: "message_start", message: { role: "user", content: [{ type: "text", text: "## KyoubeAI Resume Delta" }] } },
+  { type: "message_end", message: { role: "user", content: [{ type: "text", text: "## KyoubeAI Resume Delta" }] } },
+  ...piMessage({ thinking: "Check the revision first.", text: "The board accepted the pack. Now I post it.", toolCall: "call-1" }),
+  ...piMessage({ thinking: "Sent. Close the issue.", text: "## BAP-56 — posted and done\n\n- sent 16:06Z" }),
+  { type: "agent_end", messages: [{ role: "assistant", content: [{ type: "text", text: "## BAP-56 — posted and done\n\n- sent 16:06Z" }], usage: { input: 10, output: 5 } }] },
+];
+
+const texts = (entries, kind) => entries.filter((entry) => entry.kind === kind).map((entry) => entry.text);
+
+describe("pi-transcript-once-*", () => {
+  it("are declared with the safety fields every patch needs, against upstream PR #14320", () => {
+    for (const entry of [piAgentEndPatch, piTurnEndPatch, piStreamPatch]) {
+      declaredSafely(entry);
+      expect(entry.upstream).toBe("https://github.com/paperclipai/paperclip/pull/14320");
+      expect(entry.files).toEqual(["ui/dist/assets/*.js"]);
+    }
+  });
+
+  it("are listed after pi-transcript-non-assistant-messages, and the stream patch keeps its role guard either way", () => {
+    const ids = PATCHES.map((entry) => entry.id);
+    expect(ids.indexOf(piStreamPatch.id)).toBeGreaterThan(ids.indexOf(piPatch.id));
+    // a --dry-run applies every patch to the core as shipped
+    expect(applyToText(PI_HANDLER_2026_916_1, piStreamPatch).count).toBe(1);
+    expect(applyToText(PI_HANDLER_2026_916_1, piStreamPatch).text).not.toContain('role!=="assistant"');
+    expect(applyAll(PI_HANDLER_2026_916_1, PI_PATCHES())).toContain('if(s&&s.role!=="assistant")return[];if(s&&!Ur.kyoubeStreamed){');
+  });
+
+  it("each match the 2026.916.1 parser exactly once, whatever the minifier called the identifiers", () => {
+    applyAll(PI_HANDLER_2026_916_1, PI_PATCHES());
+    const renamed = PI_HANDLER_2026_916_1.replaceAll("hn(", "Qx(").replaceAll("tt(", "$k(").replaceAll("gn(", "Zz(").replaceAll("Ur.", "$m.");
+    applyAll(renamed, PI_PATCHES());
+  });
+
+  it("do not match again once applied", () => {
+    const once = applyAll(PI_HANDLER_2026_916_1, PI_PATCHES());
+    for (const entry of PI_PATCHES()) expect(applyToText(once, entry).count, entry.id).toBe(0);
+  });
+
+  it("show every message and thinking block once, the tool call and its result once each — proven by running the patched code", () => {
+    const before = runPiStream(applyAll(PI_HANDLER_2026_916_1, [piPatch]), PI_RUN);
+    // what the task chat showed: the reply four times, the last one five
+    expect(texts(before, "assistant").filter((text) => text.startsWith("The board"))).toHaveLength(4);
+    expect(texts(before, "assistant").filter((text) => text.startsWith("## BAP-56"))).toHaveLength(5);
+
+    const after = runPiStream(applyAll(PI_HANDLER_2026_916_1, PI_PATCHES()), PI_RUN);
+    expect(texts(after, "assistant")).toEqual(["The board accepted the pack. Now I post it.", "## BAP-56 — posted and done\n\n- sent 16:06Z"]);
+    expect(texts(after, "thinking")).toEqual(["Check the revision first.", "Sent. Close the issue."]);
+    expect(after.filter((entry) => entry.kind === "tool_call")).toHaveLength(1);
+    expect(after.find((entry) => entry.kind === "tool_result")).toMatchObject({ toolUseId: "call-1", content: "exit 0" });
+    // agent_end still reports the run's usage
+    expect(after.find((entry) => entry.kind === "result")).toMatchObject({ inputTokens: 10, outputTokens: 5 });
+  });
+
+  it("still shows a message that did not stream, from message_end", () => {
+    const message = { role: "assistant", content: [{ type: "text", text: "No deltas for this one." }] };
+    const events = [{ type: "message_start", message }, { type: "message_end", message }, { type: "turn_end", message, toolResults: [] }];
+    expect(texts(runPiStream(applyAll(PI_HANDLER_2026_916_1, PI_PATCHES()), events), "assistant")).toEqual(["No deltas for this one."]);
+  });
+});
+
+describe("hermes-quiet-default", () => {
+  it("is declared with the safety fields every patch needs, against upstream PR #12016", () => {
+    declaredSafely(hermesQuietPatch);
+    expect(hermesQuietPatch.upstream).toBe("https://github.com/paperclipai/paperclip/pull/12016");
+    expect(hermesQuietPatch.files).toEqual(["packages/adapters/hermes/src/server/execute.ts"]);
+  });
+
+  it("makes an unset Quiet output quiet and keeps an explicit choice — proven by running the patched line", () => {
+    const patched = applyToText(HERMES_QUIET_2026_916_1, hermesQuietPatch);
+    expect(patched.count).toBe(1);
+    const expression = /const useQuiet = (.*?);/.exec(patched.text)[1];
+    const useQuiet = (quiet) => new Function("config", "cfgBoolean", `return ${expression};`)(
+      { quiet }, (v) => (typeof v === "boolean" ? v : undefined));
+    expect(useQuiet(undefined)).toBe(true);
+    expect(useQuiet(true)).toBe(true);
+    expect(useQuiet(false)).toBe(false);
+    expect(useQuiet("no")).toBe(true);
+  });
+
+  it("does not match again once applied, and recognises upstream's own fix only", () => {
+    const once = applyToText(HERMES_QUIET_2026_916_1, hermesQuietPatch).text;
+    expect(applyToText(once, hermesQuietPatch).count).toBe(0);
+    expect(countMatches(once, hermesQuietPatch.upstreamFix)).toBe(0);
+    expect(countMatches(HERMES_QUIET_2026_916_1, hermesQuietPatch.upstreamFix)).toBe(0);
+    expect(countMatches(HERMES_QUIET_UPSTREAM_FIX, hermesQuietPatch.upstreamFix)).toBe(1);
+  });
+});
+
+/** Feeds Hermes stdout lines through the (patched or unpatched) parser tail, merging deltas as the UI does. */
+function runHermesLines(code, lines) {
+  const sw = (line) => line.includes("💭");
+  const parse = new Function("sw", `return (n,t)=>{${code}}`)(sw);
+  const entries = [];
+  for (const line of lines) {
+    for (const entry of parse(line, "2026-10-07T00:00:00Z")) {
+      const last = entries[entries.length - 1];
+      if (entry.kind === "assistant" && entry.delta && last?.kind === "assistant" && last.delta) last.text += entry.text;
+      else entries.push({ ...entry });
+    }
+  }
+  return entries;
+}
+
+describe("hermes-transcript-one-message", () => {
+  it("is declared with the safety fields every patch needs", () => {
+    declaredSafely(hermesLinesPatch);
+    expect(hermesLinesPatch.files).toEqual(["ui/dist/assets/*.js"]);
+  });
+
+  it("matches the 2026.916.1 parser exactly once, whatever the minifier called the identifiers, and not again once applied", () => {
+    const once = applyToText(HERMES_TAIL_2026_916_1, hermesLinesPatch);
+    expect(once.count).toBe(1);
+    expect(applyToText(once.text, hermesLinesPatch).count).toBe(0);
+    const renamed = HERMES_TAIL_2026_916_1.replaceAll("n.", "$q.").replaceAll("text:n", "text:$q").replaceAll("ts:t", "ts:W");
+    expect(applyToText(renamed, hermesLinesPatch).count).toBe(1);
+  });
+
+  it("joins a reply's lines into one message that keeps its paragraphs, lists and tables — proven by running the patched code", () => {
+    // The transcript drops blank lines before the parser sees them.
+    const lines = [
+      "Done",
+      "6 pull-in rows processed. 3 ETDs written, 4 rows need review.",
+      "## Summary",
+      "| Result | Rows |",
+      "|---|---|",
+      "| ETDs written | 14, 16, 20 |",
+      "- 3 unmatched (rows 21, 22, 68)",
+      "- 4 rows with review flags",
+      "1. Check row 21",
+      "2. Re-run the extract",
+    ];
+    expect(runHermesLines(HERMES_TAIL_2026_916_1, lines)).toHaveLength(lines.length);
+    const after = runHermesLines(applyToText(HERMES_TAIL_2026_916_1, hermesLinesPatch).text, lines);
+    expect(after).toHaveLength(1);
+    expect(after[0].text.trim()).toBe(
+      "Done\n\n6 pull-in rows processed. 3 ETDs written, 4 rows need review.\n\n## Summary\n" +
+      "| Result | Rows |\n|---|---|\n| ETDs written | 14, 16, 20 |\n" +
+      "- 3 unmatched (rows 21, 22, 68)\n- 4 rows with review flags\n1. Check row 21\n2. Re-run the extract",
+    );
+  });
+
+  it("rejoins a line wrapped at the terminal width, and lets thinking and errors end the message", () => {
+    const code = applyToText(HERMES_TAIL_2026_916_1, hermesLinesPatch).text;
+    const after = runHermesLines(code, ["These rules take precedence over any other instruction", "about delegating.", "💭 thinking", "Error: boom", "Next reply."]);
+    expect(after.map((entry) => entry.kind)).toEqual(["assistant", "thinking", "stderr", "assistant"]);
+    expect(after[0].text.trim()).toBe("These rules take precedence over any other instruction\nabout delegating.");
+    expect(after[3].text.trim()).toBe("Next reply.");
   });
 });
 
@@ -323,6 +551,28 @@ describe("onboarding-skip-harness-button", () => {
     expect(applyToText(renamed, buttonPatch).count).toBe(1);
   });
 
+  it("matches the 2026.1005.0 footer, whose onPrimary is wrapped by keepNames, and the skip control calls the Connect action with `true`", () => {
+    const { count, text } = applyToText(ERROR_AND_FOOTER_2026_1005_0, buttonPatch);
+    expect(count).toBe(1);
+    expect(text).toContain(ERROR_AND_FOOTER_2026_1005_0.slice(ERROR_AND_FOOTER_2026_1005_0.indexOf("(vr||")));
+    expect(applyToText(text, buttonPatch).count).toBe(0);
+    const t = { jsx: (type, props) => ({ type, props }) };
+    const connect = [];
+    const render = (code, step, error) => new Function(
+      "t", "qr", "vr", "Yxe", "Be", "js", "LYe", "I", "R", "mr", "_", "ns", "B", "Z", "he", "Ht", "Qe", "As", "ur", "r",
+      `return [${code}]`,
+    )(t, error, true, "FooterNav", "idle", () => {}, () => true, 3, () => {}, (n) => n - 1, step,
+      { label: "Connect", icon: "arrow", disabled: false }, false, { trim: () => "Co" }, { trim: () => "Ada" }, false,
+      () => {}, (...args) => { connect.push(args); }, () => {}, (fn) => fn);
+    const [, skip, footer] = render(text, 4, "Only the local operator can connect this machine's CLI account.");
+    expect(skip.props.children.props.children).toBe(SKIP_HARNESS_LABEL);
+    skip.props.children.props.onClick();
+    expect(connect).toEqual([[true]]);
+    footer.props.onPrimary();
+    expect(connect).toEqual([[true], []]);
+    expect(render(text, 3, "x")[1]).toBeFalsy();
+  });
+
   it("does not match again once applied", () => {
     const once = applyToText(ERROR_AND_FOOTER_2026_916_1, buttonPatch).text;
     expect(applyToText(once, buttonPatch).count).toBe(0);
@@ -362,17 +612,16 @@ describe("onboarding-skip-harness-button", () => {
 async function writeFullCore(root) {
   await mkdir(path.join(root, "ui", "dist", "assets"), { recursive: true });
   await mkdir(path.join(root, "server", "dist", "services"), { recursive: true });
-  await mkdir(path.join(root, "server", "dist", "routes"), { recursive: true });
   await writeFile(path.join(root, "ui/dist/assets/index-5zyW-AFc.js"), FULL_BUNDLE_2026_916_1);
   await writeFile(path.join(root, "server/dist/services/local-ai-login.js"), SIGNIN_COMMAND_2026_916_1);
-  await writeFile(path.join(root, "server/dist/routes/agents.js"), TEST_GUARD_2026_916_1);
   await writeFile(path.join(root, "server/dist/services/local-ai-credentials.js"), CLAUDE_VERIFY_2026_916_1);
   await mkdir(path.join(root, "server", "dist", "auth"), { recursive: true });
   await writeFile(path.join(root, "server/dist/auth/better-auth.js"), BETTER_AUTH_2026_916_1);
+  await mkdir(path.join(root, "packages", "adapters", "hermes", "src", "server"), { recursive: true });
+  await writeFile(path.join(root, "packages/adapters/hermes/src/server/execute.ts"), HERMES_QUIET_2026_916_1);
 }
 
 const signinPatch = patch("anthropic-signin-setup-token");
-const guardPatch = patch("adapter-test-unsaved-harness-switch");
 
 const licenseImportPatch = patch("license-seat-limit-import");
 const licenseHookPatch = patch("license-seat-limit-hook");
@@ -476,64 +725,6 @@ describe("anthropic-signin-setup-token", () => {
   });
 });
 
-/** Runs the (patched or unpatched) guard as the route would, with the route's helpers stubbed. */
-async function runGuard(code, { savedType, type, providerAdapter = null, env = {} }) {
-  const calls = [];
-  const fn = new Function(
-    "savedAgent", "type", "providerAdapter", "inputAdapterConfig", "parseObject", "asRecord", "REDACTED_EVENT_VALUE",
-    "unprocessable", "assertCanUpdateAgent", "restoreRedactedAgentEnv", "req",
-    `return (async () => { let adapterConfigForTest = inputAdapterConfig; ${code} return adapterConfigForTest; })();`,
-  );
-  const record = (value) => (value && typeof value === "object" && !Array.isArray(value) ? value : null);
-  return fn(
-    { adapterType: savedType, adapterConfig: { env: { KEY: { type: "plain", value: "saved-secret" } } } },
-    type, providerAdapter, { env },
-    (value) => record(value) ?? {}, record, "***REDACTED***",
-    (message) => new Error(message),
-    async () => { calls.push("assertCanUpdateAgent"); },
-    (input, saved) => ({ ...input, env: { ...input.env, ...saved.env } }),
-    {},
-  ).then((config) => ({ config, calls }));
-}
-
-describe("adapter-test-unsaved-harness-switch", () => {
-  it("is declared with the safety fields every patch needs, citing upstream's fix", () => {
-    declaredSafely(guardPatch);
-    expect(guardPatch.upstream).toContain("9335b7db10425277bcb84ba8137d08c498324dba");
-  });
-
-  it("matches the 2026.916.1 guard exactly once, and not again once applied", () => {
-    const { count, text } = applyToText(TEST_GUARD_2026_916_1, guardPatch);
-    expect(count).toBe(1);
-    expect(applyToText(text, guardPatch).count).toBe(0);
-  });
-
-  it("the unpatched guard refuses a harness switch — the bug, reproduced", async () => {
-    await expect(runGuard(TEST_GUARD_2026_916_1, { savedType: "claude_local", type: "codex_local" })).rejects.toThrow("Saved agent is not compatible");
-  });
-
-  it("tests a pending switch with the submitted config alone, still checking the caller may update the agent", async () => {
-    const patched = applyToText(TEST_GUARD_2026_916_1, guardPatch).text;
-    const { config, calls } = await runGuard(patched, { savedType: "claude_local", type: "codex_local", env: {} });
-    expect(config).toEqual({ env: {} });
-    expect(calls).toEqual(["assertCanUpdateAgent"]);
-  });
-
-  it("never carries the saved agent's hidden values into another harness", async () => {
-    const patched = applyToText(TEST_GUARD_2026_916_1, guardPatch).text;
-    await expect(runGuard(patched, { savedType: "claude_local", type: "codex_local", env: { KEY: { type: "plain", value: "***REDACTED***" } } }))
-      .rejects.toThrow("Re-enter environment values when testing a different adapter");
-  });
-
-  it("still restores the saved values for the same harness", async () => {
-    const patched = applyToText(TEST_GUARD_2026_916_1, guardPatch).text;
-    const { config } = await runGuard(patched, { savedType: "claude_local", type: "claude_local", env: {} });
-    expect(config.env.KEY).toEqual({ type: "plain", value: "saved-secret" });
-    const viaRunner = await runGuard(patched, { savedType: "paperclip_runner", type: "claude_local", providerAdapter: "claude_local", env: {} });
-    expect(viaRunner.config.env.KEY).toEqual({ type: "plain", value: "saved-secret" });
-  });
-});
-
 describe("an upstream-fix marker", () => {
   // A patch with a marker for the upstream fix, and one file per test case.
   const marked = {
@@ -577,23 +768,16 @@ describe("an upstream-fix marker", () => {
     expect(await readFile(path.join(root, "server/dist/x.js"), "utf8")).toBe("fixed(); upstreamFixed();");
   });
 
-  it("adapter-test-unsaved-harness-switch recognises upstream 9335b7d in 2026.921.0-beta.1, and nothing else", () => {
-    expect(applyToText(UPSTREAM_FIX_2026_921_0_BETA_1, guardPatch).count).toBe(0);
-    expect(countMatches(UPSTREAM_FIX_2026_921_0_BETA_1, guardPatch.upstreamFix)).toBe(1);
-    // neither the stable core's guard nor this patch's own output is mistaken for the upstream fix
-    expect(countMatches(TEST_GUARD_2026_916_1, guardPatch.upstreamFix)).toBe(0);
-    expect(countMatches(applyToText(TEST_GUARD_2026_916_1, guardPatch).text, guardPatch.upstreamFix)).toBe(0);
-  });
-
-  it("a beta core that carries 9335b7d builds: that patch is skipped and logged, the rest still apply", async () => {
+  it("a core that carries upstream PR #12016 builds: hermes-quiet-default is skipped and logged, the rest still apply", async () => {
     await writeFullCore(root);
-    await writeFile(path.join(root, "server/dist/routes/agents.js"), UPSTREAM_FIX_2026_921_0_BETA_1);
+    const fixed = HERMES_QUIET_2026_916_1.replace(/  const useQuiet = .*\n/, HERMES_QUIET_UPSTREAM_FIX);
+    await writeFile(path.join(root, "packages/adapters/hermes/src/server/execute.ts"), fixed);
     const { stdout } = await promisify(execFile)(process.execPath, [APPLY, "--root", root, "--report", "--dry-run"]);
-    expect(stdout).toContain("core-patches: adapter-test-unsaved-harness-switch: already fixed upstream");
+    expect(stdout).toContain("core-patches: hermes-quiet-default: already fixed upstream");
     const report = await applyPatches(root, PATCHES);
-    expect(report.find((entry) => entry.id === guardPatch.id)).toMatchObject({ skipped: "already fixed upstream" });
-    expect(report.filter((entry) => !entry.skipped).map((entry) => entry.matched)).toEqual(PATCHES.filter((entry) => entry !== guardPatch).map(() => 1));
-    expect(await readFile(path.join(root, "server/dist/routes/agents.js"), "utf8")).toBe(UPSTREAM_FIX_2026_921_0_BETA_1);
+    expect(report.find((entry) => entry.id === hermesQuietPatch.id)).toMatchObject({ skipped: "already fixed upstream" });
+    expect(report.filter((entry) => !entry.skipped).map((entry) => entry.matched)).toEqual(PATCHES.filter((entry) => entry !== hermesQuietPatch).map(() => 1));
+    expect(await readFile(path.join(root, "packages/adapters/hermes/src/server/execute.ts"), "utf8")).toBe(fixed);
   });
 });
 
@@ -627,7 +811,7 @@ describe("applyPatches", () => {
     expect(patched).toContain("arguments[0]!==!0");
     expect(patched).toContain(SKIP_HARNESS_LABEL);
     expect(await readFile(path.join(root, "server/dist/services/local-ai-login.js"), "utf8")).toContain("kyoube connect claude");
-    expect(await readFile(path.join(root, "server/dist/routes/agents.js"), "utf8")).toContain("kyoubeCanRestoreEnv");
+    expect(await readFile(path.join(root, "packages/adapters/hermes/src/server/execute.ts"), "utf8")).toContain("cfgBoolean(config.quiet) ?? true");
     const auth = await readFile(path.join(root, "server/dist/auth/better-auth.js"), "utf8");
     expect(auth).toContain("KyoubeLicenseAPIError");
     expect(auth).toContain("kyoube-license-seat-limit");
@@ -648,9 +832,9 @@ describe("applyPatches", () => {
     await expect(applyPatches(root, PATCHES)).rejects.toThrow(/matched 0 time\(s\).*expected 1/);
     await writeFile(file, FULL_BUNDLE_2026_916_1 + FULL_BUNDLE_2026_916_1);
     await expect(applyPatches(root, PATCHES)).rejects.toThrow(/matched 2 time\(s\).*expected 1/);
-    // A bundle that carries only one region still fails the build on the
-    // others, so a core that moved one of them cannot ship half a fix.
-    await writeFile(file, PI_HANDLER_2026_916_1);
+    // A bundle that carries only the transcript parsers still fails the build
+    // on the others, so a core that moved one of them cannot ship half a fix.
+    await writeFile(file, `function vw(r,n,t){${PI_HANDLER_2026_916_1}}function hw(n,t){${HERMES_TAIL_2026_916_1}}`);
     await expect(applyPatches(root, PATCHES)).rejects.toThrow(/onboarding-skip-harness-primary.*matched 0 time\(s\)/);
   });
 

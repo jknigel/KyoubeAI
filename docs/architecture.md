@@ -110,9 +110,10 @@ exact residual this leaves: `SECURITY.md`.
 A local adapter run (`claude_local`, `pi_local`, `hermes_local`) reaches Kyoube over REST: every run is
 started with `PAPERCLIP_API_URL`, `PAPERCLIP_API_KEY` (a run-scoped agent token) and `PAPERCLIP_COMPANY_ID`
 in its environment, and the managed skills tell the agent to call the plugin's API routes (next section)
-with them. That is the primary path because of how the core (2026.831.1 through 2026.916.1) delivers plugin tools: they are
+with them. That is the primary path because of how the core (2026.831.1 through 2026.1005.0) delivers plugin tools: they are
 listed by its tool gateway, but a run only receives a gateway MCP server (`/mcp/gateways/<id>`) when the
-agent's effective tool profile permits at least one installed `mcp_remote`/`local_stdio` connection —
+agent's effective tool profile permits at least one installed `mcp_remote`/`local_stdio` connection (from
+2026.1005.0, also a Browser Use Cloud connection or the chat's GitHub bot connection) —
 `buildPaperclipRuntimeMcpServers` in upstream's `heartbeat.ts` returns nothing otherwise, and the
 `/mcp/runtime-tools` endpoint serves only the two connection-request tools. On a fresh instance no agent
 has such a connection, so the tools never reach the model. Where a gateway does exist, the same 24
@@ -272,10 +273,11 @@ The image is the pinned core, rebranded and themed, with a short, bounded list o
 The one standing behaviour change in the core is the licensing hook (`docs/licensing.md`): a Better Auth
 `user.create.before` hook that calls `/opt/kyoube/license/enforce.mjs`.
 `docker/core-patches/patches.mjs` carries fixes to upstream bugs that had to ship here first, and the
-standing licensing entries. The temporary fixes are five in the served UI (the first-run wizard's "Skip
-for now" and a pi transcript display fix) and two in the compiled server code: `anthropic-signin-setup-token` (the command Claude subscription
-sign-in presents, in `local-ai-login.js`) and `adapter-test-unsaved-harness-switch` (upstream 9335b7d,
-in the agent Test route, `routes/agents.js`). They are applied to the pristine core layer by
+standing licensing entries. The temporary fixes are nine in the served UI (the first-run wizard's "Skip
+for now", and the pi and Hermes task-chat transcript fixes), one in the Hermes adapter's server source
+(`hermes-quiet-default`, upstream PR #12016, in `packages/adapters/hermes/src/server/execute.ts`, which
+the server runs through tsx) and one in the compiled server code: `anthropic-signin-setup-token` (the command Claude subscription
+sign-in presents, in `local-ai-login.js`). They are applied to the pristine core layer by
 `docker/core-patches/apply.mjs` in the Dockerfile step right before the rebrand, while the same fix is
 on its way upstream (each entry names its issue or PR). A
 pattern anchors on the compiled bundle's string literals and code shape (never a minifier's

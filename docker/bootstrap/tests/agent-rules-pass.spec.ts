@@ -17,6 +17,7 @@ class FakeApi implements RulesApi {
   governance: Record<string, Governance> = { c1: {} };
   bundles: Record<string, InstructionsBundle> = {};
   files: Record<string, string> = { a1: "You are an agent.\n" };
+  revisions: Record<string, number> = {};
   guard: GuardReport = QUIET_GUARD;
   calls: string[] = [];
   failing = new Set<string>();
@@ -29,8 +30,14 @@ class FakeApi implements RulesApi {
   async getGovernance(companyId: string) { return structuredClone(this.governance[companyId] ?? {}); }
   async setGovernance(companyId: string, governance: Governance) { this.check(`setGovernance:${companyId}`); this.calls.push(`governance ${companyId}`); this.governance[companyId] = structuredClone(governance); }
   async getInstructionsBundle(agentId: string) { return this.bundles[agentId] ?? MANAGED; }
-  async readInstructionsFile(agentId: string) { return this.files[agentId] ?? ""; }
-  async writeInstructionsFile(agentId: string, _path: string, content: string) { this.check(`write:${agentId}`); this.calls.push(`write ${agentId}`); this.files[agentId] = content; }
+  async readInstructionsFile(agentId: string) { return { content: this.files[agentId] ?? "", revisionId: `rev-${agentId}-${this.revisions[agentId] ?? 0}` }; }
+  async writeInstructionsFile(agentId: string, _path: string, content: string, baseRevisionId: string | null) {
+    this.check(`write:${agentId}`);
+    this.calls.push(`write ${agentId}`);
+    if (baseRevisionId !== `rev-${agentId}-${this.revisions[agentId] ?? 0}`) throw new Error(`409 stale base ${baseRevisionId}`);
+    this.files[agentId] = content;
+    this.revisions[agentId] = (this.revisions[agentId] ?? 0) + 1;
+  }
   async reconcileGuard(companyId: string) {
     if (this.failing.has("guard404")) throw new CoreApiError(404, { error: "Plugin not found" }, "Plugin not found", `POST ${GUARD_PLUGIN_ROUTES.reconcile}`);
     this.calls.push(`guard ${companyId}`);
@@ -128,6 +135,26 @@ describe("applyPass", () => {
     expect(company.failures.map((failure) => `${failure.step} ${failure.agent ?? ""}`.trim())).toEqual(["governance", "rules Writer"]);
     expect(company.rulesUpdated).toEqual(["Coder"]);
     expect(api.calls).toContain("guard c1");
+  });
+
+  it("writes on the revision it read, so a save made in between is refused and kept, and the next pass adds the block", async () => {
+    const api = new FakeApi();
+    // Someone saves Writer's AGENTS.md between the pass's read and its write.
+    const read = api.readInstructionsFile.bind(api);
+    api.readInstructionsFile = async (agentId: string) => {
+      const file = await read(agentId);
+      api.files[agentId] = "Edited by a person.\n";
+      api.revisions[agentId] = (api.revisions[agentId] ?? 0) + 1;
+      return file;
+    };
+    const { report, state } = await applyPass(deps(api), EMPTY_STATE);
+    expect(report.companies[0]?.failures.map((failure) => `${failure.step} ${failure.agent}`)).toEqual(["rules Writer"]);
+    expect(report.companies[0]?.failures[0]?.error).toContain("stale base");
+    expect(api.files.a1).toBe("Edited by a person.\n");
+    api.readInstructionsFile = read;
+    await applyPass(deps(api), state);
+    expect(api.files.a1).toContain("Edited by a person.\n");
+    expect(api.files.a1).toContain(RULES_BLOCK);
   });
 
   it("says the guard plugin is missing, and still writes the rules block", async () => {

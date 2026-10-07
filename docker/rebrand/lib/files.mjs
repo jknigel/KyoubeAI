@@ -88,6 +88,11 @@ export function isCodeFile(relToRoot) {
  *   the board is served from `ui/dist`.
  * - `.env.example` (2026.916): upstream's sample environment file; the image
  *   never reads it (KyoubeAI's own is the one in this repository).
+ * - `.devin` (2026.1001): upstream's DeepWiki pages about its own repository
+ *   (`.devin/wiki.json`); the product never reads them.
+ * - `doc/connections/tool-method-permission-reviews.json` (2026.1005): upstream's
+ *   review notes on each connector tool's permissions, read only by its own
+ *   tests (`tool-access-service.test.ts`, `app-definitions.test.ts`).
  *
  * An entry may be a multi-segment prefix or an exact file path; the longest
  * match names the row a file is counted under, otherwise it is counted under
@@ -95,12 +100,14 @@ export function isCodeFile(relToRoot) {
  */
 export const SWEEP_ALLOWLIST = [
   ".claude",
+  ".devin",
   ".env.example",
   ".github",
   "LICENSE",
   "announcements",
   "cli",
   "design",
+  "doc/connections/tool-method-permission-reviews.json",
   "doc/plans",
   "docker",
   "docs/docs.json",

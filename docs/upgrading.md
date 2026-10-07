@@ -145,6 +145,32 @@ a company admin switches a use on; until then every use answers `disabled`. `kyo
 gets the capability to answer a card or an approval (`issue.interactions.respond`,
 `approvals.respond`).
 
+## Moving an install from core 2026.916.1
+
+This release moves from core 2026.916.1 to 2026.1005.0 (upstream releases 2026.1001.0 and
+2026.1005.0). Read this before you rebuild.
+
+- **Check `KYOUBE_CORE_VERSION=2026.1005.0` in `.env`.** `./update.sh` keeps it in step with
+  `.env.example`; a hand-run `docker compose up -d --build` uses whatever `.env` says.
+- **Back up first.** The core adds 14 database migrations (`0280` to `0293`). They run on the first
+  start and cannot be undone: `bash scripts/backup.sh`.
+- **Harnesses no longer stop to ask permission.** The core now starts Claude Code with every tool
+  allowed, Codex without its approval prompts and sandbox, OpenCode with `allow` and Gemini CLI in YOLO
+  mode, unless an agent's settings say otherwise. On KyoubeAI little changes: Claude agents already
+  skipped permissions and Codex's sandbox cannot run in a container. The core's own checks (company,
+  task, approvals, the agent working rules' grants) still apply to everything an agent does through it.
+- **@-mentioning an agent no longer starts a run.** A mention is context only. To hand an agent work,
+  assign the task or ask it for a review; a comment still wakes the task's assignee.
+- **Agent Chat has its own page** (`/chats`), with a model and effort picker on each message. It is
+  still experimental and off by default: turn on Settings → Experimental → Agent Chat, and a **Chat**
+  link appears under Inbox in the sidebar.
+- **Keyboard-shortcut settings are gone** from the core (and its `/api/auth/preferences` route).
+- **The Composio connector broker is gone.** Connectors made through it stop working; nothing in
+  KyoubeAI used it.
+- **Native-runner agents get two new tools**, `reassign_task` and `hire_agent`. Reassigning needs
+  the agent's "can assign tasks" grant, the one the agent working rules manage, and hiring goes
+  through the same approvals as before.
+
 ## Moving an install from core 2026.831.1
 
 Builds of KyoubeAI made before 1.0.0 ran on core 2026.831.1; 1.0.0 runs on core 2026.916.1, a large
