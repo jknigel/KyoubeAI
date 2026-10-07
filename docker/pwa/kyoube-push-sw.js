@@ -4,7 +4,13 @@
 // The kyoube.notify plugin sends { title, body, url, tag } (docs/mobile.md).
 
 function kyoubeSafePath(url) {
-  return typeof url === "string" && url.startsWith("/") && !url.startsWith("//") ? url : "/";
+  if (typeof url !== "string") return "/";
+  try {
+    const resolved = new URL(url, self.location.origin);
+    return resolved.origin === self.location.origin ? resolved.pathname + resolved.search + resolved.hash : "/";
+  } catch {
+    return "/";
+  }
 }
 
 self.addEventListener("push", (event) => {
@@ -38,9 +44,14 @@ self.addEventListener("notificationclick", (event) => {
       const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
       for (const client of windows) {
         if (new URL(client.url).origin !== self.location.origin) continue;
-        if (typeof client.focus === "function") await client.focus();
-        if (typeof client.navigate === "function") await client.navigate(target);
-        return;
+        try {
+          if (typeof client.focus === "function") await client.focus();
+          if (typeof client.navigate === "function") await client.navigate(target);
+          return;
+        } catch {
+          // An uncontrolled client cannot be navigated: open a window instead.
+          break;
+        }
       }
       await self.clients.openWindow(target);
     })(),
