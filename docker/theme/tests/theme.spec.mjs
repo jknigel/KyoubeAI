@@ -28,6 +28,14 @@ const read = (rel) => readFile(path.join(root, rel), "utf8");
 const count = (text, literal) => text.split(literal).length - 1;
 
 describe("runTheme on core 2026.916.1", () => {
+  it("finds the core's toast viewport, which the phone toast cap relies on", async () => {
+    await coreTree();
+    const result = await runTheme({ root, themeDir: THEME_DIR, log: quiet });
+    const { ANCHORS } = await import("../anchors.mjs");
+    expect(ANCHORS.map((anchor) => anchor.id)).toEqual(expect.arrayContaining(["toast-viewport", "toast-list"]));
+    expect(result.anchors).toBe(ANCHORS.length);
+  });
+
   it("applies every text rule exactly as declared and reports it", async () => {
     await coreTree();
     const lines = [];
@@ -148,6 +156,16 @@ describe("helpers", () => {
 describe("theme.css", () => {
   const cssPromise = readFile(path.join(THEME_DIR, "theme.css"), "utf8");
   const GATE = ':is(:root[data-kyoube-shell="studio"] aside:has(> nav button > svg.lucide-square-pen), aside:has([data-kyoube-studio="team"]))';
+  // The toast cap is gated on the boot flag, which stays set while the Studio
+  // roster is on the page (boot.js clears it after 6 s otherwise).
+  const TOAST_GATE = ':root[data-kyoube-shell="studio"] aside[aria-live="polite"][aria-atomic="false"]';
+
+  it("shows at most the two newest toasts on a phone, above the tab bar", async () => {
+    const css = (await cssPromise).replace(/\/\*[\s\S]*?\*\//g, "");
+    const media = css.slice(css.indexOf("@media (max-width: 639px)"));
+    expect(media).toContain(`${TOAST_GATE} > ol > :nth-child(n+3) { display: none; }`);
+    expect(media).toMatch(new RegExp(`${TOAST_GATE.replace(/[[\]().*+?^$|\\]/g, "\\$&")} \\{[^}]*bottom: calc\\(76px \\+ env\\(safe-area-inset-bottom\\)\\)`));
+  });
 
   /** Splits a selector list on its top-level commas (not those inside :is(), :has(), attribute values). */
   function splitSelectors(list) {
@@ -183,7 +201,7 @@ describe("theme.css", () => {
       .flatMap((rule) => splitSelectors(rule.selector))
       .map((selector) => selector.trim())
       .filter((selector) => selector.length > 0)
-      .filter((selector) => !selector.includes(GATE) && !selector.includes('[data-kyoube-studio="home"]') && !selector.includes("[data-kyoube-page]") && !selector.includes("[data-kyoube-nav"));
+      .filter((selector) => !selector.includes(GATE) && !selector.includes('[data-kyoube-studio="home"]') && !selector.includes("[data-kyoube-page]") && !selector.includes("[data-kyoube-nav") && !selector.includes(TOAST_GATE));
     expect(offenders).toEqual([]);
   });
 

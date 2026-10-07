@@ -32,6 +32,8 @@ KyoubeAI's own look ("Studio") comes from two parts, and neither edits the core:
   apps over company data); the three access-profile pages that still said "Apps" in their breadcrumb
   say Connectors too. A plugin page is titled by its page ("Data", "Workspace") instead of
   "Plugins › <plugin>", and KyoubeAI's own pages drop the host's Back link.
+- **Toasts on phones.** Below 640px wide, at most the two newest toasts show, above the bottom tab
+  bar and inside the screen's edges; the rest are in Inbox.
 - **Agent profile** (`/<company>/team/<agent>`, the Concept C page). A header with the agent's
   character and live status, its name in the display face, its title, whom it reports to and the
   harness it runs on; an **On duty** switch, **Chat** (opens the task you would talk to it in) and
@@ -59,6 +61,7 @@ KyoubeAI's own look ("Studio") comes from two parts, and neither edits the core:
 |---|---|---|
 | Tokens (`theme.css`, top) | the CSS custom properties the core's light/dark switch reads (`--background`, `--sidebar`, `--radius`, …) | `theme.mjs` fails the build if the core stops declaring any of them |
 | Skin (`theme.css`, rest) | route links (`href`), ARIA labels, `lucide-<name>` icon classes, and our own `data-kyoube-*` markers | every hook is an anchor in `anchors.mjs`; every rule that hides or moves core UI is gated (below) |
+| Phone toast cap (`theme.css`, last block) | the toast viewport's `aria-live`/`aria-atomic` attributes and its column-reverse list; the core keeping the newest toast first | the `toast-viewport` and `toast-list` anchors; after a bump, check `ui/src/context/ToastContext.tsx` still prepends new toasts |
 | Text rules (`rules.mjs`) | string literals in the compiled bundle, never minifier names | each rule must match exactly its declared count or the build fails |
 | Studio plugin | the published plugin SDK (slots, `order`, `useHostNavigation`, `useHostLocation`, `ctx.agents/issues/approvals`) | the SDK pin, the plugin's tests, the smoke, and the weekly upstream-beta run |
 | Agent profile actions | the core's documented board API (`POST /api/agents/{id}/pause`, `/resume`, `POST /api/companies/{id}/issues`), called as the signed-in person | the core's own permission checks; the live check follows an agent through the profile and the core tabs |
