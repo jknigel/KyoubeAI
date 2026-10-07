@@ -1,3 +1,4 @@
+import { createECDH } from "node:crypto";
 import { NotifyError } from "../errors.js";
 
 /** One browser subscription as the worker stores it: the endpoint and the browser's keys, base64url. */
@@ -39,6 +40,13 @@ export function parseSubscription(raw: unknown, testEndpoint: string | null): Pu
   const auth = typeof sub.keys?.auth === "string" ? sub.keys.auth : "";
   const point = Buffer.from(p256dh, "base64url");
   if (point.length !== 65 || point[0] !== 4) throw new NotifyError("invalid", "p256dh must be an uncompressed P-256 point");
+  try {
+    const ecdh = createECDH("prime256v1");
+    ecdh.generateKeys();
+    ecdh.computeSecret(point);
+  } catch {
+    throw new NotifyError("invalid", "p256dh must be an uncompressed P-256 point");
+  }
   if (Buffer.from(auth, "base64url").length !== 16) throw new NotifyError("invalid", "auth must be 16 bytes");
   return { endpoint, p256dh, auth };
 }
