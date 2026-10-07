@@ -31,7 +31,7 @@ const QUESTION_SUBJECT: Record<string, string> = {
 };
 
 export function askMessage(input: { prefix: string; agentName: string; interaction: InteractionLike; issue: IssueLike }): PushMessage {
-  const subject = input.interaction.title || input.interaction.summary || QUESTION_SUBJECT[input.interaction.kind] || "a question";
+  const subject = input.interaction.title || QUESTION_SUBJECT[input.interaction.kind] || "a question";
   return message(`${input.agentName} is asking: ${subject}`, [input.issue.identifier, input.issue.title].filter(Boolean).join(" · "), issueUrl(input.prefix, input.issue), `issue:${input.issue.id}`, "high");
 }
 

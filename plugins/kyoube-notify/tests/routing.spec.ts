@@ -40,6 +40,10 @@ describe("agent questions", () => {
   it("sends nothing when the person asked is no longer an active member", () => {
     expect(askRecipients(question({ addresseeUserId: "left" }), issue, members)).toEqual([]);
   });
+
+  it("reaches the assignee when the creator has left", () => {
+    expect(askRecipients(question(), { ...issue, createdByUserId: "left" }, members)).toEqual(["operator"]);
+  });
 });
 
 describe("approvals", () => {
