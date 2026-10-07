@@ -4,6 +4,33 @@ All notable changes to KyoubeAI are recorded here, in terms of what changed for 
 building on it. The format is loosely [Keep a Changelog](https://keepachangelog.com/); versioning is
 [SemVer](https://semver.org/).
 
+## Unreleased
+
+### Changed
+
+- The core is Paperclip 2026.1005.0 (was 2026.916.1), with the plugin SDK pinned to match.
+  Harnesses no longer stop to ask permission; an @-mention no longer starts an agent's run; Agent
+  Chat (experimental, off by default) gets its own page; 14 database migrations run on the first
+  start. Back up first, and read [docs/upgrading.md](docs/upgrading.md#moving-an-install-from-core-20269161).
+- The agent Test route fix (`adapter-test-unsaved-harness-switch`) is upstream in this core, so
+  KyoubeAI no longer patches it.
+- The agent working rules save an agent's `AGENTS.md` on the revision they read, which this core
+  requires. When someone saves the file between the read and the write, the core refuses the write,
+  their edit stays, and the next pass (within a minute) adds the rules block to it.
+
+### Fixed
+
+- Task chat with a pi agent shows each reply and thinking block once. pi sends a message's text again
+  when it ends, when its turn ends and when the run ends, and the chat showed every copy, so a reply
+  appeared four or five times (`pi-transcript-once-*`, same change as upstream PR #14320).
+- Task chat with a Hermes agent is readable. The agent form showed **Quiet output** on by default but
+  Hermes ran in its terminal mode unless the box had been saved, which echoed the whole prompt and
+  instructions, wrapped text at 80 columns and drew boxes. An unset Quiet output is now quiet
+  (`hermes-quiet-default`, same change as upstream PR #12016). Each line of Hermes output was also a
+  separate chat message, which broke paragraphs, lists and tables apart; a reply is now one message
+  (`hermes-transcript-one-message`). Hermes runs from before the update still carry the echoed
+  prompt in their **Worked** details, now as one block.
+
 ## 1.5.0 - 2026-10-07
 
 ### Added

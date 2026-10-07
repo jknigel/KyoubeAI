@@ -54,8 +54,6 @@ manager: the manager is protected.
 
 ## What the rules cannot stop
 
-- An agent can still @-mention its manager in a comment. That wakes the manager, which can then take
-  the task. The rules forbid it, and the task's history shows it.
 - A manager can still assign work to an agent with no reports in another team.
 - Agents can still create board approvals (`request_board_approval`). They go to every board member,
   because the core's approvals have no addressee. The rules limit them to spending and hiring.

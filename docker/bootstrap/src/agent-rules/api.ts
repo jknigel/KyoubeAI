@@ -17,6 +17,16 @@ export interface InstructionsBundle {
   legacyPromptTemplateActive: boolean;
 }
 
+/**
+ * An instructions entry file as read, with the revision it was read at. Since core 2026.1005 a
+ * write must name that revision (`baseRevisionId`; null for an entry with no revision yet), and
+ * the core refuses it (409) when the file changed in between.
+ */
+export interface InstructionsFile {
+  content: string;
+  revisionId: string | null;
+}
+
 /** What `kyoube.agent-rules`'s reconcile route answers (plugins/kyoube-agent-rules/src/guard.ts), read defensively. */
 export interface GuardReport {
   managers: string[];
@@ -43,8 +53,8 @@ export interface RulesApi {
   getGovernance(companyId: string): Promise<Governance>;
   setGovernance(companyId: string, governance: Governance): Promise<void>;
   getInstructionsBundle(agentId: string): Promise<InstructionsBundle>;
-  readInstructionsFile(agentId: string, path: string): Promise<string>;
-  writeInstructionsFile(agentId: string, path: string, content: string): Promise<void>;
+  readInstructionsFile(agentId: string, path: string): Promise<InstructionsFile>;
+  writeInstructionsFile(agentId: string, path: string, content: string, baseRevisionId: string | null): Promise<void>;
   reconcileGuard(companyId: string): Promise<GuardReport>;
   revertGuard(companyId: string): Promise<GuardRevertReport>;
   /**
@@ -130,10 +140,11 @@ export function createRulesApi(opts: CoreClientOptions): RulesApi {
       // Never treat a missing body as an empty file: the next step would write
       // the block over whatever the agent's instructions really hold.
       if (typeof raw.content !== "string") throw new Error(`the core returned no content for ${path}`);
-      return raw.content;
+      const revisionId = record(raw.revision).id;
+      return { content: raw.content, revisionId: typeof revisionId === "string" && revisionId.length > 0 ? revisionId : null };
     },
-    async writeInstructionsFile(agentId, path, content) {
-      await request<unknown>(`/api/agents/${id(agentId)}/instructions-bundle/file`, { method: "PUT", body: { path, content } });
+    async writeInstructionsFile(agentId, path, content, baseRevisionId) {
+      await request<unknown>(`/api/agents/${id(agentId)}/instructions-bundle/file`, { method: "PUT", body: { path, content, baseRevisionId } });
     },
     async reconcileGuard(companyId) {
       return parseGuardReport(await request<unknown>(GUARD_PLUGIN_ROUTES.reconcile, { method: "POST", body: { companyId } }));

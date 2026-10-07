@@ -239,6 +239,19 @@ describe("runRebrand", () => {
       expect(result.sweep[".env.example"]).toBe(1);
     });
 
+    it("allows the upstream development material cores 2026.1001 and 2026.1005 added, and nothing else under doc/connections", async () => {
+      const { root, brandDir } = await makeTree({
+        ".devin/wiki.json": '{ "repo_notes": [{ "content": "Paperclip is the control plane." }] }\n',
+        "doc/connections/tool-method-permission-reviews.json": '{ "keyPermissions": "Grant Paperclip read access." }\n',
+      });
+      const result = await runRebrand({ root, brandDir, verify: true, report: false, log: () => {} });
+      expect(result.sweepFailures).toEqual([]);
+      expect(result.sweep[".devin"]).toBe(1);
+      expect(result.sweep["doc/connections/tool-method-permission-reviews.json"]).toBe(1);
+      const other = await makeTree({ "doc/connections/other.json": '{ "note": "Paperclip connects it." }\n' });
+      await expect(runRebrand({ ...other, verify: true, report: false, log: () => {} })).rejects.toThrow(/sweep: doc still carries 1 display match/);
+    });
+
     it("still fails on a preview page or root file nobody has triaged", async () => {
       const preview = await makeTree({ "ui/other-preview.html": "<title>Paperclip preview</title>\n" });
       await expect(runRebrand({ ...preview, verify: true, report: false, log: () => {} })).rejects.toThrow(/sweep: ui still carries 1 display match/);

@@ -36,7 +36,7 @@
  * it with the core a build actually uses, so a patch that fails on a different
  * core says that first.
  */
-export const CORE_VERSION = "2026.916.1";
+export const CORE_VERSION = "2026.1005.0";
 
 /**
  * The label of the control the `onboarding-skip-harness-*` patches add under
@@ -63,6 +63,96 @@ export const PATCHES = [
     files: ["ui/dist/assets/*.js"],
     pattern: /if\((\w+)==="message_end"\)\{const (\w+)=(\w+)\((\w+)\.message\);if\(\2\)\{/g,
     replacement: 'if($1==="message_end"){const $2=$3($4.message);if($2&&$2.role!=="assistant")return[];if($2){',
+    expect: 1,
+  },
+  // ── pi: each message once ───────────────────────────────────────────────
+  // pi streams a message as deltas and then sends the whole of it again in
+  // text_end/thinking_end, message_end, turn_end and (for the last one)
+  // agent_end. Only the deltas merge, so the task chat showed every reply and
+  // every thinking block four or five times in a row. Same change as upstream
+  // PR #14320: show the deltas, drop the repeats, and use message_end only for
+  // a message that did not stream. Three entries, one fix. The streamed flag
+  // lives on the parser's own pending-tool-call Map (upstream adds a module
+  // variable, which a pattern cannot declare); message_start clears it.
+  {
+    id: "pi-transcript-once-agent-end",
+    title: "pi adapter: agent_end no longer repeats the last message",
+    upstream: "https://github.com/paperclipai/paperclip/pull/14320",
+    files: ["ui/dist/assets/*.js"],
+    pattern: /if\(([\w$]+)\?\.role==="assistant"\)\{const ([\w$]+)=\1\.content,\{text:([\w$]+),thinking:([\w$]+)\}=[\w$]+\(\2\);\4&&([\w$]+)\.push\(\{kind:"thinking",ts:([\w$]+),text:\4\}\),\3&&\5\.push\(\{kind:"assistant",ts:\6,text:\3\}\);/g,
+    replacement: 'if($1?.role==="assistant"){',
+    expect: 1,
+  },
+  {
+    id: "pi-transcript-once-turn-end",
+    title: "pi adapter: turn_end no longer repeats the turn's message",
+    upstream: "https://github.com/paperclipai/paperclip/pull/14320",
+    files: ["ui/dist/assets/*.js"],
+    pattern: /(if\(([\w$]+)==="turn_end"\)\{const ([\w$]+)=[\w$]+\([\w$]+\.message\),[\w$]+=[\w$]+\.toolResults,([\w$]+)=\[\];)if\(\3\)\{const ([\w$]+)=\3\.content,\{text:([\w$]+),thinking:([\w$]+)\}=[\w$]+\(\5\);\7&&\4\.push\(\{kind:"thinking",ts:([\w$]+),text:\7\}\),\6&&\4\.push\(\{kind:"assistant",ts:\8,text:\6\}\)\}/g,
+    replacement: "$1",
+    expect: 1,
+  },
+  {
+    // Takes the Map's name from the `<map>.delete(id)` that ends turn_end's
+    // tool-result loop. message_end matches with or without the role guard
+    // pi-transcript-non-assistant-messages adds (a --dry-run sees the core as
+    // shipped), and keeps whichever it found.
+    id: "pi-transcript-once-stream",
+    title: "pi adapter: a streamed message is not repeated by text_end, thinking_end or message_end",
+    upstream: "https://github.com/paperclipai/paperclip/pull/14320",
+    files: ["ui/dist/assets/*.js"],
+    pattern: new RegExp(
+      String.raw`(([\w$]+)\.delete\([\w$]+\)\}return [\w$]+\})if\(([\w$]+)==="message_start"\)return\[\];` +
+      String.raw`if\(\3==="message_update"\)\{const ([\w$]+)=([\w$]+)\(([\w$]+)\.assistantMessageEvent\);if\(\4\)\{const ([\w$]+)=([\w$]+)\(\4\.type\);` +
+      String.raw`if\(\7==="thinking_delta"\)\{const ([\w$]+)=\8\(\4\.delta\);if\(\9\)return\[(\{kind:"thinking",ts:([\w$]+),text:\9,delta:!0\})\]\}` +
+      String.raw`if\(\7==="text_delta"\)\{const ([\w$]+)=\8\(\4\.delta\);if\(\12\)return\[(\{kind:"assistant",ts:\11,text:\12,delta:!0\})\]\}` +
+      String.raw`if\(\7==="thinking_end"\)\{const ([\w$]+)=\8\(\4\.content\);if\(\14\)return\[\{kind:"thinking",ts:\11,text:\14\}\]\}` +
+      String.raw`if\(\7==="text_end"\)\{const ([\w$]+)=\8\(\4\.content\);if\(\15\)return\[\{kind:"assistant",ts:\11,text:\15\}\]\}\}return\[\]\}` +
+      String.raw`if\(\3==="message_end"\)\{const ([\w$]+)=\5\(\6\.message\);((?:if\(\16&&\16\.role!=="assistant"\)return\[\];)?)if\(\16\)\{`,
+      "g",
+    ),
+    replacement:
+      '$1if($3==="message_start")return $2.kyoubeStreamed=!1,[];' +
+      'if($3==="message_update"){const $4=$5($6.assistantMessageEvent);if($4){const $7=$8($4.type);' +
+      'if($7==="thinking_delta"){const $9=$8($4.delta);if($9)return $2.kyoubeStreamed=!0,[$10]}' +
+      'if($7==="text_delta"){const $12=$8($4.delta);if($12)return $2.kyoubeStreamed=!0,[$13]}}return[]}' +
+      'if($3==="message_end"){const $16=$5($6.message);$17if($16&&!$2.kyoubeStreamed){',
+    expect: 1,
+  },
+  // ── Hermes: readable task chat ──────────────────────────────────────────
+  // The agent form shows "Quiet output" on by default, but the runner treated
+  // an unset `quiet` as off, so every Hermes agent ran in Hermes' terminal
+  // mode: it echoes the whole prompt (`Query: <AGENTS.md + wake>`), wraps at
+  // 80 columns and draws boxes, all of which reached the task chat. Same
+  // change as upstream PR #12016 (issue #11976): unset means quiet. The
+  // replacement is written differently from upstream's `!== false`, so
+  // `upstreamFix` recognises only upstream's own code.
+  {
+    id: "hermes-quiet-default",
+    title: "Hermes adapter: an unset Quiet output runs Hermes quietly, as the form shows",
+    upstream: "https://github.com/paperclipai/paperclip/pull/12016",
+    files: ["packages/adapters/hermes/src/server/execute.ts"],
+    pattern: /const useQuiet = cfgBoolean\(config\.quiet\) === true; \/\/ default false/g,
+    replacement: "const useQuiet = cfgBoolean(config.quiet) ?? true; // KyoubeAI core patch hermes-quiet-default",
+    expect: 1,
+    upstreamFix: /const useQuiet = cfgBoolean\(config\.quiet\) !== false;/g,
+  },
+  // The Hermes transcript parser made every stdout line its own agent
+  // message, so a reply's paragraphs, list items and table rows became
+  // separate bubbles (a wrapped line starting "6." even became a numbered
+  // list). A text line is now a delta, which the transcript merges with the
+  // text line before it: a list item, table row or line starting in lower case
+  // (a wrapped continuation) joins with a line break, anything else starts a
+  // new paragraph. The transcript drops blank lines before the parser sees
+  // them, so the paragraph rule stands in for them. Tool cards, thinking and
+  // errors still end the message.
+  {
+    id: "hermes-transcript-one-message",
+    title: "Hermes adapter: a reply's lines form one message in the task chat",
+    upstream: "https://github.com/paperclipai/paperclip (packages/adapters/hermes/src/ui/parse-stdout.ts, parseHermesStdoutLine, regular assistant output; issue pending)",
+    files: ["ui/dist/assets/*.js"],
+    pattern: /([\w$]+)\.startsWith\("Traceback"\)\?\[\{kind:"stderr",ts:([\w$]+),text:\1\}\]:\[\{kind:"assistant",ts:\2,text:\1\}\]/g,
+    replacement: '$1.startsWith("Traceback")?[{kind:"stderr",ts:$2,text:$1}]:[{kind:"assistant",ts:$2,text:(/^(?:[-*+] |\\d+[.)] |\\||[a-z])/.test($1)?"\\n":"\\n\\n")+$1,delta:!0}]',
     expect: 1,
   },
   // ── onboarding: "Skip for now" under a failed Connect step ──────────────
@@ -118,9 +208,11 @@ export const PATCHES = [
     // Anchors on the error line and on the footer's own literals ("Continue",
     // "Connecting", the step numbers), and captures the step ($5), the busy
     // flag ($7) and the Connect step's primary action ($8) from the footer's
-    // props. The footer call is re-emitted verbatim ($3).
+    // props. The footer call is re-emitted verbatim ($3). Since core 2026.1005
+    // the UI is built with esbuild keepNames, which wraps the onPrimary arrow
+    // as `<name>(()=>{…},"onPrimary")`; the pattern accepts it with or without.
     files: ["ui/dist/assets/*.js"],
-    pattern: /([\w$]+)&&\(0,([\w$]+)\.jsx\)\("div",\{className:"mt-3",children:\(0,\2\.jsx\)\("p",\{className:"text-xs text-destructive",children:\1\}\)\}\),(\(([\w$]+)\|\|([\w$]+)===1\)&&\(0,\2\.jsx\)\(([\w$]+),\{onBack:[^;]*?,primaryLabel:\5===1\?"Continue":[^;]*?,loadingLabel:\5===1\?"Creating\.\.\.":\5===4\?"Connecting":"Launching\.\.\.",loading:\5===3\|\|\5===4\?!1:([\w$]+),primaryDisabled:[^;]*?,onPrimary:\(\)=>\{\5===1\?[\w$]+\(\):\5===3\?[\w$]+\(4\):\5===4\?([\w$]+)\(\):[\w$]+\(\)\}\}\))/g,
+    pattern: /([\w$]+)&&\(0,([\w$]+)\.jsx\)\("div",\{className:"mt-3",children:\(0,\2\.jsx\)\("p",\{className:"text-xs text-destructive",children:\1\}\)\}\),(\(([\w$]+)\|\|([\w$]+)===1\)&&\(0,\2\.jsx\)\(([\w$]+),\{onBack:[^;]*?,primaryLabel:\5===1\?"Continue":[^;]*?,loadingLabel:\5===1\?"Creating\.\.\.":\5===4\?"Connecting":"Launching\.\.\.",loading:\5===3\|\|\5===4\?!1:([\w$]+),primaryDisabled:[^;]*?,onPrimary:(?:[\w$]+\()?\(\)=>\{\5===1\?[\w$]+\(\):\5===3\?[\w$]+\(4\):\5===4\?([\w$]+)\(\):[\w$]+\(\)\}(?:,"onPrimary"\))?\}\))/g,
     replacement:
       '$1&&(0,$2.jsx)("div",{className:"mt-3",children:(0,$2.jsx)("p",{className:"text-xs text-destructive",children:$1})}),' +
       `$5===4&&$1&&(0,$2.jsx)("div",{className:"mt-2",children:(0,$2.jsx)("button",{type:"button",className:"text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground transition-colors",disabled:$7,onClick:()=>$8(!0),children:${JSON.stringify(SKIP_HARNESS_LABEL)}})}),` +
@@ -143,32 +235,6 @@ export const PATCHES = [
     pattern: /mkdir -p "\$CLAUDE_CONFIG_DIR" && claude auth login\)/g,
     replacement: 'mkdir -p "$CLAUDE_CONFIG_DIR" && kyoube connect claude)',
     expect: 1,
-  },
-  // ── Agents: Test works on a harness switch before it is saved ───────────
-  // The UI always sends the saved agent's id with the test, so testing any
-  // unsaved harness switch failed with "Saved agent is not compatible with the
-  // adapter being tested". Same change as upstream 9335b7d: test the submitted
-  // config, and restore the saved agent's hidden env values only for the same
-  // harness. Delete at the first stable core that carries 9335b7d (it is in
-  // 2026.921.0-beta.1, which `upstreamFix` recognises: upstream's own
-  // `canRestoreEnv` guard, followed by its "Re-enter environment values"
-  // refusal; this patch names its variable kyoubeCanRestoreEnv, so the marker
-  // never matches the patched code).
-  {
-    id: "adapter-test-unsaved-harness-switch",
-    title: "agents: Test works on a harness switch that is not saved yet",
-    upstream: "https://github.com/paperclipai/paperclip/commit/9335b7db10425277bcb84ba8137d08c498324dba",
-    files: ["server/dist/routes/agents.js"],
-    pattern: /if \(savedAgent\.adapterType !== type && providerAdapter !== type\) \{\s*throw unprocessable\("Saved agent is not compatible with the adapter being tested"\);\s*\}(\s*)await assertCanUpdateAgent\(req, savedAgent\);\s*adapterConfigForTest = restoreRedactedAgentEnv\(inputAdapterConfig, savedAgent\.adapterConfig\);/g,
-    replacement:
-      "const kyoubeCanRestoreEnv = savedAgent.adapterType === type || providerAdapter === type;$1" +
-      'if (!kyoubeCanRestoreEnv && Object.values(parseObject(inputAdapterConfig.env)).some((value) => { const binding = asRecord(value); return binding?.type === "plain" && binding.value === REDACTED_EVENT_VALUE; })) {$1' +
-      '    throw unprocessable("Re-enter environment values when testing a different adapter");$1' +
-      "}$1" +
-      "await assertCanUpdateAgent(req, savedAgent);$1" +
-      "adapterConfigForTest = kyoubeCanRestoreEnv ? restoreRedactedAgentEnv(inputAdapterConfig, savedAgent.adapterConfig) : inputAdapterConfig;",
-    expect: 1,
-    upstreamFix: /\bconst canRestoreEnv = savedAgent\.adapterType === type \|\| providerAdapter === type;[\s\S]{0,600}?throw unprocessable\("Re-enter environment values when testing a different adapter"\);/g,
   },
   // ── Licensing: KyoubeAI's user limit (standing: never deleted) ───────────
   // The one standing behaviour patch (CONTRIBUTING.md, "Never patch the core";

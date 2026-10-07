@@ -35,14 +35,19 @@ describe("createRulesApi", () => {
     const { impl, seen } = fakeFetch((req) =>
       req.url.endsWith("/instructions-bundle")
         ? { status: 200, body: { mode: "managed", entryFile: "AGENTS.md", editable: true, legacyPromptTemplateActive: false, files: [{ path: "AGENTS.md" }, { path: "HEARTBEAT.md" }] } }
-        : { status: 200, body: { path: "AGENTS.md", content: "You are an agent.\n" } });
+        : { status: 200, body: { path: "AGENTS.md", content: "You are an agent.\n", revision: { id: "rev-3", entryFile: "AGENTS.md" } } });
     const client = api(impl);
     expect(await client.getInstructionsBundle("a 1")).toEqual({ mode: "managed", entryFile: "AGENTS.md", hasEntryFile: true, editable: true, legacyPromptTemplateActive: false });
-    expect(await client.readInstructionsFile("a 1", "AGENTS.md")).toBe("You are an agent.\n");
+    expect(await client.readInstructionsFile("a 1", "AGENTS.md")).toEqual({ content: "You are an agent.\n", revisionId: "rev-3" });
     expect(seen.map((req) => req.url)).toEqual([
       "http://app:3100/api/agents/a%201/instructions-bundle",
       "http://app:3100/api/agents/a%201/instructions-bundle/file?path=AGENTS.md",
     ]);
+  });
+
+  it("reads an entry with no revision yet as a new entry (base null)", async () => {
+    const { impl } = fakeFetch(() => ({ status: 200, body: { path: "AGENTS.md", content: "" } }));
+    expect(await api(impl).readInstructionsFile("a1", "AGENTS.md")).toEqual({ content: "", revisionId: null });
   });
 
   it("never treats a file answer without content as an empty file", async () => {
@@ -50,10 +55,12 @@ describe("createRulesApi", () => {
     await expect(api(impl).readInstructionsFile("a1", "AGENTS.md")).rejects.toThrow(/no content/);
   });
 
-  it("writes the entry file with PUT", async () => {
+  it("writes the entry file with PUT, on the revision it read (core 2026.1005 refuses a write without one)", async () => {
     const { impl, seen } = fakeFetch(() => ({ status: 200, body: {} }));
-    await api(impl).writeInstructionsFile("a1", "AGENTS.md", "x");
-    expect(seen[0]).toEqual({ url: "http://app:3100/api/agents/a1/instructions-bundle/file", method: "PUT", body: { path: "AGENTS.md", content: "x" } });
+    await api(impl).writeInstructionsFile("a1", "AGENTS.md", "x", "rev-3");
+    await api(impl).writeInstructionsFile("a1", "AGENTS.md", "y", null);
+    expect(seen[0]).toEqual({ url: "http://app:3100/api/agents/a1/instructions-bundle/file", method: "PUT", body: { path: "AGENTS.md", content: "x", baseRevisionId: "rev-3" } });
+    expect(seen[1]?.body).toEqual({ path: "AGENTS.md", content: "y", baseRevisionId: null });
   });
 
   it("calls the guard plugin's board-only routes and reads the report defensively", async () => {

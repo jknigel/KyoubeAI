@@ -51,8 +51,9 @@ The Studio design (colours, sidebar, Home, label renames such as Dashboard → H
    `ui/storybook`, `ui/public`, `ui/index.html`, `ui/README.md`, `ui/package.json`, `server/src`,
    `cli` (which ships no `dist` and is never exec'd), `doc/plans`, `docs/docs.json`, `docs/images`,
    `packages/paperclip-runner/runner` (Rust sources behind a prebuilt binary), `LICENSE`, and
-   upstream's own development trees (`.claude`, `.github`, `design`, `docker`, `evals`, `patches`,
-   `releases`, `report`, `screenshots`, `scripts`, `tests`, `tools`). `ui/dist`, `server/dist`,
+   upstream's own development material (`.claude`, `.devin`, `.github`, `design`, `docker`, `evals`,
+   `patches`, `releases`, `report`, `screenshots`, `scripts`, `tests`, `tools`, and
+   `doc/connections/tool-method-permission-reviews.json`, which only upstream's tests read). `ui/dist`, `server/dist`,
    `packages`, `skills` and the rest must be **zero**. A handful of files that cannot be rewritten
    are listed as `known residual` with the reason (`SWEEP_KNOWN_RESIDUALS`) instead of failing.
 
@@ -120,6 +121,11 @@ rebrand: code-shaped matches left alone: 0
 and the sweep gained three allowlisted rows for upstream's new development material
 (`announcements`, the `ui/connect-*-preview.html` pages and the root `.env.example`). The lists below
 were compiled on 2026.831.1; the kinds of identifier are the same on 2026.916.1.
+
+On core 2026.1005.0 the sweep gained two more allowlisted rows for upstream development material:
+`.devin` (DeepWiki pages about upstream's repository) and
+`doc/connections/tool-method-permission-reviews.json` (connector permission notes only upstream's
+tests read). Nothing else in the image needed a new rule.
 
 Verified against the built image on 2026-09-14, after the final review fix wave (the history at the
 end of this section says what each round closed). That build's `rebrand:` header lines were

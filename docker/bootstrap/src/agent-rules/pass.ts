@@ -55,13 +55,16 @@ async function editAgent(api: RulesApi, agent: AgentRef, entry: CompanyReport, e
       entry.skipped.push({ agent: agent.name, reason: `its instructions bundle has no ${bundle.entryFile}` });
       return;
     }
-    const result = edit(await api.readInstructionsFile(agent.id, bundle.entryFile));
+    const file = await api.readInstructionsFile(agent.id, bundle.entryFile);
+    const result = edit(file.content);
     if (result.kind === "corrupt") {
       entry.skipped.push({ agent: agent.name, reason: `${bundle.entryFile}: ${result.reason}` });
       return;
     }
     if (result.kind === "changed") {
-      await api.writeInstructionsFile(agent.id, bundle.entryFile, result.content);
+      // Written on the revision just read: if someone saved the file in between, the core
+      // refuses (409) and this agent is retried on the next pass, so their edit is never lost.
+      await api.writeInstructionsFile(agent.id, bundle.entryFile, result.content, file.revisionId);
       entry.rulesUpdated.push(agent.name);
       entry.writes += 1;
     }

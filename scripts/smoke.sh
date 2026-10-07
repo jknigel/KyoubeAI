@@ -462,10 +462,10 @@ for ADAPTER in claude_local pi_local hermes_local; do
   echo "    created agent for $ADAPTER"
 done
 
-echo "==> the patched Test route still refuses an agent of another company"
-# docker/core-patches changes the agent Test route (adapter-test-unsaved-harness-switch)
-# only after the route has found the agent: an agent of another company is still
-# refused, as the unpatched core refuses it (404 "Agent not found" from the
+echo "==> the agent Test route still refuses an agent of another company"
+# Core 2026.1001 changed the agent Test route (upstream 9335b7d, which KyoubeAI
+# carried as a core patch before) only after the route has found the agent: an
+# agent of another company is still refused (404 "Agent not found" from the
 # company check, or 403 from the access check). The second company is made here,
 # before the backup, so the restore and doctor's company counts include it.
 OTHER_COMPANY_ID="$(curl -fsS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \

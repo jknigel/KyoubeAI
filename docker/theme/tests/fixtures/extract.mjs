@@ -24,14 +24,22 @@ if (!dist || !out) {
 }
 
 const assets = path.join(dist, "assets");
-const js = readdirSync(assets).filter((f) => f.endsWith(".js")).map((f) => readFileSync(path.join(assets, f), "utf8")).join("\n");
+const chunks = readdirSync(assets).filter((f) => f.endsWith(".js")).map((f) => readFileSync(path.join(assets, f), "utf8"));
+const js = chunks.join("\n");
 
 // Regions to keep, merged where they overlap.
 const regions = [];
 const keep = (start, end) => regions.push([Math.max(0, start), Math.min(js.length, end)]);
 const first = SECTIONS[0];
 const last = SECTIONS[SECTIONS.length - 1];
-const sidebarStart = js.indexOf(first.start);
+// Search the chunk that holds the Sidebar, as theme.mjs searches each file on
+// its own: since 2026.1005 an earlier chunk also says "New Task".
+let chunkStart = 0;
+for (const chunk of chunks) {
+  if (chunk.includes(SECTIONS[1].start)) break;
+  chunkStart += chunk.length + 1;
+}
+const sidebarStart = js.indexOf(first.start, chunkStart);
 const sidebarEnd = js.indexOf(last.end, sidebarStart);
 if (sidebarStart === -1 || sidebarEnd === -1) throw new Error("the Sidebar component was not found; check SECTIONS in anchors.mjs");
 keep(sidebarStart - 40, sidebarEnd + last.end.length + 40);

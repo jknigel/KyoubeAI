@@ -51,7 +51,7 @@ export const SECTIONS = [
     id: "top",
     start: '"New Task"',
     end: 'label:"Work",collapsible',
-    expected: ["/search", "/dashboard", "/inbox", "/decisions", "/status", "/board-chat"],
+    expected: ["/search", "/dashboard", "/inbox", "/chats", "/decisions", "/status", "/board-chat"],
     mode: "contains",
   },
   {

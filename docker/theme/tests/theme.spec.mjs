@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SECTIONS } from "../anchors.mjs";
 import { TEXT_RULES } from "../rules.mjs";
 import { THEME_ASSET, ThemeError, overriddenTokens, runTheme, sectionRoutes } from "../theme.mjs";
-import { BUNDLE, CORE_CSS, INDEX_HTML } from "./fixtures/core-2026.916.1.mjs";
+import { BUNDLE, CORE_CSS, INDEX_HTML } from "./fixtures/core-2026.1005.0.mjs";
 
 const THEME_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const quiet = () => {};
@@ -15,19 +15,19 @@ let root;
 beforeEach(async () => { root = await mkdtemp(path.join(tmpdir(), "kyoube-theme-")); });
 afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 
-/** A core tree with the real 2026.916.1 excerpts, optionally edited to simulate an upstream change. */
+/** A core tree with the real 2026.1005.0 excerpts, optionally edited to simulate an upstream change. */
 async function coreTree({ bundle = BUNDLE, css = CORE_CSS, html = INDEX_HTML } = {}) {
   const assets = path.join(root, "ui", "dist", "assets");
   await mkdir(assets, { recursive: true });
   await writeFile(path.join(root, "ui", "dist", "index.html"), html);
-  await writeFile(path.join(assets, "index-5zyW-AFc.js"), bundle);
-  await writeFile(path.join(assets, "index-tk1F4est.css"), css);
+  await writeFile(path.join(assets, "index-ChaaJ8xT.js"), bundle);
+  await writeFile(path.join(assets, "index-BWOXadpj.css"), css);
 }
 
 const read = (rel) => readFile(path.join(root, rel), "utf8");
 const count = (text, literal) => text.split(literal).length - 1;
 
-describe("runTheme on core 2026.916.1", () => {
+describe("runTheme on core 2026.1005.0", () => {
   it("finds the core's toast viewport, which the phone toast cap relies on", async () => {
     await coreTree();
     const result = await runTheme({ root, themeDir: THEME_DIR, log: quiet });
@@ -42,13 +42,13 @@ describe("runTheme on core 2026.916.1", () => {
     const result = await runTheme({ root, themeDir: THEME_DIR, report: true, log: (line) => lines.push(line) });
     expect(result.rules).toHaveLength(TEXT_RULES.length);
     for (const rule of TEXT_RULES) expect(result.rules).toContain(`${rule.id} ${rule.expect}/${rule.expect}`);
-    expect(lines.join("\n")).toMatch(/theme: anchors \d+\/\d+; sidebar sections top=6, work=8, org=4/);
+    expect(lines.join("\n")).toMatch(/theme: anchors \d+\/\d+; sidebar sections top=7, work=8, org=4/);
   });
 
   it("renames Dashboard to Home in both sidebars and the core's last Apps breadcrumbs to Connectors", async () => {
     await coreTree();
     await runTheme({ root, themeDir: THEME_DIR, log: quiet });
-    const bundle = await read("ui/dist/assets/index-5zyW-AFc.js");
+    const bundle = await read("ui/dist/assets/index-ChaaJ8xT.js");
     // Both sidebars (streamlined and legacy) are renamed; the mobile bar's own "Home" link was already there.
     expect(count(bundle, 'to:"/dashboard",label:"Home"')).toBe(3);
     expect(bundle).not.toContain('to:"/dashboard",label:"Dashboard"');
@@ -63,7 +63,7 @@ describe("runTheme on core 2026.916.1", () => {
     await runTheme({ root, themeDir: THEME_DIR, log: quiet });
     const html = await read("ui/dist/index.html");
     expect(html).toContain('const fallback = "dark";');
-    const core = html.indexOf('/assets/index-tk1F4est');
+    const core = html.indexOf('/assets/index-BWOXadpj');
     const theme = html.indexOf(`/assets/${THEME_ASSET}`);
     expect(core).toBeGreaterThan(-1);
     expect(theme).toBeGreaterThan(core);
@@ -78,7 +78,7 @@ describe("runTheme on core 2026.916.1", () => {
     await coreTree();
     await runTheme({ root, themeDir: THEME_DIR, dryRun: true, log: quiet });
     expect(await read("ui/dist/index.html")).toBe(INDEX_HTML);
-    expect(await read("ui/dist/assets/index-5zyW-AFc.js")).toBe(BUNDLE);
+    expect(await read("ui/dist/assets/index-ChaaJ8xT.js")).toBe(BUNDLE);
   });
 
   it("refuses to run twice on the same tree", async () => {
