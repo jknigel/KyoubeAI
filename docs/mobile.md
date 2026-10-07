@@ -70,14 +70,16 @@ needs `https://` and sends no prompt.
 
 ## Troubleshooting
 
-The Home card and the Notifications page show one of four states for the device:
+The Home card and the Notifications page show one of these states for the device:
 
 | State | Meaning |
 |---|---|
+| On | This device is subscribed. |
 | Off | Permission not asked yet. Tap **Turn on**. |
 | Add to Home Screen | iPhone or iPad, opened in Safari. Add KyoubeAI to the Home Screen and open it from there. |
 | Needs a secure address | The page is open over `http://`. See above. |
 | Blocked | The browser or phone is blocking notifications for this site. Allow them in the browser's or the phone's settings, then come back. The card never asks again on its own. |
+| Unsupported | This browser cannot receive push. The Home card hides itself; the Notifications page says so. Use another browser. |
 
 - **"Last attempt failed: push service refused the request (403)".** The push service no longer
   accepts this instance's keys. This happens after restoring a backup from another instance, or any
@@ -93,7 +95,7 @@ The Home card and the Notifications page show one of four states for the device:
 | Layer | Relies on | Guarded by |
 |---|---|---|
 | Installable app (`docker/pwa/pwa.mjs`, after the rebrand) | `ui/dist/sw.js` with one `fetch` listener and no `push` listener; `site.webmanifest` parsing as a JSON object; `<meta name="apple-mobile-web-app-title"` once in `index.html` | every check runs before anything is written, and a mismatch stops the image build (messages below) |
-| Core still registers its worker | `register("/sw.js")` in the bundle | a warning only: the Home card registers `/sw.js` itself |
+| Core still registers its worker | `register("/sw.js")` in the bundle | a warning only: **Turn on** (Home card and Notifications page) registers `/sw.js` itself |
 | The plugin | the published plugin SDK only | the SDK pin (`scripts/check-pins.sh`), the plugin's tests, and a test that every name in `SUBSCRIBED_EVENTS` is in the pinned SDK's `PLUGIN_EVENT_TYPES`, so a renamed event fails CI at a bump |
 | Phone toast cap | the toast viewport anchors in `docker/theme` (`toast-viewport`, `toast-list`) | the theme step and its gate test; see `docs/theme.md` |
 | Smoke test | the served manifest is standalone, `/sw.js` imports the push handlers, `/kyoube-push-sw.js` is served as JavaScript, `kyoube.notify` is installed; and a real push is sent, decrypted and its VAPID signature, audience and expiry checked (`scripts/push-live-check.mjs`) | `scripts/smoke.sh` |

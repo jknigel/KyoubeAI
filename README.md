@@ -241,13 +241,18 @@ Studio has two parts, and neither edits the core: `docker/theme/` (a build-time 
 and label renames, checked against every core bump) and the `kyoube.studio` plugin. Without the
 plugin, the app falls back to the stock layout. [docs/theme.md](docs/theme.md) has the details.
 
-Installs on phones and computers as an app, with push notifications when an agent needs you ([docs/mobile.md](docs/mobile.md)).
-
 ### Agent working rules
 
 An agent finishes the task you give it, asks you (and only you) when it needs approval, and moves
 work up to a manager agent only when you decide it should. [docs/agent-rules.md](docs/agent-rules.md)
 explains the rules, standing handoffs and how to turn them off.
+
+### On your phone
+
+KyoubeAI installs on phones and computers as an app, with push notifications when an agent needs you:
+a question, an approval, or a task that is done or blocked. Each instance sends them itself, encrypted,
+and it needs an `https://` address. [docs/mobile.md](docs/mobile.md) has the install steps and the
+details.
 
 ### Terminal
 
