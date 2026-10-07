@@ -4,6 +4,22 @@ All notable changes to KyoubeAI are recorded here, in terms of what changed for 
 building on it. The format is loosely [Keep a Changelog](https://keepachangelog.com/); versioning is
 [SemVer](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- KyoubeAI installs as an app on phones and computers, and sends push notifications when an agent
+  asks you something, when an approval is waiting, and when your task is done or blocked; failed
+  runs and comments are opt-in (new `kyoube.notify` 0.1.0, docs/mobile.md). Each instance sends Web
+  Push itself, encrypted, with no KyoubeAI server in between. It needs an `https://` address.
+- The Notifications page, linked from Home and the Workspace page (Studio 0.4.0).
+
+### Changed
+
+- On phones: at most two toasts show, above the tab bar; the app runner's header folds into a menu;
+  the Data page shows the table list, then one table (Kyoube Data & Apps 0.9.0). Agents are told to
+  build apps that work at 375px wide.
+
 ## 1.4.1 - 2026-10-07
 
 ### Added
