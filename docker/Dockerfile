@@ -169,6 +169,20 @@ RUN gosu node node /opt/kyoube/rebrand/rebrand.mjs --root /app --brand /opt/kyou
  && ! test -e /app/ui/dist/paperclip-thinking.svg \
  && ! ls /app/ui/dist/assets | grep -qE '^index-[A-Za-z0-9_-]{8}\.js$'
 
+# ---------------------------------------------------------------------------
+# Installable app and Web Push (docker/pwa, docs/mobile.md). Runs after the
+# rebrand, on the built UI: the manifest becomes standalone (iOS only sends
+# Web Push to a Home Screen app), the iOS meta tags are added, and one
+# importScripts line loads KyoubeAI's push handlers into the core's own
+# service worker. Every anchor is checked first; a core that changed sw.js,
+# the manifest or the iOS title tag fails this build with the reason.
+# ---------------------------------------------------------------------------
+COPY docker/pwa/pwa.mjs docker/pwa/kyoube-push-sw.js /opt/kyoube/pwa/
+RUN gosu node node /opt/kyoube/pwa/pwa.mjs --root /app --pwa /opt/kyoube/pwa --report \
+ && grep -q '"display": "standalone"' /app/ui/dist/site.webmanifest \
+ && grep -q 'importScripts("/kyoube-push-sw.js")' /app/ui/dist/sw.js \
+ && test -f /app/ui/dist/kyoube-push-sw.js
+
 # Kyoube bootstrap CLI and plugin bundles. The dependency load checks run as `node` (the runtime
 # user), not root: they are there to prove the deployed bundles load for the account that will
 # actually run the plugin workers, and root can load files the `node` user cannot read.

@@ -3,5 +3,6 @@ packages:
   - "docker/rebrand"
   - "docker/core-patches"
   - "docker/theme"
+  - "docker/pwa"
   - "plugins/*"
   - "packages/*"

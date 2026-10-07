@@ -1,0 +1,13 @@
+{
+  "name": "@kyoube/pwa",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Build-time installable app and Web Push support: standalone manifest, iOS meta tags, and KyoubeAI's push handlers loaded into the core's service worker (docker/Dockerfile runs pwa.mjs after the rebrand)",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^5.0.0"
+  }
+}
