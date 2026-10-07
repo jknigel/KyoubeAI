@@ -1,7 +1,7 @@
 import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
 
 export const PLUGIN_ID = "kyoube.studio";
-export const PLUGIN_VERSION = "0.2.1";
+export const PLUGIN_VERSION = "0.3.0";
 /** The Workspace page's route under a company: `/<prefix>/workspace`. */
 export const WORKSPACE_ROUTE = "workspace";
 /** The team and agent profiles: `/<prefix>/team` and `/<prefix>/team/<agent>[/tasks]`. */
@@ -37,6 +37,10 @@ const manifest: PaperclipPluginManifestV1 = {
     "issue.comments.read",
     "projects.read",
     "access.members.read",
+    // The profile's "Can change agents" switch (agents:configure): the core
+    // board API lists no agent's grants and replaces them all on write.
+    "authorization.grants.read",
+    "authorization.grants.write",
   ],
   entrypoints: {
     worker: "./dist/worker.js",

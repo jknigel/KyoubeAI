@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type { PluginPageProps } from "@paperclipai/plugin-sdk/ui";
-import { useHostContext, useHostLocation, useHostNavigation, usePluginToast } from "@paperclipai/plugin-sdk/ui";
+import { useHostContext, useHostLocation, useHostNavigation, usePluginAction, usePluginToast } from "@paperclipai/plugin-sdk/ui";
 import type { TeamSnapshot } from "../model.js";
 import type { AgentProfile, ProfileResult, ProfileTask } from "../profile.js";
 import { BoardApiError, assignTask, setAgentOnDuty } from "./board-api.js";
@@ -172,10 +172,54 @@ function DutySwitch({ profile, onChanged }: { profile: AgentProfile; onChanged: 
   );
 }
 
+/**
+ * agents:configure, which lets an agent change its own and other agents'
+ * instructions, skills and settings. The core UI has no control for it.
+ */
+function ChangeAccess({ profile, access, onChanged }: { profile: AgentProfile; access: NonNullable<AgentProfile["access"]>; onChanged: () => void }) {
+  const toast = usePluginToast();
+  const change = usePluginAction("agent.change-access");
+  const [busy, setBusy] = useState(false);
+  // As on the duty switch: what the server just confirmed, until the next read agrees.
+  const [confirmed, setConfirmed] = useState<boolean | null>(null);
+  const actual = access.canChangeAgents;
+  const on = confirmed ?? actual;
+  const locked = profile.agent.status === "pending_approval" || profile.agent.status === "terminated";
+  useEffect(() => {
+    if (confirmed === null) return;
+    if (confirmed === actual) { setConfirmed(null); return; }
+    const timer = setTimeout(() => setConfirmed(null), 20_000);
+    return () => clearTimeout(timer);
+  }, [confirmed, actual]);
+  const flip = async () => {
+    setBusy(true);
+    try {
+      await change({ agentId: profile.agent.id, on: !on });
+      setConfirmed(!on);
+      toast({ title: on ? `${profile.agent.name} can no longer change agents` : `${profile.agent.name} can now change agents`, tone: "success" });
+      onChanged();
+    } catch (caught) {
+      toast({ title: "Could not change what the agent may do", body: caught instanceof Error ? caught.message : undefined, tone: "error" });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const why = !access.canManage ? "Only company owners and admins can change this" : locked ? "Available once the agent is approved" : undefined;
+  return (
+    <section className="ks-panel" aria-label="Permissions">
+      <div className="ks-panel-head"><b>Permissions</b></div>
+      <div className="ks-perm">
+        <span className="ks-text"><b>Can change agents</b><span>Edit its own and other agents’ instructions, skills and settings.</span></span>
+        <button type="button" role="switch" aria-checked={on} aria-label="Can change agents" className="ks-switch" disabled={busy || locked || !access.canManage} onClick={flip} title={why}><i aria-hidden="true" /></button>
+      </div>
+    </section>
+  );
+}
+
 function Profile({ agentRef, view }: { agentRef: string; view: "overview" | "tasks" }) {
   const host = useHostContext();
   const navigation = useHostNavigation();
-  const params = useMemo(() => ({ companyId: host.companyId, agentRef }), [host.companyId, agentRef]);
+  const params = useMemo(() => ({ companyId: host.companyId, agentRef, userId: host.userId }), [host.companyId, agentRef, host.userId]);
   const result = usePolledData<ProfileResult>("agent", params, PROFILE_POLL_MS);
   const [assigning, setAssigning] = useState(false);
   const data = result.data;
@@ -277,6 +321,7 @@ function Profile({ agentRef, view }: { agentRef: string; view: "overview" | "tas
               <div className="ks-panel-head"><b>Skills</b><a {...navigation.linkProps(profile.links.skills)}>Manage</a></div>
               {profile.skills.length === 0 ? <div className="ks-none">No extra skills yet.</div> : <div className="ks-chips">{profile.skills.map((skill) => <span key={skill}>{skill}</span>)}</div>}
             </section>
+            {profile.access ? <ChangeAccess profile={profile} access={profile.access} onChanged={refresh} /> : null}
             <section className="ks-panel" aria-label="Works with">
               <div className="ks-panel-head"><b>Works with</b></div>
               {profile.worksWith.length === 0 ? <div className="ks-none">It works on its own so far.</div> : profile.worksWith.map((other) => (
