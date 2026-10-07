@@ -114,4 +114,48 @@ describe("NotifyStore", () => {
     advance(-10 * 60_000);
     expect(await store.claimFailure("agent-1", 30 * 60_000)).toBe(true);
   });
+
+  it("moves a browser's device to whoever turned it on last", async () => {
+    const { store, harness } = setup();
+    const t = target();
+    const id = deviceIdOf(t.endpoint);
+    const owner = () => harness.getState({ scopeKind: "instance", namespace: "notify", stateKey: `endpoint-owner:${id}` });
+    await store.addDevice("a", t, "shared");
+    expect(owner()).toBe("a");
+    await store.addDevice("b", t, "shared");
+    expect((await store.devices("a")).map((d) => d.id)).toEqual([]);
+    expect((await store.devices("b")).map((d) => d.id)).toEqual([id]);
+    expect(owner()).toBe("b");
+    expect(await store.removeDevice("a", id)).toBe(false);
+    expect(owner()).toBe("b");
+    expect(await store.removeDevice("b", id)).toBe(true);
+    expect(owner()).toBeUndefined();
+  });
+
+  it("keeps the previous owner's other devices when a shared one moves", async () => {
+    const { store } = setup();
+    const shared = target();
+    const mine = target();
+    await store.addDevice("a", mine, "mine");
+    await store.addDevice("a", shared, "shared");
+    await store.addDevice("b", shared, "shared");
+    expect((await store.devices("a")).map((d) => d.id)).toEqual([deviceIdOf(mine.endpoint)]);
+  });
+
+  it("ends with the device in exactly one list after concurrent adds by two people", async () => {
+    const { store } = setup();
+    const t = target();
+    await Promise.all([store.addDevice("a", t, "x"), store.addDevice("b", t, "x")]);
+    const lists = [await store.devices("a"), await store.devices("b")];
+    expect(lists.flat().filter((d) => d.id === deviceIdOf(t.endpoint))).toHaveLength(1);
+  });
+
+  it("clears the owner entry when a send finds the device gone", async () => {
+    const { store, harness } = setup();
+    const t = target();
+    const id = deviceIdOf(t.endpoint);
+    await store.addDevice("a", t, "x");
+    await store.applyOutcomes("a", new Map([[id, { result: "gone", status: 410 }]]));
+    expect(harness.getState({ scopeKind: "instance", namespace: "notify", stateKey: `endpoint-owner:${id}` })).toBeUndefined();
+  });
 });
