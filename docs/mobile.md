@@ -75,7 +75,7 @@ The Home card and the Notifications page show one of these states for the device
 | State | Meaning |
 |---|---|
 | On | This device is subscribed. |
-| Off | Permission not asked yet. Tap **Turn on**. |
+| Off | This device is not registered: permission not asked yet, or granted but the device was removed or the push service dropped it. Tap **Turn on**. |
 | Add to Home Screen | iPhone or iPad, opened in Safari. Add KyoubeAI to the Home Screen and open it from there. |
 | Needs a secure address | The page is open over `http://`. See above. |
 | Blocked | The browser or phone is blocking notifications for this site. Allow them in the browser's or the phone's settings, then come back. The card never asks again on its own. |
@@ -88,6 +88,11 @@ The Home card and the Notifications page show one of these states for the device
   automatically. Turn it on again.
 - **Nothing arrives on an iPhone.** Check that KyoubeAI was opened from the Home Screen icon, not
   from Safari, and that a Focus mode is not hiding notifications.
+- **A device stops receiving.** The push service may have rotated its subscription. Open KyoubeAI on
+  that device and turn notifications on again.
+- **Shared computers.** Notifications follow the browser's subscription to the last person who turned
+  them on. On a shared computer, press **Turn off** before you sign out, so the next person's
+  notifications do not go to the wrong screen (and yours stop).
 - **Send a test** on the Notifications page shows at once whether the chain works for a device.
 
 ## How it survives core updates
