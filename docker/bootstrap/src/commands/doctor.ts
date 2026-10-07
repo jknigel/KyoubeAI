@@ -107,6 +107,20 @@ export async function legacyHomeLinkCheck(home: string, exists: (file: string) =
   };
 }
 
+/**
+ * scripts/smoke.sh writes this file so kyoube.notify will send to its local
+ * receiver. Nothing else should: on a real instance it would let one URL
+ * outside the push services receive notifications.
+ */
+export async function pushTestEndpointCheck(home: string, env: NodeJS.ProcessEnv, exists: (file: string) => Promise<boolean> = fileExists): Promise<Check | null> {
+  const file = path.posix.join(home, "kyoube", "push-test-endpoint");
+  if (!(await exists(file))) return null;
+  if ((env.PAPERCLIP_DEPLOYMENT_EXPOSURE ?? "private") === "public") {
+    return { name: "push test endpoint", ok: false, detail: `${file} exists on a public instance; delete it (only the smoke test writes it)` };
+  }
+  return { name: "push test endpoint", ok: true, warn: true, detail: `${file} exists, so notifications may also go to a test receiver; delete it unless this is the smoke test` };
+}
+
 async function readOptional(filePath: string): Promise<string | null> {
   try {
     return await readFile(filePath, "utf8");
@@ -390,6 +404,8 @@ export async function runDoctor(env: NodeJS.ProcessEnv): Promise<number> {
     checks.push({ name, ok: true, detail: present ? `present (${filePath})` : `not found (${filePath}) — set up from the Terminal once the harness is installed` });
   }
   checks.push(await legacyHomeLinkCheck(config.home));
+  const pushTest = await pushTestEndpointCheck(config.home, env);
+  if (pushTest) checks.push(pushTest);
 
   return report(checks);
 }
