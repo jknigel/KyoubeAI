@@ -1,5 +1,5 @@
 import {
-  canExtendPolicy, desiredGrants, isBroadAssign, isOwnTeamGrant, isProtected, managerIds, sameGrants, withoutProtection, withProtection,
+  CHANGE_KEYS, canExtendPolicy, desiredGrants, isBroadAssign, isOwnTeamGrant, isProtected, managerIds, sameGrants, topAgentId, withoutProtection, withProtection,
   type AgentRow, type Grant, type Policy,
 } from "./policy.js";
 
@@ -23,9 +23,15 @@ export interface GuardRecord {
   scoped: string[];
   /** Agents the guardrail took the broad assign grant from. */
   broadRemoved: string[];
+  /**
+   * By agent, the change grants (CHANGE_KEYS) the guardrail gave it as the
+   * company's top agent: empty when it already held them. An agent listed here
+   * is never given them again, so a person who takes them away is not overruled.
+   */
+  changeGranted: Record<string, string[]>;
 }
 
-export const EMPTY_RECORD: GuardRecord = { protected: [], scoped: [], broadRemoved: [] };
+export const EMPTY_RECORD: GuardRecord = { protected: [], scoped: [], broadRemoved: [], changeGranted: {} };
 
 export interface AgentNote { agentId: string; name: string; reason: string }
 export interface AgentFailure { agentId: string; name: string; step: "policy" | "grants" | "record"; error: string }
@@ -64,13 +70,23 @@ function drop(record: GuardRecord, id: string): GuardRecord {
     protected: record.protected.filter((item) => item !== id),
     scoped: record.scoped.filter((item) => item !== id),
     broadRemoved: record.broadRemoved.filter((item) => item !== id),
+    changeGranted: Object.fromEntries(Object.entries(record.changeGranted).filter(([item]) => item !== id)),
   };
 }
 
-/** One company: protect its managers, give each its own-team grant, and take the broad assign grant from every agent. */
+function isUnscoped(grant: Grant): boolean {
+  return grant.scope === null || Object.keys(grant.scope).length === 0;
+}
+
+/**
+ * One company: protect its managers, give each its own-team grant, take the
+ * broad assign grant from every agent, and give the top agent the change
+ * grants core gives its root CEO.
+ */
 export async function reconcileGuard(port: GuardPort, companyId: string): Promise<GuardReport> {
   const agents = await port.listAgents(companyId);
   const managers = managerIds(agents);
+  const top = topAgentId(agents);
   let record = await port.readRecord(companyId);
   const report: GuardReport = { managers: sortedUnique(managers), updated: [], skipped: [], failures: [], selfTest: { status: "not_applicable", detail: "" } };
 
@@ -120,19 +136,29 @@ export async function reconcileGuard(port: GuardPort, companyId: string): Promis
 
     try {
       const grants = await port.listGrants(companyId, agent.id);
-      const next = isManager ? desiredGrants(grants, agent.id, true) : desiredGrants(grants, agent.id, false).concat(grants.filter((grant) => !record.scoped.includes(agent.id) && isOwnTeamGrant(grant, agent.id)));
+      let next = isManager ? desiredGrants(grants, agent.id, true) : desiredGrants(grants, agent.id, false).concat(grants.filter((grant) => !record.scoped.includes(agent.id) && isOwnTeamGrant(grant, agent.id)));
+      // The top agent's change grants, given once: what it already holds is not recorded as given.
+      const added = agent.id === top && !Object.hasOwn(record.changeGranted, agent.id)
+        ? CHANGE_KEYS.filter((key) => !grants.some((grant) => grant.permissionKey === key && isUnscoped(grant)))
+        : null;
+      if (added) next = [...next, ...added.map((key): Grant => ({ permissionKey: key, scope: null }))];
+      const changeGranted = added ? { ...record.changeGranted, [agent.id]: added } : record.changeGranted;
       let applied = true;
       if (!sameGrants(grants, next)) {
         const planned: GuardRecord = {
           ...record,
           scoped: isManager && !grants.some((grant) => isOwnTeamGrant(grant, agent.id)) ? sortedUnique([...record.scoped, agent.id]) : record.scoped,
           broadRemoved: grants.some(isBroadAssign) ? sortedUnique([...record.broadRemoved, agent.id]) : record.broadRemoved,
+          changeGranted,
         };
         applied = await remember(agent, planned);
         if (applied) {
           await port.setGrants(companyId, agent.id, next);
           wrote = true;
         }
+      } else if (added) {
+        // It held them already: remembered all the same, so taking them away later sticks.
+        applied = await remember(agent, { ...record, changeGranted });
       }
       if (applied && !isManager && record.scoped.includes(agent.id)) {
         await remember(agent, { ...record, scoped: record.scoped.filter((id) => id !== agent.id) });
@@ -186,7 +212,7 @@ export async function revertGuard(port: GuardPort, companyId: string): Promise<R
   const report: RevertReport = { reverted: [], failures: [] };
   let remaining: GuardRecord = { ...record };
 
-  for (const id of sortedUnique([...record.protected, ...record.scoped, ...record.broadRemoved])) {
+  for (const id of sortedUnique([...record.protected, ...record.scoped, ...record.broadRemoved, ...Object.keys(record.changeGranted)])) {
     const agent = agents.get(id);
     if (!agent) {
       // Deleted since: there is nothing left to give back.
@@ -206,6 +232,8 @@ export async function revertGuard(port: GuardPort, companyId: string): Promise<R
       const grants = await port.listGrants(companyId, id);
       let next = record.scoped.includes(id) ? grants.filter((grant) => !isOwnTeamGrant(grant, id)) : grants;
       if (record.broadRemoved.includes(id) && !next.some(isBroadAssign)) next = [...next, { permissionKey: "tasks:assign", scope: null }];
+      const given = record.changeGranted[id] ?? [];
+      if (given.length > 0) next = next.filter((grant) => !(given.includes(grant.permissionKey) && isUnscoped(grant)));
       if (!sameGrants(grants, next)) await port.setGrants(companyId, id, next);
     } catch (error) {
       report.failures.push({ agentId: id, name: agent.name, step: "grants", error: message(error) });

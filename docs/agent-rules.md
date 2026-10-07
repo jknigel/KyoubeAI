@@ -27,6 +27,7 @@ override that without changing any core file.
 | People-only cards | The company setting that caps confirmation, question, checkbox, verdict and suggested-task cards at `human_only`. No agent can answer one, not even the one that asked. | The core |
 | Protected managers | Every agent with a direct report is protected: another agent can assign it work only with a grant. Each manager holds one grant, for itself and everyone below it. The core's default "assign to anyone" grant is taken from every agent. | The core |
 | Escalation | A decision card only a person can decide; on "Escalate" the core moves the task to the manager. | The core |
+| Top agent may change agents | The one agent that reports to nobody gets `agents:configure` and `skills:create`, so it can change its own and other agents' instructions, skills and settings. The core gives these only to a top agent whose role is `ceo`, and KyoubeAI hires the first agent as `general`. Given once: switch it off on the agent's profile (**Can change agents**) and it stays off. Nobody gets it while more than one agent reports to nobody; switch it on per agent instead. | The core |
 
 `kyoube agent-rules --watch` starts with the container. It runs as `node`, makes one pass a minute,
 and writes only what differs:
@@ -93,7 +94,8 @@ before their own `kyoube doctor`, so they normally never show this.
 2. `docker compose exec app kyoube agent-rules off`. This:
    - removes the blocks
    - puts the company setting back as it was
-   - lifts the protection and grants KyoubeAI set
+   - lifts the protection and grants KyoubeAI set, the top agent's `agents:configure` and
+     `skills:create` included (only the ones it added)
    - gives the default grant back to the agents it was taken from
 
 It leaves the Handoffs sections, and does not put back the two "ask QA / ask your boss" sentences it

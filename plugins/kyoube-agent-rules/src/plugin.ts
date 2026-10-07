@@ -16,7 +16,20 @@ function ids(value: unknown): string[] {
 export function parseRecord(value: unknown): GuardRecord {
   if (typeof value !== "object" || value === null) return { ...EMPTY_RECORD };
   const raw = value as Record<string, unknown>;
-  return { protected: ids(raw.protected), scoped: ids(raw.scoped), broadRemoved: ids(raw.broadRemoved) };
+  const changeGranted = typeof raw.changeGranted === "object" && raw.changeGranted !== null ? raw.changeGranted as Record<string, unknown> : {};
+  return {
+    protected: ids(raw.protected),
+    scoped: ids(raw.scoped),
+    broadRemoved: ids(raw.broadRemoved),
+    changeGranted: Object.fromEntries(Object.entries(changeGranted).filter(([, keys]) => Array.isArray(keys)).map(([id, keys]) => [id, ids(keys)])),
+  };
+}
+
+/** Whether core's metadata marks an agent as one of its bundled agents (readBuiltInAgentMarker, server/src/services/built-in-agent-metadata.ts). */
+function isBuiltIn(metadata: unknown): boolean {
+  if (typeof metadata !== "object" || metadata === null) return false;
+  const marker = (metadata as Record<string, unknown>).paperclipBuiltInAgent;
+  return typeof marker === "object" && marker !== null && typeof (marker as Record<string, unknown>).key === "string";
 }
 
 /** The guardrail's view of the host, built only from the plugin SDK. */
@@ -25,7 +38,7 @@ export function portFromContext(ctx: PluginContext): GuardPort {
   return {
     async listAgents(companyId) {
       const rows = await ctx.agents.list({ companyId });
-      return rows.map((agent) => ({ id: agent.id, name: agent.name, status: agent.status, reportsTo: agent.reportsTo ?? null }));
+      return rows.map((agent) => ({ id: agent.id, name: agent.name, status: agent.status, reportsTo: agent.reportsTo ?? null, builtIn: isBuiltIn(agent.metadata) }));
     },
     async getPolicy(companyId, agentId) {
       const record = await ctx.authorization.policies.get({ companyId, resourceType: "agent", resourceId: agentId });

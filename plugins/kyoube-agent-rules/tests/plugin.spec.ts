@@ -174,17 +174,23 @@ describe("portFromContext", () => {
   it("reaches the host only through the capabilities the manifest declares", async () => {
     const harness = createTestHarness({ manifest });
     harness.seed({
-      agents: [{ id: "a1", companyId: COMPANY, name: "Dev", status: "idle", reportsTo: null } as never],
+      agents: [
+        { id: "a1", companyId: COMPANY, name: "Dev", status: "idle", reportsTo: null } as never,
+        { id: "a2", companyId: COMPANY, name: "Coach", status: "idle", reportsTo: null, metadata: { paperclipBuiltInAgent: { key: "reflection-coach", featureKeys: [] } } } as never,
+      ],
       principalGrants: [{ id: "g1", companyId: COMPANY, principalType: "agent", principalId: "a1", permissionKey: "tasks:assign", scope: null, grantedByUserId: null, createdAt: new Date(), updatedAt: new Date() } as never],
     });
     const port = portFromContext(harness.ctx);
-    expect(await port.listAgents(COMPANY)).toEqual([{ id: "a1", name: "Dev", status: "idle", reportsTo: null }]);
+    expect(await port.listAgents(COMPANY)).toEqual([
+      { id: "a1", name: "Dev", status: "idle", reportsTo: null, builtIn: false },
+      { id: "a2", name: "Coach", status: "idle", reportsTo: null, builtIn: true },
+    ]);
     expect(await port.listGrants(COMPANY, "a1")).toEqual([{ permissionKey: "tasks:assign", scope: null }]);
     await port.setGrants(COMPANY, "a1", []);
     expect(await port.listGrants(COMPANY, "a1")).toEqual([]);
     await port.setPolicy(COMPANY, "a1", { assignmentPolicy: { mode: "protected" } });
-    await port.writeRecord(COMPANY, { protected: ["a1"], scoped: [], broadRemoved: ["a1"] });
-    expect(await port.readRecord(COMPANY)).toEqual({ protected: ["a1"], scoped: [], broadRemoved: ["a1"] });
+    await port.writeRecord(COMPANY, { protected: ["a1"], scoped: [], broadRemoved: ["a1"], changeGranted: { a1: ["agents:configure"] } });
+    expect(await port.readRecord(COMPANY)).toEqual({ protected: ["a1"], scoped: [], broadRemoved: ["a1"], changeGranted: { a1: ["agents:configure"] } });
     expect(await port.previewAssign(COMPANY, "a1", "a1")).toMatchObject({ allowed: true });
   });
 });
@@ -192,6 +198,7 @@ describe("portFromContext", () => {
 describe("parseRecord", () => {
   it("tolerates a missing or hand-edited record", () => {
     expect(parseRecord(null)).toEqual(EMPTY_RECORD);
-    expect(parseRecord({ protected: ["a", 3], scoped: "x" })).toEqual({ protected: ["a"], scoped: [], broadRemoved: [] });
+    expect(parseRecord({ protected: ["a", 3], scoped: "x" })).toEqual({ protected: ["a"], scoped: [], broadRemoved: [], changeGranted: {} });
+    expect(parseRecord({ changeGranted: { a: ["skills:create", 4], b: "x", c: [] } })).toEqual({ ...EMPTY_RECORD, changeGranted: { a: ["skills:create"], c: [] } });
   });
 });
