@@ -98,10 +98,26 @@ export class NotifyStore {
         lastError: null,
         lastErrorAt: null,
       };
+      // A browser has one subscription: whoever turns it on last owns it, so a shared computer
+      // never sends the previous person's notifications to the next person's screen.
+      const ownerKey = this.key(`endpoint-owner:${id}`);
+      const previous = await this.state.get(ownerKey);
+      if (typeof previous === "string" && previous !== userId) {
+        await this.saveDevices(previous, (await this._devices(previous)).filter((device) => device.id !== id));
+      }
+      await this.state.set(ownerKey, userId);
       const others = (await this._devices(userId)).filter((device) => device.id !== id);
-      await this.saveDevices(userId, [...others, record].slice(-MAX_DEVICES));
+      const all = [...others, record];
+      await this.saveDevices(userId, all.slice(-MAX_DEVICES));
+      for (const dropped of all.slice(0, -MAX_DEVICES)) await this.releaseOwner(userId, dropped.id);
       return record;
     });
+  }
+
+  /** Drops the ownership entry for a device, if it still points at this person. */
+  private async releaseOwner(userId: string, deviceId: string): Promise<void> {
+    const key = this.key(`endpoint-owner:${deviceId}`);
+    if ((await this.state.get(key)) === userId) await this.state.delete(key);
   }
 
   async removeDevice(userId: string, deviceId: string): Promise<boolean> {
@@ -110,6 +126,7 @@ export class NotifyStore {
       const kept = devices.filter((device) => device.id !== deviceId);
       if (kept.length === devices.length) return false;
       await this.saveDevices(userId, kept);
+      await this.releaseOwner(userId, deviceId);
       return true;
     });
   }
@@ -126,6 +143,7 @@ export class NotifyStore {
         return [{ ...device, lastError: outcome.error, lastErrorAt: at }];
       });
       await this.saveDevices(userId, next);
+      for (const [deviceId, outcome] of outcomes) if (outcome.result === "gone") await this.releaseOwner(userId, deviceId);
     });
   }
 
