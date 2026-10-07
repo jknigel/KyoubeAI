@@ -111,6 +111,24 @@ describe("Home", () => {
     expect(html).not.toContain("hand work to each other");
   });
 
+  it("prefixes its links itself, because the core's Dashboard gives its widgets no company prefix", () => {
+    // What the host does on the Dashboard (core 2026.916): context `{ companyId }` only, and
+    // `linkProps` adds a prefix only when the context has one.
+    (globalThis as BridgeGlobal).__paperclipPluginBridge__ = {
+      sdkUi: {
+        useHostContext: () => ({ ...context, companyPrefix: null }),
+        useHostLocation: () => ({ pathname: "/BAP/dashboard", search: "", hash: "" }),
+        useHostNavigation: () => ({ resolveHref: (to: string) => to, navigate: () => {}, linkProps: (to: string) => ({ href: to, onClick: () => {} }) }),
+        usePluginData: (key: string) => (key === "home" ? { data: { ...home, team: team([{ ...member(1), href: "/team/agent-1" }]) }, loading: false, error: null, refresh: () => {} } : { data: null, loading: true, error: null, refresh: () => {} }),
+      },
+    };
+    const html = render(StudioHome);
+    expect(html).toContain('href="/BAP/team/agent-1"');
+    expect(html).toContain('href="/BAP/issues/BAP-41"');
+    expect(html).toContain('href="/BAP/agents/new"');
+    expect(html).not.toMatch(/href="\/(team|issues|agents|inbox)\b/);
+  });
+
   it("drops the strip once every step is done", () => {
     installBridge({ home: { ...home, steps: { hireAgent: true, giveTask: true, seenThrough: true } } });
     expect(render(StudioHome)).not.toContain("Getting started");

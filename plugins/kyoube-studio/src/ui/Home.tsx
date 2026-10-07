@@ -1,10 +1,10 @@
 import { useState } from "react";
 import type { PluginWidgetProps } from "@paperclipai/plugin-sdk/ui";
-import { useHostContext, useHostNavigation } from "@paperclipai/plugin-sdk/ui";
+import { useHostContext } from "@paperclipai/plugin-sdk/ui";
 import type { HomeSnapshot, NeedItem, NeedKind, UpdateItem } from "../model.js";
 import { Icon, type IconName } from "./icons.js";
 import { memberDetail } from "./nav.js";
-import { Avatar, useCompanyParams, usePolledData } from "./shared.js";
+import { Avatar, useCompanyNavigation, useCompanyParams, usePolledData } from "./shared.js";
 import { ensureStyles } from "./styles.js";
 import { greeting, longDate, plural, timeAgo } from "./time.js";
 
@@ -36,7 +36,7 @@ function needMeta(item: NeedItem): string {
 export function StudioHome(_props: PluginWidgetProps) {
   ensureStyles();
   const host = useHostContext();
-  const navigation = useHostNavigation();
+  const navigation = useCompanyNavigation();
   const home = usePolledData<HomeSnapshot>("home", useCompanyParams(), HOME_POLL_MS);
   const [dismissed, setDismissed] = useState(() => readDismissed(host.companyId));
   const data = home.data;
