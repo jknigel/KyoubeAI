@@ -21,6 +21,7 @@ function installBridge(data: Record<string, unknown>, pathname = "/BAP/dashboard
       useHostNavigation: () => ({ resolveHref: (to: string) => `/BAP${to}`, navigate: () => {}, linkProps: (to: string) => ({ href: `/BAP${to}`, onClick: () => {} }) }),
       usePluginData: (key: string) => (key in data ? { data: data[key], loading: false, error: null, refresh: () => {} } : { data: null, loading: true, error: null, refresh: () => {} }),
       usePluginToast: () => () => null,
+      usePluginAction: () => async () => ({}),
     },
   };
 }
@@ -230,6 +231,20 @@ describe("agent profile", () => {
     expect(html).toContain("Its manager");
     expect(html).toContain("Tasks done this week");
     expect(html).toContain('href="/BAP/agents/ambassador-content-agent/overview?classic=1"');
+  });
+
+  it("has a Can change agents switch: off without the grant, on with it, and locked for anyone but an owner or admin", () => {
+    installBridge({ agent: profile }, "/BAP/team/ambassador-content-agent");
+    expect(render(AgentProfilePage)).not.toContain("Can change agents");
+    installBridge({ agent: { ...profile, access: { canChangeAgents: false, canManage: true } } }, "/BAP/team/ambassador-content-agent");
+    const off = render(AgentProfilePage);
+    expect(off).toContain('aria-label="Permissions"');
+    expect(off).toMatch(/role="switch" aria-checked="false"[^>]*aria-label="Can change agents"/);
+    expect(off).toContain("instructions, skills and settings");
+    installBridge({ agent: { ...profile, access: { canChangeAgents: true, canManage: false } } }, "/BAP/team/ambassador-content-agent");
+    const locked = render(AgentProfilePage);
+    expect(locked).toMatch(/role="switch" aria-checked="true"[^>]*aria-label="Can change agents"[^>]*disabled=""/);
+    expect(locked).toContain("Only company owners and admins can change this");
   });
 
   it("shows the task lists on the Tasks tab", () => {

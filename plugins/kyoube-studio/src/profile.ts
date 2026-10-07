@@ -72,6 +72,8 @@ export interface AgentProfile {
   worksWith: WorkRelation[];
   /** The core pages the profile's tab row links to. */
   links: { instructions: string; skills: string; runs: string; settings: string; classic: string };
+  /** Added by the worker: whether it may change agents, and whether the viewer may switch that. Null when the host would not say. */
+  access?: { canChangeAgents: boolean; canManage: boolean } | null;
 }
 
 export type ProfileResult = AgentProfile | { found: false };

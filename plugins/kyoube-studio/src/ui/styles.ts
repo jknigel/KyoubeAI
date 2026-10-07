@@ -222,6 +222,8 @@ a.ks-now-title:hover { text-decoration: underline; text-underline-offset: 2px; }
 .ks-stats span { font-size: 11.5px; color: var(--muted-foreground, #71717a); }
 .ks-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 14px 16px; }
 .ks-chips span { font-size: 12px; font-weight: 500; padding: 3px 9px; border-radius: 7px; background: var(--muted, #f4f4f5); color: var(--foreground, #18181b); }
+.ks-perm { display: flex; align-items: center; gap: 12px; padding: 11px 10px 11px 16px; }
+.ks-perm .ks-text span { white-space: normal; }
 .ks-about { margin: 0; padding: 14px 16px; font-size: 13px; line-height: 1.5; color: var(--muted-foreground, #71717a); white-space: pre-line; }
 .ks-classic { margin: 0; font-size: 12.5px; }
 .ks-classic a { color: var(--muted-foreground, #71717a); }

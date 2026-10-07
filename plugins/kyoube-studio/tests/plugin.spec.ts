@@ -94,3 +94,54 @@ describe("kyoube.studio worker", () => {
     expect((await harness.getData<TeamSnapshot>("team", { companyId: COMPANY })).total).toBe(3);
   });
 });
+
+describe("an agent's permission to change agents", () => {
+  const CONFIGURE = "agents:configure";
+  const grant = (principalId: string, permissionKey: string, scope: Record<string, unknown> | null = null) =>
+    ({ id: `${principalId}:${permissionKey}`, companyId: COMPANY, principalType: "agent", principalId, permissionKey, scope, grantedByUserId: null, createdAt: at(100), updatedAt: at(100) }) as never;
+  const asUser = (userId: string) => ({ actor: { type: "user" as const, userId }, companyId: COMPANY });
+  const keys = async (harness: Awaited<ReturnType<typeof setup>>["harness"], agentId: string) =>
+    (await harness.ctx.authorization.grants.list({ companyId: COMPANY, principalType: "agent", principalId: agentId })).map((row) => row.permissionKey).sort();
+
+  it("shows on the profile whether the agent holds it, and whether the viewer may change it", async () => {
+    const { harness } = await setup();
+    harness.seed({ principalGrants: [grant("a2", CONFIGURE)] });
+    expect(await harness.getData("agent", { companyId: COMPANY, agentRef: "ai-manager", userId: "owner-1" })).toMatchObject({ access: { canChangeAgents: true, canManage: true } });
+    expect(await harness.getData("agent", { companyId: COMPANY, agentRef: "ambassador-content-agent", userId: "member-1" })).toMatchObject({ access: { canChangeAgents: false, canManage: false } });
+  });
+
+  it("lets an owner switch it on and off, keeping every other grant", async () => {
+    const { harness } = await setup();
+    harness.seed({ principalGrants: [grant("a1", "tasks:assign_scope", { subtreeRootAgentId: "a1" })] });
+    expect(await harness.performAction("agent.change-access", { agentId: "a1", on: true }, asUser("owner-1"))).toEqual({ canChangeAgents: true });
+    expect(await keys(harness, "a1")).toEqual([CONFIGURE, "tasks:assign_scope"]);
+    expect(await harness.performAction("agent.change-access", { agentId: "a1", on: false }, asUser("owner-1"))).toEqual({ canChangeAgents: false });
+    expect(await keys(harness, "a1")).toEqual(["tasks:assign_scope"]);
+  });
+
+  it("takes away a scoped grant of it too when switched off", async () => {
+    const { harness } = await setup();
+    harness.seed({ principalGrants: [grant("a1", CONFIGURE, { agentIds: ["a2"] })] });
+    await harness.performAction("agent.change-access", { agentId: "a1", on: false }, asUser("owner-1"));
+    expect(await keys(harness, "a1")).toEqual([]);
+  });
+
+  it("refuses anyone but a company owner or admin, and agents", async () => {
+    const { harness } = await setup();
+    await expect(harness.performAction("agent.change-access", { agentId: "a1", on: true }, asUser("member-1"))).rejects.toThrow(/owners and admins/);
+    await expect(harness.performAction("agent.change-access", { agentId: "a1", on: true }, { actor: { type: "agent", agentId: "a2" }, companyId: COMPANY })).rejects.toThrow(/owners and admins/);
+    await expect(harness.performAction("agent.change-access", { agentId: "a1", on: true }, { actor: { type: "user", userId: "owner-1" } })).rejects.toThrow(/company/);
+    expect(await keys(harness, "a1")).toEqual([]);
+  });
+
+  it("refuses an agent of another company, and one waiting for approval", async () => {
+    const { harness } = await setup();
+    harness.seed({ agents: [agent("p1", COMPANY, "Pending Hire", "pending_approval")] });
+    await expect(harness.performAction("agent.change-access", { agentId: "x1", on: true }, asUser("owner-1"))).rejects.toThrow(/not found/);
+    await expect(harness.performAction("agent.change-access", { agentId: "p1", on: true }, asUser("owner-1"))).rejects.toThrow(/approved/);
+  });
+
+  it("declares the capabilities it uses", () => {
+    expect(manifest.capabilities).toEqual(expect.arrayContaining(["authorization.grants.read", "authorization.grants.write"]));
+  });
+});

@@ -3,6 +3,7 @@ import { buildHome, summarizeTeam, type AgentLike, type ApprovalLike, type Issue
 import { buildProfile, type CommentLike, type ProfileAgentLike } from "./profile.js";
 
 type Params = Record<string, unknown>;
+type HostGrant = Parameters<PluginContext["authorization"]["grants"]["set"]>[0]["grants"][number];
 
 export interface StudioPluginDeps {
   now?: () => number;
@@ -20,6 +21,24 @@ interface Snapshot {
 const ISSUE_WINDOW = 500;
 /** Company roles that see the Terminal card on the Workspace page (the terminal plugin's default roles). */
 const ADMIN_ROLES = new Set(["owner", "admin"]);
+/**
+ * The core permission an agent needs to change its own or another agent's
+ * instructions, skills and settings. The core UI has no control for it (its
+ * Access page needs an extension KyoubeAI does not ship), so the profile has one.
+ */
+const CHANGE_AGENTS = "agents:configure";
+
+interface MemberLike { principalType: string; principalId: string; status: string; membershipRole: string | null }
+type GrantLike = { permissionKey: string; scope?: Record<string, unknown> | null };
+
+function isUnscoped(grant: GrantLike): boolean {
+  return grant.scope == null || Object.keys(grant.scope).length === 0;
+}
+
+function isCompanyAdmin(members: MemberLike[], userId: string | null): boolean {
+  const me = members.find((member) => member.principalType === "user" && member.principalId === userId && member.status === "active");
+  return me ? ADMIN_ROLES.has(me.membershipRole ?? "") : false;
+}
 
 function companyOf(params: Params): string {
   // The host puts the caller's authorized company in `companyId` and refuses
@@ -64,7 +83,7 @@ export function createStudioPlugin(deps: StudioPluginDeps = {}): PaperclipPlugin
         return buildHome(agents, issues, approvals, now());
       });
 
-      ctx.data.register("agent", async (params) => {
+      const readProfile = async (params: Params) => {
         const companyId = companyOf(params);
         const ref = typeof params.agentRef === "string" ? params.agentRef : "";
         if (!ref) throw new Error("agentRef is required");
@@ -77,6 +96,53 @@ export function createStudioPlugin(deps: StudioPluginDeps = {}): PaperclipPlugin
         // request (one task, one call) rather than cached with the snapshot.
         const comments = await ctx.issues.listComments(first.current.task.id, companyId).catch(() => []);
         return buildProfile(ref, agents as ProfileAgentLike[], issues, comments as unknown as CommentLike[], now());
+      };
+
+      ctx.data.register("agent", async (params) => {
+        const profile = await readProfile(params);
+        if (!profile.found) return profile;
+        const companyId = companyOf(params);
+        const userId = typeof params.userId === "string" ? params.userId : null;
+        // Without it the profile still shows; only the permission panel is left out.
+        const access = await Promise.all([
+          ctx.authorization.grants.list({ companyId, principalType: "agent", principalId: profile.agent.id }),
+          ctx.access.members.list({ companyId }),
+        ]).then(([grants, members]) => ({
+          canChangeAgents: (grants as GrantLike[]).some((grant) => grant.permissionKey === CHANGE_AGENTS && isUnscoped(grant)),
+          // Cosmetic only: the action checks the signed-in person itself.
+          canManage: isCompanyAdmin(members as MemberLike[], userId),
+        }), () => null);
+        return { ...profile, access };
+      });
+
+      ctx.actions.register("agent.change-access", async (params, context) => {
+        // The company and the person come from the host, never from params.
+        const companyId = context.companyId;
+        if (!companyId) throw new Error("This needs a company");
+        const userId = context.actor.type === "user" ? context.actor.userId : null;
+        const members = userId ? await ctx.access.members.list({ companyId }) : [];
+        if (!isCompanyAdmin(members as MemberLike[], userId)) throw new Error("Only company owners and admins can change what an agent may do");
+        const agentId = typeof params.agentId === "string" ? params.agentId : "";
+        const agent = agentId ? await ctx.agents.get(agentId, companyId) : null;
+        if (!agent || agent.status === "terminated") throw new Error("Agent not found");
+        if (agent.status === "pending_approval") throw new Error("Available once the agent is approved");
+        const on = params.on === true;
+        const grants = await ctx.authorization.grants.list({ companyId, principalType: "agent", principalId: agentId });
+        const holds = (grants as GrantLike[]).some((grant) => grant.permissionKey === CHANGE_AGENTS && isUnscoped(grant));
+        const others = (grants as GrantLike[]).filter((grant) => grant.permissionKey !== CHANGE_AGENTS);
+        let next: GrantLike[] | null = null;
+        if (on && !holds) next = [...grants as GrantLike[], { permissionKey: CHANGE_AGENTS, scope: null }];
+        if (!on && others.length < grants.length) next = others;
+        if (next) {
+          await ctx.authorization.grants.set({
+            companyId,
+            principalType: "agent",
+            principalId: agentId,
+            grants: next.map((grant) => ({ permissionKey: grant.permissionKey as HostGrant["permissionKey"], scope: grant.scope ?? null })),
+            grantedByUserId: userId,
+          });
+        }
+        return { canChangeAgents: on };
       });
 
       ctx.data.register("workspace", async (params) => {
@@ -87,8 +153,6 @@ export function createStudioPlugin(deps: StudioPluginDeps = {}): PaperclipPlugin
           ctx.access.members.list({ companyId }).catch(() => []),
         ]);
         const userId = typeof params.userId === "string" ? params.userId : null;
-        const me = (members as Array<{ principalType: string; principalId: string; status: string; membershipRole: string | null }>)
-          .find((member) => member.principalType === "user" && member.principalId === userId && member.status === "active");
         const open = issues.filter((issue) => issue.hiddenAt == null && !["done", "cancelled"].includes(issue.status)).length;
         const people = (members as Array<{ principalType: string; status: string }>).filter((member) => member.principalType === "user" && member.status === "active").length;
         return {
@@ -97,7 +161,7 @@ export function createStudioPlugin(deps: StudioPluginDeps = {}): PaperclipPlugin
           projects: projects.filter((project) => (project as { archivedAt?: unknown }).archivedAt == null).length,
           openTasks: open,
           // Cosmetic only: the Terminal page enforces its own access.
-          isAdmin: me ? ADMIN_ROLES.has(me.membershipRole ?? "") : false,
+          isAdmin: isCompanyAdmin(members as MemberLike[], userId),
         };
       });
     },

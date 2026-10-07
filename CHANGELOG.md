@@ -4,6 +4,24 @@ All notable changes to KyoubeAI are recorded here, in terms of what changed for 
 building on it. The format is loosely [Keep a Changelog](https://keepachangelog.com/); versioning is
 [SemVer](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- A **Can change agents** switch on the agent profile (Studio 0.3.0). It gives or takes away the
+  agent's `agents:configure` grant, which lets the agent change its own and other agents'
+  instructions, skills and settings. Agents asked for this grant, but the core UI had no control for
+  it. Only company owners and admins can flip it.
+- The agent working rules give the company's top agent, the one that reports to nobody,
+  `agents:configure` and `skills:create`, as the core does for a top agent whose role is `ceo`
+  (agent-rules 0.2.0). They are given once, so switching the grant off on the profile sticks.
+
+### Fixed
+
+- Clicking an agent under "Your team right now" on the dashboard opened "Organization not found".
+  The core's Dashboard gives plugin widgets no company prefix, so Studio's Home now adds it to its
+  links itself.
+
 ## 1.4.0 - 2026-10-05
 
 ### Added
