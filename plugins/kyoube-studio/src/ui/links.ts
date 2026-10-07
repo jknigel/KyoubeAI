@@ -58,6 +58,7 @@ export const WORKSPACE_GROUPS: WorkspaceGroup[] = [
   {
     title: "Administration",
     cards: [
+      { id: "notifications", title: "Notifications", description: "Get notified on your phone or computer, and choose what you hear about.", to: "/notifications", icon: "bell", tone: "zinc" },
       { id: "settings", title: "Settings", description: "Company name, defaults, secrets and environments.", to: "/company/settings", icon: "sliders", tone: "zinc" },
       { id: "plugins", title: "Plugins", description: "Installed plugins and their settings.", to: "/company/settings/instance/plugins", icon: "gear", tone: "zinc", adminOnly: true },
       { id: "terminal", title: "Terminal", description: "Sign agent tools in and administer the server.", to: "/terminal", icon: "terminal", tone: "zinc", adminOnly: true },

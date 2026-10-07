@@ -31,6 +31,10 @@ describe("the Workspace page", () => {
     const ids = WORKSPACE_GROUPS.flatMap((group) => group.cards.map((card) => card.id));
     expect(new Set(ids).size).toBe(ids.length);
   });
+
+  it("links the Notifications page (kyoube.notify)", () => {
+    expect(routes).toContain("/notifications");
+  });
 });
 
 describe("sidebar order", () => {
