@@ -13,6 +13,7 @@ import { AiColumnService } from "./decisions/columns.js";
 import { SecretCache } from "./secrets/cache.js";
 import { API_KEY_CONFIG_PATH, ProviderResolver, validateDecisionsConfig } from "./decisions/config.js";
 import { validateConnectionsConfig } from "./connections/config.js";
+import { ConnectionService, type ConnectionServiceDeps } from "./connections/service.js";
 import { guardFrom, guardOption } from "./decisions/guardrail.js";
 import { Guardrail } from "./decisions/guardrail-service.js";
 import { purgeGuardrailHolds } from "./decisions/holds.js";
@@ -40,6 +41,7 @@ export interface AppsPluginDeps {
   createService?: (deps: DataServiceDeps) => DataService;
   createAppService?: (deps: AppServiceDeps) => AppService;
   createDecisionService?: (deps: DecisionServiceDeps) => DecisionService;
+  createConnectionService?: (deps: ConnectionServiceDeps) => ConnectionService;
   /** Whether this instance may manage groups; tests pass a fake, production reads the licence files. */
   licence?: LicenceGate;
   /** Where the kyoube CLI's rules token lives (ruling R18); tests point it at a temporary file. */
@@ -142,6 +144,8 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
   let providers: ProviderResolver | null = null;
   // One secret cache for every secret the plugin reads; never module-level, so each worker setup starts cold.
   let secretCache: SecretCache | null = null;
+  // Every external API call (apps, agents, people) goes through this one service; same closure rule.
+  let connectionService: ConnectionService | null = null;
   let logger: PluginLogger | null = null;
   // The skill import the `skills.install` route runs; lives here for the same
   // reason the services do (`onApiRequest` runs outside `setup`).
@@ -154,6 +158,7 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
     async onConfigChanged(_config, context) {
       // Config is read per call; only the cached key has to go so a rotated key is used at once.
       secretCache?.invalidate(context?.companyId ?? null);
+      connectionService?.invalidate(context?.companyId ?? null);
     },
 
     async onValidateConfig(config) {
@@ -273,6 +278,31 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
         guardAgentAction: guardrail.check,
       });
       apps = appService;
+      // Connections: the same secret cache, the same guard and the same level rules as everything else.
+      connectionService = (deps.createConnectionService ?? ((connectionDeps) => new ConnectionService(connectionDeps)))({
+        pool: dbPool,
+        getConfig: (companyId) => ctx.config.get(companyId),
+        secrets: cache,
+        // Host-side fetch: the core refuses private addresses, never follows redirects and stops at 30 s.
+        fetch: (url, init) => ctx.http.fetch(url, init),
+        levelFor: (companyId, actor) => dataService.levelFor(companyId, actor),
+        resolveUserRole: (companyId, userId, fresh) => (fresh ? roles.resolveFresh(companyId, userId) : roles.resolveRole(companyId, userId)),
+        guardAgentAction: guardrail.check,
+        onActivity: async (event) => {
+          try {
+            await ctx.activity.log({
+              companyId: event.companyId,
+              message: `Kyoube connections: ${event.summary}`,
+              entityType: "kyoube_connection",
+              entityId: event.connection,
+              metadata: { actorKind: event.actor.kind, actorId: event.actor.id, runId: event.actor.runId ?? null },
+            });
+          } catch (error) {
+            // The call already happened; a failed activity log is reported, never thrown.
+            ctx.logger.warn("connections activity log failed", { companyId: event.companyId, error: String(error) });
+          }
+        },
+      });
       // AI columns (docs/decisions.md). DataService gets them late, through attach(), because
       // DecisionService depends on DataService.
       const aiColumns = new AiColumnService({
@@ -549,6 +579,7 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
         decisions = null;
         providers = null;
         secretCache = null;
+        connectionService = null;
         logger = null;
         installSkillsForCompany = null;
         hostMembers = null;
