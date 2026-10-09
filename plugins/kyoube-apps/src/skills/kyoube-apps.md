@@ -26,7 +26,7 @@ or `"companyId"` in every `POST` body.
 | Read an app | `GET /apps/{slug}?version=latest` (or `current`, or a number) | — |
 | Create (draft v1) | `POST /apps` | `manifest`, `source`, `notes?` |
 | Update (new draft) | `POST /apps/{slug}` | `manifest`, `source`, `notes?` |
-| Publish | `POST /apps/{slug}/publish` | `version?` (default: latest draft); a version that adds or changes decision sets needs a person to publish it |
+| Publish | `POST /apps/{slug}/publish` | `version?` (default: latest draft); a version that adds or changes decision sets, or adds or widens a connection, needs a person to publish it |
 | Roll back | `POST /apps/{slug}/rollback` | `version` |
 | Archive | `POST /apps/{slug}/archive` | — |
 
@@ -87,6 +87,114 @@ Rules:
   declare the set) or `not_found` (the row is gone). Show a short message and let the person carry
   on by hand.
 
+## Connections: calling outside services
+
+An app has no network, and must never hold a key. A **connection** is how it reaches a service the
+company already uses (a payments API, a CRM, a weather feed): an admin sets it up once with the
+company's key, and the host makes the call, so the key never reaches the browser or you.
+
+### You cannot set one up: ask a person
+
+You cannot create secrets or connections. When the task needs a service that is not listed, stop and
+ask the user for exactly this:
+
+1. A company admin stores the API key under **Company, then Secrets**.
+2. An instance admin adds the connection under **Settings, then Plugins, then Kyoube Data & Apps**
+   (pick the company), in the "connections" list, with: a `name` (lower-case letters, digits, `-` and
+   `_`, starting with a letter), the base URL (`https://` only, such as `https://api.example.com/v1/`),
+   the auth style (`bearer`, `header` with its header name such as `X-API-Key`, or `basic` where the
+   secret is `user:password`), the secret, and the methods: `read` (GET only) or `read-write`.
+3. Only if you yourself must call it (not just the app): an owner or admin gives you a grant under
+   **Company Settings, then Data access, then Connections**: `read` or `read-write`.
+
+### Find what exists
+
+`GET /connections?companyId=$PAPERCLIP_COMPANY_ID` (tool `connections_list`) returns each connection's
+`name`, `baseUrl`, `auth`, `methods`, `available` and your own `access` (`none`, `read` or
+`read-write`). Never write a manifest for a connection you have not seen listed. `available: false`
+means the connection's secret does not resolve; ask a person to fix it. The secret is never shown.
+
+### Explore with a direct call (when you have a grant)
+
+`POST /connections/{name}/call`, for example:
+
+```sh
+curl -fsS -H "$A" -H 'Content-Type: application/json' -X POST "$K/connections/crm/call" \
+  -d "{\"companyId\":\"$PAPERCLIP_COMPANY_ID\",\"method\":\"GET\",\"path\":\"contacts\",\"query\":{\"limit\":\"5\"}}"
+```
+
+(`$K` and `$A` as in the kyoube-data skill.) The tool is `connections_call`, with `name` where the URL
+has `{name}`. Body fields: `method` (default GET), `path`, `query` (an object of strings), `headers`,
+`body`, plus `issueId` and `confirmationId` for the guardrail. The answer is `{ status, headers, body }`;
+`body` is text, so parse JSON yourself. Look at a real response before you write code that depends on
+its shape.
+
+- `path` is relative to the base URL: write `contacts` or `images:annotate`, not `/contacts` and not a
+  full URL. A leading `/` or `\`, `//`, `..` in any form, non-ASCII characters (percent-encode them), a
+  stray `%` and control characters are refused with `invalid`. Put query values in `query`, not in the path.
+- You may set only these headers: `accept`, `content-type`, `if-match`, `if-none-match`,
+  `idempotency-key`, `x-request-id`. The credential is added for you.
+- `body` is at most 1 MiB; an object or array is sent as JSON. A GET has no body.
+- Every status comes back as it is, including 4xx, 5xx and 3xx (redirects are not followed). A 429
+  arrives with its `retry-after` header. A 204 has an empty `body`.
+- Responses are text only and at most 2 MiB; a larger one fails with `too_large`, and binary content
+  comes back garbled. A whole call may take 25 seconds, then it fails with `timeout`.
+- A `read` grant allows GET only. A call you are not granted fails with `forbidden`.
+- When the company's guardrail is on, your non-GET calls need `issueId` set to `$PAPERCLIP_TASK_ID` and
+  may come back `held`. Handle it as in the kyoube-decisions skill: wait for the person, then send the
+  same call again with `confirmationId`. Reads are never held.
+- Calls are audited (connection, method, path, status, size; never bodies or query values), and your
+  calls also appear in the activity log. Send a person's private data only when the task requires it.
+
+### Use it from an app
+
+Declare each connection in the manifest with the least access the app needs. `read` is the default;
+use `read-write` only for an app that must change something at the other end.
+
+```json
+"connections": [ { "name": "weather", "access": "read" }, { "name": "crm", "access": "read-write" } ]
+```
+
+At most 10 per app. Declaring `read-write` on a connection that only allows `read` fails at publish.
+
+```js
+const ctx = await kyoube.ready();
+const weather = ctx.connections.find((c) => c.name === "weather");   // { name, access, available }
+if (!weather || !weather.available) { showNote("Weather is not set up. Ask a company admin."); return; }
+try {
+  const res = await kyoube.connections.call("weather", { path: "forecast", query: { city: "Oslo" } });
+  if (res.status !== 200) { showNote("The service answered " + res.status); return; }
+  const forecast = JSON.parse(res.body);           // body is always a string
+  render(forecast);
+} catch (err) {
+  showNote(err.message);                           // a kyoube.Error; see the codes below
+}
+```
+
+- The call is `kyoube.connections.call(name, { method?, path?, query?, headers?, body? })` and returns
+  `{ status, headers, body }`, with the same rules as above. A 4xx or 5xx `status` is a normal answer,
+  not a thrown error: check it.
+- Check `ctx.connections[].available` first and hide or explain the feature when it is false.
+- Errors arrive as `kyoube.Error` with `code`: `forbidden` (the connection is not declared, or the
+  declaration, the connection or the viewer's level does not allow the method), `invalid` (bad name,
+  path, header or body), `disabled` (the connection is missing or its secret does not resolve; the host
+  shows one toast per connection), `too_large` (response over 2 MiB), `timeout`, `provider_unavailable`
+  (the service could not be reached) and `limit`. Handle every one with a short message; the rest of
+  the app must keep working.
+- Stay inside 30 connection calls per 10 seconds (they also count in the frame's 60). Fetch once and
+  keep the result; never call inside a loop over rows.
+- The viewer needs data level `read` for a GET and `write` for any other method, and the app never has
+  more than its viewer.
+
+### Publishing changes to connections
+
+A version that adds a connection, or widens one from `read` to `read-write`, needs a person to publish
+it (the publish dialog shows the host, auth style and methods, and the REST body carries
+`connectionsConfirmed: true`). You cannot publish or roll back to such a version. Save the draft with
+`apps_update` and ask the person who started the task to publish it from the Apps page. Removing or
+narrowing connections needs no confirmation. Every connection a version declares must already exist in
+the company's settings, or the publish fails naming the missing ones, so get the connection set up first.
+
 ## Workflow
 
 1. Design or reuse tables with the `kyoube-data` skill (list tables, create tables).
@@ -111,7 +219,7 @@ has happened.
 ## window.kyoube (injected before your code runs)
 
 ```ts
-await kyoube.ready()                       // → { companyId, viewer: { id, name, level }, app: { slug, name, version }, tables }
+await kyoube.ready()                       // → { companyId, viewer: { id, name, level }, app: { slug, name, version }, tables, decisions, connections: [{ name, access, available }] }
 kyoube.data.query(table, { where?, orderBy?, limit?, offset?, fields? })   // → { rows, limit, offset }
 kyoube.data.get(table, id)                 // → row | null
 kyoube.data.count(table, where?)           // → { count }
@@ -121,6 +229,7 @@ kyoube.data.update(table, { ids } | { where }, patch)   // → { affected, rows 
 kyoube.data.delete(table, { ids } | { where })          // → { affected }
 kyoube.ui.toast(title, "info" | "success" | "warn" | "error")
 kyoube.ui.openApp(slug)
+kyoube.connections.call(name, { method?, path?, query?, headers?, body? })   // → { status, headers, body }
 ```
 `where` grammar: `{ field, op, value }` with `eq neq gt gte lt lte in contains starts_with is_null is_not_null`,
 combined with `{ and: [...] }`, `{ or: [...] }`, `{ not: {...} }`. Errors are thrown as `kyoube.Error` with
@@ -191,7 +300,7 @@ kyoube.ready().then(load);
 ## Reporting back
 
 Tell the user the app's slug and link (`/<company>/app-artifact/<slug>`), which version is published and
-which is the latest draft, and which tables it uses.
+which is the latest draft, and which tables it uses, and which connections it declares.
 
 To classify, score or check rows with the company's typed-decision model, see the kyoube-decisions
 skill (`POST /decisions/decide` with `rows`).

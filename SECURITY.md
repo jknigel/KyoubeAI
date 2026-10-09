@@ -337,6 +337,53 @@ Four residuals are known and accepted, documented in full in `docs/apps.md`:
 - **`viewer.name` is always empty in v1** — the host gives an app the viewer's id, not their display
   name (see `docs/apps.md`), so an app cannot greet a viewer by name.
 
+## Connections
+
+Connections (`docs/connections.md`) let a Kyoube App or an agent call an outside service with a key
+the company stores. The plugin worker makes every call; the app's frame keeps `connect-src 'none'`.
+
+- **The key stays in the worker.** It is a company secret an admin picks in the plugin settings. The
+  worker resolves it (cached 60 seconds) and adds it to the outgoing request only. It is never sent
+  to the frame or an agent, never in a response, an error message, the audit or the activity log.
+  Response headers are cut to an allow-list (`content-type`, `content-length`, `etag`,
+  `last-modified`, `location`, `retry-after`, `x-request-id`, `x-ratelimit-*`), so a service that
+  echoes the key or sets a cookie cannot hand it back.
+- **A call cannot be redirected.** The caller cannot change the scheme, host or port. The path is
+  joined to the base URL as text and refused when it holds an absolute URL, a leading slash or
+  backslash, `//`, a dot segment in any form (encoded, double-encoded, full-width, or a server-
+  normalised one such as `..;`), raw non-ASCII characters, a leftover `%` or a control character.
+  The caller may set only six request headers, never `authorization`, `cookie`, `host` or the
+  connection's own header. The core refuses private and reserved addresses, pins the connection to
+  the resolved address and never follows a redirect, so a 3xx is returned as it is. A base URL must
+  be `https`.
+- **Calls run as the caller.** An app's viewer needs data level `read` for a GET and `write` for the
+  rest, the manifest must declare the connection, and the connection's own methods apply; each can
+  only narrow. Groups decide who opens the app. An agent needs a per-connection grant from an owner
+  or admin (read fresh by role, default `none`), a grant never widens the connection, and the
+  guardrail can hold an agent's non-GET call for a person's confirmation. The confirmation covers
+  connection, method, path, query and body, so it cannot be swapped for another call.
+- **A person decides what an app may reach.** A version that adds a connection, or widens one from
+  `read` to `read-write`, must be published by a person who sees the host, auth style and methods and
+  confirms (`connectionsConfirmed`). Agents cannot publish or roll back to such a version.
+- **Every call is audited without contents.** One `kyoube_meta.audit` row per call: connection,
+  method, path without the query, status, duration, response size and how it was called. Never
+  request or response bodies, query values, headers or the secret. Agent calls also go to the
+  activity log. If the audit row for a completed write cannot be saved, the response is still
+  returned and the failure is logged on the server; a GET fails instead, so a read is not released
+  unrecorded.
+- **Limits.** 20 connections per company, 10 per app, 1 MiB request body, 2 MiB text response, 25
+  seconds per call, 30 calls per 10 seconds per running app (inside the 60-request budget).
+- **Residual: data can leave the company.** A published app can send data its viewer can read to a
+  service it declared, and an agent with a grant can do the same within its grant. A read-only
+  connection limits changes at the other end, not what a GET's query string can carry. The controls
+  are the publish confirmation, explicit agent grants, the guardrail and the audit. Give a connection
+  the narrowest methods and a key scoped at the service to what the apps need.
+- **Residual: the service sees the company's key and the data sent.** Anything a service does with a
+  request is outside KyoubeAI.
+- **Residual: text only.** Binary responses are not supported and come back garbled or `too_large`.
+  A service that returns secrets in a body can show them to the caller that asked, which is why
+  access is narrow.
+
 ## Files
 
 The **Files** tab on a project page lets company members browse and change the project's working
