@@ -56,17 +56,23 @@ export function GroupsSettingsPage({ context }: PluginCompanySettingsPageProps) 
     const names = [...opened.agents.map((id) => nameOf("agents", id)), ...opened.apps.map((id) => nameOf("apps", id))];
     return names.length === 0 || window.confirm(`This makes ${names.join(", ")} usable by everyone. Continue?`);
   };
-  const act = (promise: Promise<unknown>, title: string) => promise.then(() => { toast({ title, tone: "success" }); return reload(); }).catch((err) => toast({ title: errorText(err), tone: "error" }));
+  /** Resolves true once the change succeeded, false (after an error toast) when it was refused. */
+  const act = (promise: Promise<unknown>, title: string): Promise<boolean> =>
+    promise.then(
+      async () => { toast({ title, tone: "success" }); await reload(); return true; },
+      (err) => { toast({ title: errorText(err), tone: "error" }); return false; },
+    );
 
   const onSave = () => {
     if (!draft) return;
     if (draft.id && !confirmOpened(openedBy(groups, { groupId: draft.id, nextAgents: draft.agents, nextApps: draft.apps }))) return;
     const body = { id: draft.id, name: draft.name.trim(), dataLevel: draft.level || null, members: draft.members, agents: draft.agents, apps: draft.apps };
-    void act(save({ group: body }), "Group saved").then(() => setDraft(null));
+    // A refused save keeps the editor open with the person's edits, so nothing they typed is lost.
+    void act(save({ group: body }), "Group saved").then((saved) => { if (saved) setDraft(null); });
   };
   const onDelete = (group: Group) => {
     if (!confirmOpened(openedBy(groups, { deleteId: group.id }))) return;
-    void act(remove({ id: group.id }), "Group deleted").then(() => setDraft((current) => (current?.id === group.id ? null : current)));
+    void act(remove({ id: group.id }), "Group deleted").then((deleted) => { if (deleted) setDraft((current) => (current?.id === group.id ? null : current)); });
   };
 
   return (

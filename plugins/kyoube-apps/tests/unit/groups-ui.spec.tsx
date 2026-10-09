@@ -17,15 +17,21 @@ const list = (unlocked: boolean) => ({
 const options = { members: [{ id: "u2", role: "operator" }], agents: [], apps: [{ id: "app1", name: "Contacts", icon: "C" }] };
 
 let calls: Array<[string, unknown]>;
+let toasts: Array<{ title: string; tone: string }>;
+/** When set, `groups.save` is refused with this error. */
+let saveError: Error | null;
 function installBridge(unlocked: boolean) {
   calls = [];
+  toasts = [];
+  saveError = null;
   (globalThis as BridgeGlobal).__paperclipPluginBridge__ = {
     sdkUi: {
-      usePluginToast: () => () => null,
+      usePluginToast: () => (toast: { title: string; tone: string }) => { toasts.push(toast); return null; },
       usePluginAction: (key: string) => async (params: unknown) => {
         calls.push([key, params]);
         if (key === "groups.list") return list(unlocked);
         if (key === "groups.options") return options;
+        if (key === "groups.save" && saveError) throw saveError;
         return null;
       },
     },
@@ -72,6 +78,34 @@ describe("GroupsSettingsPage", () => {
     confirm.mockReturnValue(true);
     await act(async () => buttonNamed("Delete").click());
     expect(calls).toContainEqual(["groups.delete", { id: "g1" }]);
+  });
+
+  it("keeps the editor open with the person's edits when a save is refused, and closes it once a save succeeds", async () => {
+    installBridge(true);
+    await act(async () => root.render(createElement(GroupsSettingsPage, { context })));
+    await act(async () => buttonNamed("Sales").click());
+    const name = () => container.querySelector<HTMLInputElement>("input[maxlength='80']");
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(name()!, "Sales EMEA");
+      name()!.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const level = container.querySelector<HTMLSelectElement>("select")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(level, "write");
+      level.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    saveError = new Error("a group named Sales EMEA already exists");
+    await act(async () => buttonNamed("Save").click());
+    expect(calls).toContainEqual(["groups.save", { group: { id: "g1", name: "Sales EMEA", dataLevel: "write", members: ["u2"], agents: [], apps: ["app1"] } }]);
+    expect(toasts.at(-1)).toMatchObject({ tone: "error" });
+    expect(name()?.value).toBe("Sales EMEA");
+    expect(container.querySelector<HTMLSelectElement>("select")?.value).toBe("write");
+
+    saveError = null;
+    await act(async () => buttonNamed("Save").click());
+    expect(toasts.at(-1)).toEqual({ title: "Group saved", tone: "success" });
+    expect(name()).toBeNull();
   });
 });
 
