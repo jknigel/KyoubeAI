@@ -152,7 +152,10 @@ running and syncs only user groups each minute, so adding or deleting a group st
 - `docker compose exec app kyoube agent-rules --once` runs a pass now and prints every message.
 - The group routes answer only the agent rules loop, which proves itself with the rules token
   (`/kyoubeai/kyoube/rules-token`, see [agent-rules.md](agent-rules.md)), or a company owner or admin.
-  The board key's user does not have to be a member of each company. If `kyoube doctor` says a plugin
-  refused the kyoube CLI in a company, check that the file exists and that the `node` user can read it.
+  The board key's user must be a member of each company, in any role: the core refuses the key in a
+  company it does not belong to, before any plugin runs. The rules token only lets that member pass the
+  owner-or-admin check without being an owner or admin. If `kyoube doctor` says the board key's user
+  does not have access to a company, add that user to it as a member. If it says a plugin refused the
+  kyoube CLI, check that the token file exists and that the `node` user can read it.
 - A restricted person who can still assign an agent: wait a minute, then check the pass report for
   "has a custom assignment grant" or a skipped agent.

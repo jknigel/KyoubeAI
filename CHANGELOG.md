@@ -28,7 +28,8 @@ building on it. The format is loosely [Keep a Changelog](https://keepachangelog.
 - The agent rules routes (`kyoube.agent-rules` reconcile, revert and groups apply) and the
   `kyoube.apps` group sync routes now answer only the `kyoube agent-rules` loop or a company owner or
   admin; before, any signed-in person passed. The loop proves itself with a rules token it creates in
-  `/kyoubeai/kyoube/rules-token` (mode 600) and sends in each request body.
+  `/kyoubeai/kyoube/rules-token` (mode 600) and sends in each request body. The board key's user must be a member (any role) of each company for the
+  rules and group sync to run there; the core refuses the key otherwise.
 - With `KYOUBE_AGENT_RULES=off`, `kyoube agent-rules --watch` keeps running and syncs only user groups
   each minute, instead of exiting; `kyoube doctor` shows the sync on its own `user groups` line.
 

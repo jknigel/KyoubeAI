@@ -3,7 +3,7 @@ import type { AgentRef, GuardReport, GuardRevertReport, InstructionsBundle, Rule
 import { GROUP_ROUTES, GUARD_PLUGIN_ROUTES } from "../src/agent-rules/api.js";
 import { RULES_BLOCK } from "../src/agent-rules/block.js";
 import type { Governance } from "../src/agent-rules/governance.js";
-import { applyPass, groupsPass, revertPass, syncReportError } from "../src/agent-rules/pass.js";
+import { applyPass, describeError, groupsPass, revertPass, syncReportError } from "../src/agent-rules/pass.js";
 import { failureLines } from "../src/agent-rules/report.js";
 import { EMPTY_STATE } from "../src/agent-rules/state.js";
 import { CoreApiError } from "../src/core-api.js";
@@ -297,6 +297,14 @@ describe("group step", () => {
     expect(api.calls.some((call) => call.startsWith("groups "))).toBe(false);
     expect(api.syncReports).toEqual([]);
     expect(failureLines(report)[0]).toMatch(/^kyoube: agent rules: Acme: guard failed: the plugin refused the kyoube CLI in "Acme"/);
+  });
+
+  it("tells the operator to add the board key's user when the core refuses the company", () => {
+    const refusal = new CoreApiError(403, { error: "User does not have access to this company" }, "User does not have access to this company", "POST /api/plugins/kyoube.agent-rules/api/reconcile");
+    const message = describeError(refusal, "Acme");
+    expect(message).toContain('add the board key\'s user to "Acme" as a member (any role)');
+    expect(message).not.toContain("rules token file");
+    expect(describeError(new CoreApiError(403, { error: FORBIDDEN }, FORBIDDEN, "POST /api/plugins/kyoube.agent-rules/api/reconcile"), "Acme")).toContain("rules token file");
   });
 
   it("names the company on a refused revert too", async () => {
