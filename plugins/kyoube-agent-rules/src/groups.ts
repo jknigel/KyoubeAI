@@ -61,8 +61,10 @@ export function planPerson(input: { role: string | null; original: Grant | null;
   const live = new Set(input.liveAgentIds);
   const restricted = input.access.filter((entry) => live.has(entry.agentId));
   if (isManagerRole(input.role) || restricted.length === 0) return input.original;
+  // No row (viewers): never given one. The core refuses every non-GET request from a viewer, so a
+  // grant could not let them assign or chat anyway (ruling R19).
+  if (input.original === null) return null;
   const allowed = restricted.filter((entry) => entry.allowedUserIds.includes(input.userId)).map((entry) => entry.agentId);
-  if (input.original === null) return allowed.length > 0 ? scopedTo(allowed) : null;
   if (!isUnscoped(input.original)) return "custom";
   const forbidden = new Set(restricted.map((entry) => entry.agentId).filter((id) => !allowed.includes(id)));
   return scopedTo(input.liveAgentIds.filter((id) => !forbidden.has(id)));

@@ -32,7 +32,7 @@ export function DataAccessSettingsPage({ context }: PluginCompanySettingsPagePro
   return (
     <div className="flex flex-col gap-4 p-4 text-sm">
       <h1 className="text-base font-semibold">Data access</h1>
-      <p className="text-foreground/70">Levels: <code>none</code> &lt; <code>read</code> &lt; <code>write</code> &lt; <code>schema</code>. People get their level from their company role (viewer → read, operator → write, owner/admin → schema), or from their groups when a group sets a level — the highest group level wins. Owners and admins always have schema. Agents get an explicit level or the company default.</p>
+      <p className="text-foreground/70">Levels: <code>none</code> &lt; <code>read</code> &lt; <code>write</code> &lt; <code>schema</code>. People get their level from their company role (viewer → read, operator → write, owner/admin → schema), or from their groups when a group sets a level — the highest group level wins. Groups never raise a viewer, whom the core keeps read-only. Owners and admins always have schema. Agents get an explicit level or the company default.</p>
       {error && <div className="text-red-600">{error}</div>}
       {data && (
         <>

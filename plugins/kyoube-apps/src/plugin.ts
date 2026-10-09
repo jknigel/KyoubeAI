@@ -21,7 +21,7 @@ import { DataError } from "./data/errors.js";
 import { parseLevel, type DataActor } from "./data/permissions.js";
 import { DataService, type DataServiceDeps, type MutationEvent } from "./data/service.js";
 import { GroupService } from "./groups/service.js";
-import { isManagerRole } from "./groups/levels.js";
+import { levelSource } from "./groups/levels.js";
 import { fileLicenceGate, type LicenceGate } from "./groups/licence.js";
 import { runMetaMigrations } from "./db/migrate.js";
 import { createPool as defaultCreatePool } from "./db/pool.js";
@@ -359,8 +359,7 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
         return Promise.all(members.map(async (m) => {
           const level = await dataService.levelFor(c, { kind: "user", id: m.principalId, runId: null });
           const levelled = all.groups.filter((g) => g.dataLevel && g.members.includes(m.principalId)).map((g) => g.name);
-          const exempt = isManagerRole(m.membershipRole);
-          return { userId: m.principalId, role: m.membershipRole, level, source: !exempt && levelled.length ? `group: ${levelled.join(", ")}` : `role: ${m.membershipRole ?? "none"}` };
+          return { userId: m.principalId, role: m.membershipRole, level, source: levelSource(m.membershipRole, levelled) };
         }));
       });
       // ---- managed skills ----

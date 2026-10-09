@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { highestLevel, isManagerRole, parseGroupLevel } from "../../src/groups/levels.js";
+import { highestLevel, isManagerRole, isViewerRole, levelSource, parseGroupLevel } from "../../src/groups/levels.js";
 
 describe("group levels", () => {
   it("parses the three group levels and nothing else", () => {
@@ -14,6 +14,20 @@ describe("group levels", () => {
     expect(highestLevel(["read"])).toBe("read");
     expect(highestLevel(["write", "read", "schema"])).toBe("schema");
     expect(highestLevel(["read", "write"])).toBe("write");
+  });
+  it("names where a person's level comes from; a viewer always shows their role (R19)", () => {
+    expect(levelSource("viewer", ["Support"])).toBe("role: viewer (groups cannot raise a viewer)");
+    expect(levelSource("Viewer", [])).toBe("role: viewer (groups cannot raise a viewer)");
+    expect(levelSource("operator", ["Sales", "Support"])).toBe("group: Sales, Support");
+    expect(levelSource("operator", [])).toBe("role: operator");
+    expect(levelSource("admin", ["Sales"])).toBe("role: admin");
+    expect(levelSource(null, [])).toBe("role: none");
+  });
+  it("recognises the viewer role in any case", () => {
+    expect(isViewerRole("viewer")).toBe(true);
+    expect(isViewerRole("VIEWER")).toBe(true);
+    expect(isViewerRole("operator")).toBe(false);
+    expect(isViewerRole(undefined)).toBe(false);
   });
   it("treats owner and admin as managers", () => {
     expect(isManagerRole("owner")).toBe(true);

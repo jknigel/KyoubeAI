@@ -15,9 +15,10 @@ describe("planPerson", () => {
   it("never writes an empty scope", () => {
     expect(planPerson({ role: "operator", original: BROAD, liveAgentIds: ["a2"], access: ACCESS, userId: "u-out" })).toEqual(scoped([NO_AGENT]));
   });
-  it("gives a viewer only their own group agents, and nothing when they have none", () => {
-    expect(planPerson({ role: "viewer", original: null, liveAgentIds: LIVE, access: ACCESS, userId: "u-in" })).toEqual(scoped(["a1"]));
+  it("never gives a person without a row (a viewer) one, even in a group with agents (R19)", () => {
+    expect(planPerson({ role: "viewer", original: null, liveAgentIds: LIVE, access: ACCESS, userId: "u-in" })).toBeNull();
     expect(planPerson({ role: "viewer", original: null, liveAgentIds: LIVE, access: ACCESS, userId: "u-out" })).toBeNull();
+    expect(planPerson({ role: "operator", original: null, liveAgentIds: LIVE, access: ACCESS, userId: "u-in" })).toBeNull();
   });
   it("restores the original for owners, admins, and when no agent is restricted", () => {
     expect(planPerson({ role: "admin", original: BROAD, liveAgentIds: LIVE, access: ACCESS, userId: "u-out" })).toEqual(BROAD);
@@ -89,6 +90,25 @@ describe("applyGroups", () => {
     expect(report.protected.sort()).toEqual(["a1", "a2"]);
     expect(fake.record.required.sort()).toEqual(["a1", "a2"]);
     expect(fake.record.people["u-out"]).toEqual({ original: BROAD, applied: scoped(["a3", "boss"]) });
+  });
+
+  it("gives a viewer in a group no grant and writes nothing for them (R19)", async () => {
+    const fake = core();
+    const withViewer = [{ agentId: "a1", allowedUserIds: ["u-in", "v"] }, { agentId: "a2", allowedUserIds: ["v"] }];
+    const report = await applyGroups(fake, C, withViewer);
+    expect(fake.userGrants.get("v")).toBeUndefined();
+    expect(fake.writes).not.toContain("grants v");
+    expect(fake.record.people.v).toBeUndefined();
+    expect(report.people).not.toContain("v");
+  });
+
+  it("takes back a scoped grant an earlier version gave a viewer", async () => {
+    const fake = core();
+    fake.userGrants.set("v", [scoped(["a1"])]);
+    fake.record = { ...structuredClone(EMPTY_GROUPS_RECORD), people: { v: { original: null, applied: scoped(["a1"]) } } };
+    await applyGroups(fake, C, [{ agentId: "a1", allowedUserIds: ["v"] }]);
+    expect(fake.userGrants.get("v")).toEqual([]);
+    expect(fake.record.people.v).toBeUndefined();
   });
 
   it("is idempotent", async () => {

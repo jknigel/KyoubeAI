@@ -6,8 +6,8 @@ import type { GroupLevel } from "../../src/groups/levels.js";
 import { createTestDatabase } from "./setup.js";
 
 const C = "55555555-5555-4555-8555-555555555555";
-const ROLES: Record<string, string> = { owner: "owner", admin: "admin", op: "operator", viewer: "viewer", lowered: "operator", multi: "viewer" };
-const LEVELS: Record<string, GroupLevel[]> = { viewer: ["write"], lowered: ["read"], multi: ["read", "schema", "write"], owner: ["read"], gone: ["schema"] };
+const ROLES: Record<string, string> = { owner: "owner", admin: "admin", op: "operator", viewer: "viewer", lowered: "operator", raised: "operator", multi: "viewer", "Viewer-cased": "Viewer" };
+const LEVELS: Record<string, GroupLevel[]> = { viewer: ["write"], lowered: ["read"], raised: ["read", "schema"], multi: ["read", "schema", "write"], "Viewer-cased": ["schema"], owner: ["read"], gone: ["schema"] };
 const user = (id: string) => ({ kind: "user" as const, id, runId: null });
 let db: Awaited<ReturnType<typeof createTestDatabase>>;
 let data: DataService;
@@ -24,10 +24,14 @@ describe("levelFor with groups", () => {
   it("uses the role when the person is in no levelled group", async () => {
     expect(await data.levelFor(C, user("op"))).toBe("write");
   });
-  it("raises and lowers by the highest group level", async () => {
-    expect(await data.levelFor(C, user("viewer"))).toBe("write");
+  it("lowers an operator to the highest of their group levels", async () => {
     expect(await data.levelFor(C, user("lowered"))).toBe("read");
-    expect(await data.levelFor(C, user("multi"))).toBe("schema");
+    expect(await data.levelFor(C, user("raised"))).toBe("schema");
+  });
+  it("never raises a viewer above read, whatever their groups say (R19: the core refuses a viewer's writes)", async () => {
+    expect(await data.levelFor(C, user("viewer"))).toBe("read");
+    expect(await data.levelFor(C, user("multi"))).toBe("read");
+    expect(await data.levelFor(C, user("Viewer-cased"))).toBe("read");
   });
   it("never restricts owners and admins", async () => {
     expect(await data.levelFor(C, user("owner"))).toBe("schema");
