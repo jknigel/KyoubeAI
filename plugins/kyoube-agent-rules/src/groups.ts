@@ -70,12 +70,15 @@ export function planPerson(input: { role: string | null; original: Grant | null;
 
 export async function applyGroups(port: GroupsPort, companyId: string, access: AgentAccess[]): Promise<GroupsReport> {
   const report: GroupsReport = { protected: [], unprotected: [], people: [], skipped: [], failures: [] };
+  let record = await port.readGroupsRecord(companyId);
+  // No groups now and nothing left from earlier ones to undo: a company without groups costs one
+  // read of the record per pass, and no other host call.
+  if (access.length === 0 && record.protected.length === 0 && record.required.length === 0 && Object.keys(record.people).length === 0) return report;
   const agents = await port.listAgents(companyId);
   const live = agents.filter((row) => row.status !== "terminated");
   const liveIds = live.map((row) => row.id);
   const managers = managerIds(agents);
   const required = sorted(access.map((entry) => entry.agentId).filter((id) => liveIds.includes(id)));
-  let record = await port.readGroupsRecord(companyId);
 
   // Write-ahead, as in guard.ts: the record names a change before the change is made.
   const remember = async (id: string, next: GroupsRecord): Promise<boolean> => {

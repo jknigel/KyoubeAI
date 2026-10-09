@@ -268,7 +268,7 @@ describe("kyoube.agent-rules groups routes", () => {
 
   it("answers 500 with the reason when the host refuses", async () => {
     const plugin = await started(quietPort(), quietGroupsPort({ listAgents: async () => { throw new Error("boom"); } }));
-    const response = await plugin.definition.onApiRequest!(request("groups.apply", "user", COMPANY, { agents: [] }));
+    const response = await plugin.definition.onApiRequest!(request("groups.apply", "user", COMPANY, { agents: [{ agentId: "a1", allowedUserIds: [] }] }));
     expect(response).toMatchObject({ status: 500, body: { error: "groups.apply failed: boom" } });
   });
 

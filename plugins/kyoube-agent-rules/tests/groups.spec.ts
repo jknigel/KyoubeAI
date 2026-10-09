@@ -253,6 +253,56 @@ describe("applyGroups after an interrupted grant write", () => {
   });
 });
 
+describe("applyGroups without groups (R17)", () => {
+  /** Records every port call the fake answers. */
+  function counted(fake: FakeCore) {
+    const calls: string[] = [];
+    const port = new Proxy(fake, {
+      get(target, key, receiver) {
+        const value = Reflect.get(target, key, receiver);
+        if (typeof value !== "function") return value;
+        return (...args: unknown[]) => { calls.push(String(key)); return value.apply(target, args); };
+      },
+    });
+    return { calls, port };
+  }
+
+  it("makes no host call but reading its record when no agent is restricted and nothing is left to undo", async () => {
+    const { calls, port } = counted(core());
+    expect(await applyGroups(port, C, [])).toEqual({ protected: [], unprotected: [], people: [], skipped: [], failures: [] });
+    expect(calls).toEqual(["readGroupsRecord"]);
+  });
+
+  it("still undoes what an earlier group changed once the last group is gone", async () => {
+    const fake = core();
+    await applyGroups(fake, C, ACCESS);
+    const { calls, port } = counted(fake);
+    const report = await applyGroups(port, C, []);
+    expect(calls).toContain("listAgents");
+    expect(report.unprotected.sort()).toEqual(["a1", "a2"]);
+    expect(fake.userGrants.get("u-out")).toEqual([CHECKOUTS, BROAD]);
+    expect(fake.record).toEqual(EMPTY_GROUPS_RECORD);
+    // And from then on, nothing more.
+    const again = counted(fake);
+    await applyGroups(again.port, C, []);
+    expect(again.calls).toEqual(["readGroupsRecord"]);
+  });
+
+  for (const [what, record] of [
+    ["protected agents", { ...EMPTY_GROUPS_RECORD, protected: ["a1"] }],
+    ["required agents", { ...EMPTY_GROUPS_RECORD, required: ["a1"] }],
+    ["people", { ...EMPTY_GROUPS_RECORD, people: { "u-out": { original: BROAD, applied: scoped(["a3"]) } } }],
+  ] as const) {
+    it(`goes through the undo path when the record still names ${what}`, async () => {
+      const fake = core();
+      fake.record = structuredClone(record) as GroupsRecord;
+      const { calls, port } = counted(fake);
+      await applyGroups(port, C, []);
+      expect(calls).toContain("listAgents");
+    });
+  }
+});
+
 describe("parseAccess", () => {
   it("accepts the route body and rejects anything else", () => {
     expect(parseAccess([{ agentId: "a1", allowedUserIds: ["u"] }])).toEqual([{ agentId: "a1", allowedUserIds: ["u"] }]);
