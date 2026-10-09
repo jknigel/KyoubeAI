@@ -26,7 +26,7 @@ import { DataError } from "./data/errors.js";
 import { parseLevel, type DataActor } from "./data/permissions.js";
 import { DataService, type DataServiceDeps, type MutationEvent } from "./data/service.js";
 import { GroupService } from "./groups/service.js";
-import { levelSource } from "./groups/levels.js";
+import { isManagerRole, levelSource } from "./groups/levels.js";
 import { fileLicenceGate, type LicenceGate } from "./groups/licence.js";
 import { runMetaMigrations } from "./db/migrate.js";
 import { createPool as defaultCreatePool } from "./db/pool.js";
@@ -475,6 +475,38 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
       // code through the bridge; `parseDecideInput` and AppService check them before anything runs.
       action("apps.decide", (c, a, p) => appService.runtimeDecide(c, a, str(p, "slug"), str(p, "set"), parseDecideInput(p.input)));
       action("apps.connection_call", (c, a, p) => appService.runtimeConnection(c, a, str(p, "slug"), str(p, "name"), p.request));
+      // The connections each published app's current version declares, for the viewer's own app list.
+      const declaredConnections = async (c: string, a: DataActor): Promise<Array<{ slug: string; name: string; connections: Array<{ name: string; access: string }> }>> => {
+        const list = await appService.list(c, a);
+        const rows = await Promise.all(list.filter((app) => app.status === "published" && app.currentVersion !== null).map(async (app) => {
+          try {
+            const { version } = await appService.get(c, a, app.slug, "current");
+            const declared = (version?.manifest.connections ?? []).map((entry) => ({ name: entry.name, access: entry.access }));
+            return { slug: app.slug, name: app.name, connections: declared };
+          } catch {
+            return { slug: app.slug, name: app.name, connections: [] };
+          }
+        }));
+        return rows.filter((row) => row.connections.length > 0);
+      };
+      action("apps.uses", async (c, a) => Object.fromEntries((await declaredConnections(c, a)).map((row) => [row.slug, row.connections])));
+      // ---- connections admin (owners and admins, by role, fresh) ----
+      const assertConnectionsAdmin = async (c: string, a: DataActor) => {
+        if (a.kind !== "user" || !a.id || !isManagerRole(await roles.resolveFresh(c, a.id))) throw new DataError("forbidden", "only company owners and admins manage connections");
+      };
+      action("connections.status", async (c, a) => {
+        await assertConnectionsAdmin(c, a);
+        const [status, declared] = await Promise.all([requireConnections().status(c), declaredConnections(c, a)]);
+        const configured = new Set(status.connections.map((row) => row.name));
+        const usedBy = (name: string) => declared.filter((row) => row.connections.some((entry) => entry.name === name)).map((row) => ({ slug: row.slug, name: row.name, access: row.connections.find((entry) => entry.name === name)!.access }));
+        const missing = [...new Set(declared.flatMap((row) => row.connections.map((entry) => entry.name)))].filter((name) => !configured.has(name)).sort().map((name) => ({ name, apps: usedBy(name) }));
+        return { connections: status.connections.map((row) => ({ ...row, apps: usedBy(row.name) })), problems: status.problems, missing };
+      });
+      action("connections.grants", async (c, a) => {
+        const [grants, agents] = await Promise.all([requireConnections().listGrants(c, a), ctx.agents.list({ companyId: c })]);
+        return { grants, agents: agents.filter((agent) => agent.status !== "terminated").map((agent) => ({ id: agent.id, name: agent.name })) };
+      });
+      action("connections.set_grant", (c, a, p) => requireConnections().setGrant(c, a, str(p, "agentId"), str(p, "connection"), p.access as never));
       action("apps.decision_outcome", (c, a, p) => appService.decideOutcome(c, a, str(p, "slug"), str(p, "decisionId"), str(p, "question"), p.value));
       action("apps.publish_preview", (c, a, p) => appService.publishPreview(c, a, str(p, "slug"), p.version === undefined || p.version === null || p.version === "latest" ? "latest" : versionNumber(p)));
 
