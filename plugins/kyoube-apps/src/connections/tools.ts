@@ -16,7 +16,7 @@ export const CONNECTION_TOOL_DEFINITIONS: ToolDefinition<ConnectionService>[] = 
     schema: z.object({
       name,
       method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]).optional(),
-      path: z.string().optional().describe("path under the connection's base URL, e.g. /v1/items"),
+      path: z.string().optional().describe("relative path under the connection's base URL, no leading slash, e.g. v1/items"),
       query: z.record(z.string(), z.string()).optional(),
       headers: z.record(z.string(), z.string()).optional(),
       body: z.unknown().optional().describe("request body; objects are sent as JSON"),

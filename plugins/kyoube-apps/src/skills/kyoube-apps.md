@@ -181,7 +181,7 @@ try {
   shows one toast per connection), `too_large` (response over 2 MiB), `timeout`, `provider_unavailable`
   (the service could not be reached) and `limit`. Handle every one with a short message; the rest of
   the app must keep working.
-- Stay inside 30 connection calls per 10 seconds (they also count in the frame's 60). Fetch once and
+- Stay inside 30 connection calls per 10 seconds (they also count in the frame's 60); an app that keeps hitting a ceiling for three windows running is stopped. Fetch once and
   keep the result; never call inside a loop over rows.
 - The viewer needs data level `read` for a GET and `write` for any other method, and the app never has
   more than its viewer.

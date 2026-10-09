@@ -27,6 +27,12 @@ describe("connection tools", () => {
     expect(names).toEqual(expect.arrayContaining(["connections_list", "connections_call"]));
   });
 
+  it("never shows a path example with a leading slash (the request builder refuses one)", () => {
+    const text = JSON.stringify(connectionToolDeclarations());
+    expect(text).toContain("no leading slash");
+    expect(text).not.toMatch(/e\.g\.\s*\//);
+  });
+
   it("lists and calls with the run context's agent, never one from params", async () => {
     const { harness, calls } = setup();
     expect((await harness.executeTool("connections_list", {}, RUN)).error).toBeUndefined();

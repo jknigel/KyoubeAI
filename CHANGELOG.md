@@ -24,8 +24,10 @@ building on it. The format is loosely [Keep a Changelog](https://keepachangelog.
   [docs/connections.md](docs/connections.md).
 - The Kyoube Apps and Kyoube Data agent skills teach agents how connections are set up and used, and
   `docs/apps.md` has a Connections section with a complete example app.
-- A migration adds one empty table (`connection_grants`). Nothing changes until an instance admin
-  adds a connection.
+- Kyoube Data & Apps (`kyoube.apps`) is 0.11.0; a migration adds one empty table
+  (`connection_grants`), and the bootstrap reinstalls the plugins on update to pick it up
+  (`docs/architecture.md`, "Plugin hot reload"). Nothing changes until an instance admin adds a
+  connection.
 
 ## 1.7.0 - 2026-10-09
 
