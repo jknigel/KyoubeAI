@@ -274,4 +274,33 @@ export const PATCHES = [
       "} } } },",
     expect: 1,
   },
+  // ── User groups: chat honours assignment rules (standing: never deleted) ──
+  // The core's Agent Chat route opens a conversation issue assigned to the agent
+  // without the assignment check every other assigning route runs, and messages
+  // in that conversation are checked only against its owner. User groups
+  // (docs/groups.md) restrict who may give work to a group's agents by marking
+  // them protected, so both paths ask the core's own assertCanAssignTasks — but
+  // only for a protected agent, so chat with any other agent is unchanged.
+  // When either anchor stops matching, redo the entry for the new core.
+  {
+    id: "groups-chat-open-assign-check",
+    title: "user groups: opening a chat with a protected agent needs the right to assign it",
+    standing: "KyoubeAI user groups: agent chat honours assignment rules",
+    files: ["server/dist/routes/issues.js"],
+    // `const agent = resolved.agent;` occurs once in issues.js (2026.1005.0), in this route.
+    pattern: /(\n( *)const agent = resolved\.agent;)(?!\n *\/\* kyoube-groups-chat)/g,
+    replacement:
+      '$1\n$2/* kyoube-groups-chat (docs/groups.md) */ if (agent.permissions?.authorizationPolicy?.assignmentPolicy?.mode === "protected") await assertCanAssignTasks(req, companyId, { assigneeAgentId: agent.id });',
+    expect: 1,
+  },
+  {
+    id: "groups-chat-message-assign-check",
+    title: "user groups: a message in a protected agent's chat needs the right to assign it",
+    standing: "KyoubeAI user groups: agent chat honours assignment rules",
+    files: ["server/dist/routes/issues.js"],
+    pattern: /(\n( *)throw forbidden\("Only the conversation owner can send messages or start a new session"\);)(?!\n *\/\* kyoube-groups-chat)/g,
+    replacement:
+      '$1\n$2/* kyoube-groups-chat (docs/groups.md) */ { const kyoubeChatAgent = await agentsSvc.getById(issue.conversationAgentId); if (kyoubeChatAgent?.permissions?.authorizationPolicy?.assignmentPolicy?.mode === "protected") await assertCanAssignTasks(req, issue.companyId, { assigneeAgentId: issue.conversationAgentId }); }',
+    expect: 1,
+  },
 ];
