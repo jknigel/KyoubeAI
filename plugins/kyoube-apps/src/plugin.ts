@@ -12,6 +12,8 @@ import { rulesTokenMatches, RULES_TOKEN_PATH } from "./groups/rules-token.js";
 import { AiColumnService } from "./decisions/columns.js";
 import { SecretCache } from "./secrets/cache.js";
 import { API_KEY_CONFIG_PATH, ProviderResolver, validateDecisionsConfig } from "./decisions/config.js";
+import { handleConnectionsApiRequest } from "./connections/api-routes.js";
+import { registerConnectionTools } from "./connections/tools.js";
 import { validateConnectionsConfig } from "./connections/config.js";
 import { ConnectionService, type ConnectionServiceDeps } from "./connections/service.js";
 import { guardFrom, guardOption } from "./decisions/guardrail.js";
@@ -327,6 +329,7 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
 
       registerTools(ctx, dataService);
       registerAppTools(ctx, appService);
+      registerConnectionTools(ctx, requireConnections());
 
       // ---- UI reads (company scope is host-authorised; reads need only member access) ----
       // Ruling P2-R10, as corrected by P2-R29: `params.userId` here is
@@ -561,6 +564,11 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
       }
       // The apps dispatcher answers every `apps.*` route and returns null for
       // anything else, so a data route falls through untouched.
+      if (input.routeKey.startsWith("connections.")) {
+        const connectionsNow = connectionService;
+        if (!connectionsNow) return { status: 503, body: { error: "plugin not ready" } };
+        return (await handleConnectionsApiRequest(connectionsNow, input, onError))!;
+      }
       return (await handleAppsApiRequest(appService, input, onError))
         ?? (await handleDecisionsApiRequest(decisionService, input, onError))
         ?? handleApiRequest(dataService, input, onError);

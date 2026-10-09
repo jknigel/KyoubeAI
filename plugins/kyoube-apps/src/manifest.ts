@@ -6,6 +6,8 @@ import { GROUP_API_ROUTES } from "./groups/api-routes.js";
 import { decisionToolDeclarations } from "./decisions/tools.js";
 import { APPS_PAGE_ROUTE } from "./apps/page-route.js";
 import { appToolDeclarations } from "./apps/tools.js";
+import { CONNECTION_API_ROUTES } from "./connections/api-routes.js";
+import { connectionToolDeclarations } from "./connections/tools.js";
 import { DECISIONS_CONFIG_SCHEMA } from "./decisions/config.js";
 import { CONNECTIONS_CONFIG_SCHEMA } from "./connections/config.js";
 import appsSkillMarkdown from "./skills/kyoube-apps.md";
@@ -76,8 +78,8 @@ const manifest: PaperclipPluginManifestV1 = {
     ...DECISIONS_CONFIG_SCHEMA,
     properties: { ...DECISIONS_CONFIG_SCHEMA.properties, ...CONNECTIONS_CONFIG_SCHEMA.properties },
   },
-  tools: [...toolDeclarations(), ...appToolDeclarations(), ...decisionToolDeclarations()],
-  apiRoutes: [...API_ROUTES, ...APP_API_ROUTES, ...DECISION_API_ROUTES, ...GROUP_API_ROUTES],
+  tools: [...toolDeclarations(), ...appToolDeclarations(), ...decisionToolDeclarations(), ...connectionToolDeclarations()],
+  apiRoutes: [...API_ROUTES, ...APP_API_ROUTES, ...DECISION_API_ROUTES, ...GROUP_API_ROUTES, ...CONNECTION_API_ROUTES],
   jobs: [
     { jobKey: PURGE_JOB_KEY, displayName: "Purge trashed tables and fields", description: "Drops tables/fields soft-deleted more than 30 days ago.", schedule: "0 3 * * *" },
     { jobKey: FILL_JOB_KEY, displayName: "Fill AI columns", description: "Asks the company's typed-decision model about new and changed rows of AI columns (docs/decisions.md).", schedule: "*/5 * * * *" },

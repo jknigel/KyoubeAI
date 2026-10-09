@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createTestHarness } from "@paperclipai/plugin-sdk/testing";
 import type { AppService } from "../../src/apps/service.js";
 import { APP_TOOL_DEFINITIONS, appToolDeclarations, registerAppTools } from "../../src/apps/tools.js";
+import { connectionToolDeclarations } from "../../src/connections/tools.js";
 import { decisionToolDeclarations } from "../../src/decisions/tools.js";
 import { DataError } from "../../src/data/errors.js";
 import manifest from "../../src/manifest.js";
@@ -31,7 +32,7 @@ describe("app tools", () => {
     }
     // The manifest's tool list is exactly the data tools, then the app tools, then the
     // decision tools — not merely a superset containing these seven.
-    expect(manifest.tools?.map((tool) => tool.name)).toEqual([...toolDeclarations(), ...appToolDeclarations(), ...decisionToolDeclarations()].map((tool) => tool.name));
+    expect(manifest.tools?.map((tool) => tool.name)).toEqual([...toolDeclarations(), ...appToolDeclarations(), ...decisionToolDeclarations(), ...connectionToolDeclarations()].map((tool) => tool.name));
   });
 
   it("routes calls to the AppService with the agent actor", async () => {
