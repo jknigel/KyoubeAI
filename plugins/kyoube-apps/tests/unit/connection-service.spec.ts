@@ -22,12 +22,13 @@ const STRANGER: DataActor = { kind: "user", id: "stranger", runId: null };
 const AGENT: DataActor = { kind: "agent", id: "agent-1", runId: "run-1" };
 const AGENT_RO: DataActor = { kind: "agent", id: "agent-ro", runId: "run-2" };
 const AGENT_NONE: DataActor = { kind: "agent", id: "agent-none", runId: "run-3" };
+const AGENT_NO_LEVEL: DataActor = { kind: "agent", id: "agent-no-level", runId: "run-4" };
 
 const APP_READ: CallVia = { kind: "app", slug: "dash", version: 3, declared: "read" };
 const APP_RW: CallVia = { kind: "app", slug: "dash", version: 3, declared: "read-write" };
 const DIRECT: CallVia = { kind: "direct" };
 
-const LEVELS: Record<string, AccessLevel> = { viewer: "read", member: "write", owner: "none", stranger: "none", "agent-1": "schema" };
+const LEVELS: Record<string, AccessLevel> = { viewer: "read", member: "write", owner: "none", stranger: "none", "agent-1": "schema", "agent-ro": "read", "agent-none": "read", "agent-no-level": "none" };
 const ROLES: Record<string, string> = { viewer: "viewer", member: "member", owner: "owner" };
 
 interface Query { sql: string; params: unknown[] }
@@ -591,10 +592,15 @@ describe("ConnectionService.list and status", () => {
     expect((await t.service.list(C, OWNER)).map((c) => c.access)).toEqual(["read-write", "read"]);
   });
 
-  it("lists for any agent, and refuses a person without read", async () => {
+  it("lists for an agent with read access to company data, grants or not, and refuses a person or agent without read", async () => {
     const t = setup();
     expect((await t.service.list(C, AGENT_NONE)).map((c) => c.access)).toEqual(["none", "none"]);
     expect((await refusal(t.service.list(C, STRANGER))).code).toBe("forbidden");
+    const before = t.resolves.length;
+    const error = await refusal(t.service.list(C, AGENT_NO_LEVEL));
+    expect(error.code).toBe("forbidden");
+    expect(error.message).toContain("read access to company data");
+    expect(t.resolves).toHaveLength(before);
   });
 
   it("does not retry a failed secret for 60 s on availability checks, but a call tries again after 15 s", async () => {

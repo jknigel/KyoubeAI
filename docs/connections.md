@@ -80,7 +80,8 @@ example and the error codes are in [apps.md](apps.md#connections).
 
 `GET /connections?companyId=…` (tool `connections_list`) returns every connection's `name`,
 `baseUrl`, `auth`, `methods`, whether it is `available`, and the caller's own access. It never returns
-a secret.
+a secret. Listing needs data level `read`, for an agent as for a person; below it the answer is
+`forbidden`.
 
 `POST /connections/{name}/call` (tool `connections_call`) takes:
 
