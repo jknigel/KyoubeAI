@@ -32,8 +32,11 @@ Two people may be involved, because KyoubeAI cannot create secrets.
    secret, and the methods.
 
 Saving the settings applies at once. A rotated secret takes effect within 60 seconds, or immediately
-when the plugin settings are saved. Company Settings, then Data access, then Connections shows each
-connection's host, auth style and methods, its status ("ready", "secret doesn't resolve" or
+when the plugin settings are saved. The core allows a company 30 secret lookups a minute and counts
+failed ones, so after a secret fails to resolve, calls on that connection answer `disabled` for 15
+seconds without asking again (the status checks wait a minute). Saving the settings clears that wait.
+Company Settings, then Data access, then Connections shows each connection's host, auth style and
+methods, its status ("ready", "secret doesn't resolve", "too many secret lookups just now" or
 "missing", the last for a connection some app declares that is not configured), and which published
 apps use it.
 
@@ -169,7 +172,7 @@ logged on the server). A GET whose audit row cannot be saved fails, so a read is
 | `too_large` | The response is over 2 MiB. Ask the service for less (a filter, a page size). |
 | `timeout` | The service took longer than 25 seconds. |
 | `provider_unavailable` | The host could not be reached, or resolves to a private address. |
-| `limit` | More than 30 calls in 10 seconds from one app. Fetch once and keep the result. |
+| `limit` | More than 30 calls in 10 seconds from one app (fetch once and keep the result), or the company used up the core's 30 secret lookups a minute (wait up to a minute). |
 | status 401 or 403 in the response | The service rejected the key. The call itself worked; fix the secret or the service's permissions. |
 | status 429 | The service is rate limiting. Read `retry-after`. |
 

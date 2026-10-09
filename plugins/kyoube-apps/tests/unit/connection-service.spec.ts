@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Pool } from "pg";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CALL_DEADLINE_MS, ConnectionService, type CallVia, type ConnectionServiceDeps } from "../../src/connections/service.js";
+import { CALL_DEADLINE_MS, ConnectionService, SECRET_CALL_RETRY_MS, type CallVia, type ConnectionServiceDeps } from "../../src/connections/service.js";
 import { DataError } from "../../src/data/errors.js";
 import type { AccessLevel, DataActor } from "../../src/data/permissions.js";
 import { actionFingerprint, type GuardedAction } from "../../src/decisions/guardrail.js";
@@ -569,7 +569,7 @@ describe("ConnectionService.list and status", () => {
     expect((await refusal(t.service.list(C, STRANGER))).code).toBe("forbidden");
   });
 
-  it("does not retry a failed secret for 60 s on availability checks, but a call still tries", async () => {
+  it("does not retry a failed secret for 60 s on availability checks, but a call tries again after 15 s", async () => {
     let fail = true;
     const t = setup({ resolve: async () => { if (fail) throw new Error("no"); return SECRET; } });
     expect((await t.service.list(C, AGENT)).map((c) => c.available)).toEqual([false, false]);
@@ -617,6 +617,155 @@ describe("ConnectionService.list and status", () => {
       ],
       problems: [{ index: 1, name: "Bad", problem: expect.stringContaining("lower-case") }],
     });
+  });
+});
+
+/** The core's limiter (plugin-secrets-handler): 30 lookups a minute per company and plugin, failed ones counted, refused ones not. */
+function coreLimiter(clock: { t: number }) {
+  const attempts: number[] = [];
+  return {
+    attempts,
+    check(): void {
+      const recent = attempts.filter((at) => at > clock.t - 60_000);
+      if (recent.length >= 30) {
+        const error = new Error("Rate limit exceeded for secret resolution");
+        error.name = "RateLimitExceededError";
+        throw error;
+      }
+      attempts.push(clock.t);
+    },
+  };
+}
+
+function deferred<T>() {
+  let settle!: { resolve(value: T): void; reject(error: unknown): void };
+  const promise = new Promise<T>((resolve, reject) => { settle = { resolve, reject }; });
+  return { promise, ...settle };
+}
+
+describe("ConnectionService: the secret lookup budget (R14)", () => {
+  const ONLY_CRM = { connections: [CRM] };
+
+  it("is 15 s between a call's lookups after a failure", () => { expect(SECRET_CALL_RETRY_MS).toBe(15_000); });
+
+  it("asks for a failing secret once per 15 s however often calls come, and answers disabled meanwhile", async () => {
+    const t = setup({ config: ONLY_CRM, resolve: async () => { throw new Error("Secret is not bound to plugin"); } });
+    const start = t.clock.t;
+    for (let i = 0; i < 40; i++) {
+      const error = await refusal(t.service.call(C, MEMBER, "crm", GET, DIRECT));
+      expect(error.message).toBe("disabled: the connection 'crm' secret could not be read; check the secret picked in the plugin settings");
+      t.clock.t += 300;
+    }
+    expect(t.clock.t - start).toBeLessThan(SECRET_CALL_RETRY_MS);
+    expect(t.resolves).toHaveLength(1);
+    // Availability checks keep their own 60 s back-off and do not ask either.
+    expect((await t.service.status(C)).connections[0]).toMatchObject({ available: false, problem: "secret doesn't resolve" });
+    expect(t.resolves).toHaveLength(1);
+    t.clock.t = start + SECRET_CALL_RETRY_MS;
+    expect((await refusal(t.service.call(C, MEMBER, "crm", GET, DIRECT))).code).toBe("disabled");
+    expect(t.resolves).toHaveLength(2);
+    expect(t.fetches).toHaveLength(0);
+  });
+
+  it("leaves the company's budget for typed decisions while an app polls a broken connection", async () => {
+    const clock = { t: 1_000_000 };
+    const limiter = coreLimiter(clock);
+    const secrets = new SecretCache({
+      resolve: async (binding) => {
+        limiter.check();
+        if ((binding as { secretId: string }).secretId === "s-crm") throw new Error("Secret is not bound to plugin");
+        return "decisions-key";
+      },
+      now: () => clock.t,
+    });
+    const t = setup({ config: ONLY_CRM });
+    const service = new ConnectionService({ ...t.deps, secrets, now: () => clock.t });
+    // An app polling once a second for two minutes, and its gallery card listing every five.
+    for (let second = 0; second < 120; second++) {
+      expect((await refusal(service.call(C, VIEWER, "crm", GET, APP_READ))).code).toBe("disabled");
+      if (second % 5 === 0) expect((await service.list(C, VIEWER))[0]?.available).toBe(false);
+      clock.t += 1_000;
+    }
+    // At most one lookup per 15 s: far below the core's 30 a minute.
+    expect(limiter.attempts.length).toBeLessThanOrEqual(9);
+    expect(limiter.attempts.filter((at) => at > clock.t - 60_000).length).toBeLessThanOrEqual(5);
+    await expect(secrets.get(C, "decisions", { type: "secret_ref", secretId: "s-dec" }, "decisions.apiKey")).resolves.toBe("decisions-key");
+  });
+
+  it("treats the core's rate limit as a short wait, not a broken secret", async () => {
+    let mode: "limited" | "rpc" | "ok" = "limited";
+    const t = setup({
+      config: ONLY_CRM,
+      resolve: async () => {
+        if (mode === "ok") return SECRET;
+        // On the host it is a RateLimitExceededError; through the worker RPC only its message arrives.
+        const error = new Error("Rate limit exceeded for secret resolution");
+        error.name = mode === "limited" ? "RateLimitExceededError" : "JsonRpcCallError";
+        throw error;
+      },
+    });
+    const error = await refusal(t.service.call(C, MEMBER, "crm", GET, DIRECT));
+    expect(error.code).toBe("limit");
+    expect(error.message).toContain("too many secret lookups");
+    expect((await t.service.status(C)).connections[0]).toMatchObject({ available: false, problem: "too many secret lookups just now; try again in a minute" });
+    expect((await refusal(t.service.call(C, MEMBER, "crm", GET, DIRECT))).code).toBe("limit");
+    expect(t.resolves).toHaveLength(1);
+
+    t.clock.t += SECRET_CALL_RETRY_MS;
+    mode = "rpc";
+    expect((await refusal(t.service.call(C, MEMBER, "crm", GET, DIRECT))).code).toBe("limit");
+    expect(t.resolves).toHaveLength(2);
+
+    // Not a minute: 15 s after the refusal, the connection is ready again.
+    t.clock.t += SECRET_CALL_RETRY_MS;
+    mode = "ok";
+    expect((await t.service.list(C, MEMBER))[0]?.available).toBe(true);
+    expect((await t.service.call(C, MEMBER, "crm", GET, DIRECT)).status).toBe(200);
+  });
+
+  it("asks again at once after a config change", async () => {
+    let fail = true;
+    const t = setup({ config: ONLY_CRM, resolve: async () => { if (fail) throw new Error("no"); return SECRET; } });
+    await refusal(t.service.call(C, MEMBER, "crm", GET, DIRECT));
+    await refusal(t.service.call(C, MEMBER, "crm", GET, DIRECT));
+    expect(t.resolves).toHaveLength(1);
+    fail = false;
+    t.deps.secrets.invalidate(C);
+    t.service.invalidate(C);
+    expect((await t.service.call(C, MEMBER, "crm", GET, DIRECT)).status).toBe(200);
+    expect(t.resolves).toHaveLength(2);
+  });
+
+  it("forgets every company's back-off when invalidated without a company", async () => {
+    let fail = true;
+    const t = setup({ config: ONLY_CRM, resolve: async () => { if (fail) throw new Error("no"); return SECRET; } });
+    await refusal(t.service.call(C, MEMBER, "crm", GET, DIRECT));
+    fail = false;
+    t.service.invalidate();
+    expect((await t.service.list(C, MEMBER))[0]?.available).toBe(true);
+  });
+
+  it("never records a back-off from a lookup that started before a config change", async () => {
+    let pending = deferred<string>();
+    const t = setup({ config: ONLY_CRM, resolve: () => pending.promise });
+    const listing = t.service.list(C, MEMBER);
+    const calling = t.service.call(C, MEMBER, "crm", GET, DIRECT).catch((error: unknown) => error);
+    // Both are now waiting on the one lookup, started under the old config.
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(t.resolves).toHaveLength(1);
+    t.deps.secrets.invalidate(C);
+    t.service.invalidate(C);
+    pending.reject(new Error("old binding gone"));
+    expect((await listing)[0]?.available).toBe(false);
+    expect(((await calling) as DataError).code).toBe("disabled");
+
+    // The new config's secret is asked for straight away, by a list and by a call.
+    pending = deferred<string>();
+    pending.resolve(SECRET);
+    const before = t.resolves.length;
+    expect((await t.service.list(C, MEMBER))[0]?.available).toBe(true);
+    expect(t.resolves.length).toBe(before + 1);
+    expect((await t.service.call(C, MEMBER, "crm", GET, DIRECT)).status).toBe(200);
   });
 });
 
