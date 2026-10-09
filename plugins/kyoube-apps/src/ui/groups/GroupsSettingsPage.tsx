@@ -3,6 +3,7 @@ import type { PluginCompanySettingsPageProps } from "@paperclipai/plugin-sdk/ui"
 import { usePluginAction, usePluginToast } from "@paperclipai/plugin-sdk/ui";
 import { errorText } from "../format.js";
 import { button, input } from "../forms.js";
+import { ensurePhoneStyles } from "../phone.js";
 import { openedBy } from "./opened.js";
 
 interface Group { id: string; name: string; dataLevel: string | null; members: string[]; agents: string[]; apps: string[] }
@@ -22,7 +23,7 @@ function CheckList(props: { title: string; items: Array<{ id: string; label: str
     <fieldset className="flex min-w-[12rem] flex-1 flex-col gap-1 rounded border p-2">
       <legend className="px-1 font-medium">{props.title}</legend>
       {props.items.map((item) => (
-        <label key={item.id} className="flex items-center gap-2"><input type="checkbox" checked={props.selected.includes(item.id)} onChange={() => toggle(item.id)} /> {item.label}</label>
+        <label key={item.id} className="flex items-center gap-2"><input type="checkbox" checked={props.selected.includes(item.id)} onChange={() => toggle(item.id)} /> <span className="min-w-0 break-all" data-kyoube-break="">{item.label}</span></label>
       ))}
       {props.items.length === 0 && <span className="text-foreground/60">None available.</span>}
     </fieldset>
@@ -42,6 +43,7 @@ export function GroupsSettingsPage({ context }: PluginCompanySettingsPageProps) 
   const [draft, setDraft] = useState<Draft | null>(null);
 
   const reload = () => list({}).then((result) => { setData(result as ListData); setError(null); }).catch((err) => setError(errorText(err)));
+  useEffect(() => { ensurePhoneStyles(); }, []);
   useEffect(() => {
     if (!companyId) return;
     reload().catch(() => {});
@@ -76,7 +78,7 @@ export function GroupsSettingsPage({ context }: PluginCompanySettingsPageProps) 
   };
 
   return (
-    <div className="flex flex-col gap-4 p-4 text-sm">
+    <div className="flex min-w-0 flex-col gap-4 p-4 text-sm" data-kyoube-page="groups">
       <h1 className="text-base font-semibold">Groups</h1>
       <p className="text-foreground/70">Groups decide which agents people may give work to, which apps they may open, and optionally their Data level. An agent or app in no group is open to everyone. Owners and admins are never restricted. Agent changes take effect within about a minute.</p>
       {error && <div className="text-red-600">{error}</div>}
@@ -88,25 +90,28 @@ export function GroupsSettingsPage({ context }: PluginCompanySettingsPageProps) 
           </p>
           {!unlocked && <div role="alert" className="rounded border border-amber-500 p-3">Managing groups needs a KyoubeAI licence (Settings → Plugins → KyoubeAI Licence). Existing groups are still enforced, and you can delete them.</div>}
           <div><button type="button" className={button} onClick={() => setDraft({ ...EMPTY })}>New group</button></div>
-          <table className="w-full max-w-3xl text-sm">
-            <thead><tr className="bg-accent/40 text-left"><th className="px-2 py-1">Group</th><th className="px-2 py-1">Data level</th><th className="px-2 py-1">Members</th><th className="px-2 py-1">Agents</th><th className="px-2 py-1">Apps</th><th className="px-2 py-1" /></tr></thead>
-            <tbody>
-              {groups.map((group) => (
-                <tr key={group.id} className="border-t">
-                  <td className="px-2 py-1"><button type="button" className="underline" onClick={() => setDraft({ id: group.id, name: group.name, level: group.dataLevel ?? "", members: group.members, agents: group.agents, apps: group.apps })}>{group.name}</button></td>
-                  <td className="px-2 py-1">{group.dataLevel ?? "from role"}</td>
-                  <td className="px-2 py-1">{group.members.length}</td>
-                  <td className="px-2 py-1">{group.agents.length}</td>
-                  <td className="px-2 py-1">{group.apps.length}</td>
-                  <td className="px-2 py-1"><button type="button" className={button} onClick={() => onDelete(group)}>Delete</button></td>
-                </tr>
-              ))}
-              {groups.length === 0 && <tr><td className="px-2 py-2 text-foreground/60" colSpan={6}>No groups yet.</td></tr>}
-            </tbody>
-          </table>
+          {/* A phone is narrower than the table: it scrolls inside its own box, never the page (R21). */}
+          <div className="w-full max-w-3xl overflow-x-auto" data-kyoube-scroll="">
+            <table className="w-full text-sm">
+              <thead><tr className="bg-accent/40 text-left"><th className="px-2 py-1">Group</th><th className="px-2 py-1">Data level</th><th className="px-2 py-1">Members</th><th className="px-2 py-1">Agents</th><th className="px-2 py-1">Apps</th><th className="px-2 py-1" /></tr></thead>
+              <tbody>
+                {groups.map((group) => (
+                  <tr key={group.id} className="border-t">
+                    <td className="px-2 py-1"><button type="button" className="break-all text-left underline" data-kyoube-break="" onClick={() => setDraft({ id: group.id, name: group.name, level: group.dataLevel ?? "", members: group.members, agents: group.agents, apps: group.apps })}>{group.name}</button></td>
+                    <td className="px-2 py-1">{group.dataLevel ?? "from role"}</td>
+                    <td className="px-2 py-1">{group.members.length}</td>
+                    <td className="px-2 py-1">{group.agents.length}</td>
+                    <td className="px-2 py-1">{group.apps.length}</td>
+                    <td className="px-2 py-1"><button type="button" className={button} onClick={() => onDelete(group)}>Delete</button></td>
+                  </tr>
+                ))}
+                {groups.length === 0 && <tr><td className="px-2 py-2 text-foreground/60" colSpan={6}>No groups yet.</td></tr>}
+              </tbody>
+            </table>
+          </div>
           {draft && (
             <section className="flex flex-col gap-3 rounded border p-3">
-              <label className="flex items-center gap-2">Name <input className={input} maxLength={80} value={draft.name} disabled={!unlocked} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
+              <label className="flex flex-wrap items-center gap-2">Name <input className={`${input} min-w-0 flex-1`} maxLength={80} value={draft.name} disabled={!unlocked} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
               <label className="flex items-center gap-2">Data level
                 <select className={input} value={draft.level} disabled={!unlocked} onChange={(event) => setDraft({ ...draft, level: event.target.value })}>
                   <option value="">Data level from role</option>
@@ -120,7 +125,7 @@ export function GroupsSettingsPage({ context }: PluginCompanySettingsPageProps) 
                 <CheckList title="Agents" items={options.agents.map((agent) => ({ id: agent.id, label: agent.name }))} selected={draft.agents} onChange={(agents) => setDraft({ ...draft, agents })} />
                 <CheckList title="Apps" items={options.apps.map((app) => ({ id: app.id, label: `${app.icon ?? ""} ${app.name}`.trim() }))} selected={draft.apps} onChange={(apps) => setDraft({ ...draft, apps })} />
               </div>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 <button type="button" className={button} disabled={!unlocked || !draft.name.trim()} onClick={onSave}>Save</button>
                 <button type="button" className={button} onClick={() => setDraft(null)}>Cancel</button>
               </div>
