@@ -20,7 +20,12 @@ export interface Connection {
 const AUTHS: readonly string[] = ["bearer", "header", "basic"];
 const METHODS: readonly string[] = ["read", "read-write"];
 const HEADER_TOKEN_RE = /^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/;
-const FORBIDDEN_HEADERS = new Set(["authorization", "cookie", "host", "content-length", "content-type"]);
+// The credentials and framing headers, plus the hop-by-hop ones: a secret sent as one of those would
+// change how the request is framed or forwarded rather than authenticate it.
+const FORBIDDEN_HEADERS = new Set([
+  "authorization", "cookie", "host", "content-length", "content-type",
+  "transfer-encoding", "connection", "te", "upgrade", "expect", "keep-alive", "trailer",
+]);
 
 const CONNECTIONS_PROPERTY = {
   type: "array",

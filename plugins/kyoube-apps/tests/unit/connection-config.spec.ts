@@ -55,6 +55,8 @@ describe("parseConnections", () => {
       expect(problemOf({ auth: "header", headerName })).not.toBe("none");
     }
     const c = one({ auth: "header", headerName: "X-API-Key" }).connections[0];
+    // A header that names the API key is fine even when it starts like a refused one.
+    expect(one({ auth: "header", headerName: "X-Connection-Key" }).connections).toHaveLength(1);
     expect(c?.headerName).toBe("x-api-key");
     expect(one({ auth: "basic", headerName: "X-Ignored" }).connections[0]?.headerName).toBeNull();
   });
@@ -95,6 +97,16 @@ describe("merged manifest schema", () => {
     const props = (manifest.instanceConfigSchema as { properties: Record<string, unknown> }).properties;
     for (const key of Object.keys(DECISIONS_CONFIG_SCHEMA.properties)) expect(props).toHaveProperty(key);
     expect(props.connections).toEqual(CONNECTIONS_CONFIG_SCHEMA.properties.connections);
+  });
+});
+
+describe("hop-by-hop header names", () => {
+  it.each(["transfer-encoding", "Connection", "TE", "upgrade", "Expect", "keep-alive", "Trailer"])("refuses %s for header auth", (headerName) => {
+    const { connections, problems } = parseConnections({
+      connections: [{ name: "x", baseUrl: "https://a.example/", auth: "header", headerName, secret: { type: "secret_ref" } }],
+    });
+    expect(connections).toEqual([]);
+    expect(problems[0]?.problem).toContain("cannot be used for a secret");
   });
 });
 
