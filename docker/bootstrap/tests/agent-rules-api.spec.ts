@@ -123,7 +123,7 @@ describe("createRulesApi", () => {
   it("reads agent access, applies groups and reports the sync through the board-only routes", async () => {
     const { impl, seen } = fakeFetch((req) =>
       req.url.includes("agent-access")
-        ? { status: 200, body: { agents: [{ agentId: "a1", allowedUserIds: ["u1", 3] }, { agentId: 5 }] } }
+        ? { status: 200, body: { agents: [{ agentId: "a1", allowedUserIds: ["u1"] }] } }
         : req.url.endsWith("/apply")
           ? { status: 200, body: { protected: ["a1"], people: ["u1", 2], skipped: [{ id: "a9", reason: "r" }], failures: [{ id: "u2", step: "grants", error: "e" }] } }
           : { status: 200, body: { ok: true } });
@@ -136,5 +136,25 @@ describe("createRulesApi", () => {
     expect(seen[0]).toEqual({ url: `http://app:3100${GROUP_ROUTES.access}?companyId=c1`, method: "GET", body: undefined });
     expect(seen[1]).toEqual({ url: `http://app:3100${GROUP_ROUTES.apply}`, method: "POST", body: { companyId: "c1", agents: [{ agentId: "a1", allowedUserIds: ["u1"] }] } });
     expect(seen[2]).toEqual({ url: `http://app:3100${GROUP_ROUTES.report}`, method: "POST", body: { companyId: "c1", syncedAt: "t", error: null } });
+  });
+
+  it("accepts a genuinely empty agent-access list", async () => {
+    const { impl } = fakeFetch(() => ({ status: 200, body: { agents: [] } }));
+    expect(await api(impl).getAgentAccess("c1")).toEqual([]);
+  });
+
+  it.each([
+    ["no agents key", {}],
+    ["agents a string", { agents: "x" }],
+    ["agents null", { agents: null }],
+    ["a null body", null],
+    ["a bare array", []],
+    ["a non-string agentId", { agents: [{ agentId: 5, allowedUserIds: [] }] }],
+    ["an empty agentId", { agents: [{ agentId: "", allowedUserIds: [] }] }],
+    ["missing allowedUserIds", { agents: [{ agentId: "a1" }] }],
+    ["a non-string user id", { agents: [{ agentId: "a1", allowedUserIds: ["u", 7] }] }],
+  ])("refuses an unreadable agent-access list (%s) instead of reading it as no groups", async (_name, body) => {
+    const { impl } = fakeFetch(() => ({ status: 200, body }));
+    await expect(api(impl).getAgentAccess("c1")).rejects.toThrow(/unreadable agent-access list/);
   });
 });

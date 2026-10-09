@@ -268,6 +268,15 @@ describe("group step", () => {
     expect(api.syncReports[0]!.error).toMatch(/refused access:c1/);
   });
 
+  it("never applies an unreadable agent-access list as no groups", async () => {
+    const api = new FakeApi();
+    api.getAgentAccess = async () => { throw new Error("kyoube.apps returned an unreadable agent-access list: no agents array"); };
+    const { report } = await applyPass({ api, now: () => NOW }, EMPTY_STATE);
+    expect(api.calls.some((call) => call.startsWith("groups "))).toBe(false);
+    expect(report.companies[0]!.failures).toContainEqual({ step: "groups", error: expect.stringMatching(/unreadable agent-access list/) });
+    expect(api.syncReports[0]!.error).toMatch(/unreadable agent-access list/);
+  });
+
   it("reports group failures from the plugin as pass failures", async () => {
     const api = new FakeApi();
     api.groupsReport.failures = [{ id: "u2", step: "grants", error: "nope" }];

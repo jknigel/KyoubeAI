@@ -182,8 +182,18 @@ export function createRulesApi(opts: CoreClientOptions): RulesApi {
       return parseRevertReport(await request<unknown>(GUARD_PLUGIN_ROUTES.revert, { method: "POST", body: { companyId } }));
     },
     async getAgentAccess(companyId) {
-      const body = record(await request<unknown>(`${GROUP_ROUTES.access}?companyId=${id(companyId)}`));
-      return records(body.agents).map((item) => ({ agentId: text(item.agentId), allowedUserIds: strings(item.allowedUserIds) })).filter((item) => item.agentId.length > 0);
+      // Strict on purpose: an unreadable list applied as "no groups" would lift every restriction.
+      const raw: unknown = await request<unknown>(`${GROUP_ROUTES.access}?companyId=${id(companyId)}`);
+      const unreadable = (why: string) => new Error(`kyoube.apps returned an unreadable agent-access list: ${why}`);
+      const agents = record(raw).agents;
+      if (!Array.isArray(agents)) throw unreadable("no agents array");
+      return agents.map((entry: unknown) => {
+        const item = record(entry);
+        if (typeof item.agentId !== "string" || item.agentId.length === 0) throw unreadable("an entry has no agentId");
+        const allowed = item.allowedUserIds;
+        if (!Array.isArray(allowed) || !allowed.every((user) => typeof user === "string")) throw unreadable(`allowedUserIds of ${item.agentId} is not a list of strings`);
+        return { agentId: item.agentId, allowedUserIds: allowed as string[] };
+      });
     },
     async applyGroups(companyId, agents) {
       return parseGroupsReport(await request<unknown>(GROUP_ROUTES.apply, { method: "POST", body: { companyId, agents } }));
