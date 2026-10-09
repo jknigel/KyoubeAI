@@ -5,7 +5,7 @@ import { appsPagePath } from "../../apps/page-route.js";
 import { errorText } from "../format.js";
 import { button, input } from "../forms.js";
 import { AppRunner } from "./AppRunner.js";
-import { PublishDialog, type PublishPreviewData } from "./PublishDisclosure.js";
+import { PublishDialog, connectionsOf, type PublishPreviewData } from "./PublishDisclosure.js";
 import { appNameOf, ensurePhoneStyles } from "../phone.js";
 import { appErrorPayload, parseAppsPath } from "./bridge.js";
 
@@ -35,6 +35,10 @@ function Gallery(props: { companyId: string; userId: string | null }) {
   // Ruling P2-R26: memoise the params object on its scalar inputs.
   const accessParams = useMemo(() => ({ companyId: props.companyId, userId: props.userId }), [props.companyId, props.userId]);
   const access = usePluginData<{ level: string }>("data.access", accessParams);
+  const usesAction = usePluginAction("apps.uses");
+  const usesRef = useRef(usesAction);
+  usesRef.current = usesAction;
+  const [uses, setUses] = useState<Record<string, Array<{ name: string; access: string }>>>({});
   const [apps, setApps] = useState<AppRecord[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Ruling P1-R15: action functions from usePluginAction are not guaranteed
@@ -51,6 +55,13 @@ function Gallery(props: { companyId: string; userId: string | null }) {
     return () => { cancelled = true; };
   }, [props.companyId]);
 
+  // The "Uses" line is a convenience: a failure leaves it out and the gallery still loads.
+  useEffect(() => {
+    let cancelled = false;
+    Promise.resolve(usesRef.current({})).then((result) => { if (!cancelled && result && typeof result === "object") setUses(result as typeof uses); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [props.companyId]);
+
   const canWrite = access.data?.level === "write" || access.data?.level === "schema";
   return (
     <div className="flex flex-col gap-3 p-4" data-kyoube-page="apps">
@@ -62,6 +73,7 @@ function Gallery(props: { companyId: string; userId: string | null }) {
             <div className="text-lg">{app.icon ?? "◫"} <strong>{app.name}</strong></div>
             {/* An unpublished draft is only visible to (and only openable by) an editor, so only an editor is told one exists. */}
             <div className="text-xs text-foreground/60">{app.status}{app.currentVersion ? ` · v${app.currentVersion}` : ""}{canWrite && app.latestVersion > (app.currentVersion ?? 0) ? ` · draft v${app.latestVersion}` : ""}</div>
+            {uses[app.slug]?.length ? <div className="text-xs text-foreground/60" data-kyoube-uses="">Uses: {uses[app.slug]!.map((entry) => `${entry.name} (${entry.access})`).join(", ")}</div> : null}
             {app.description && <p className="mt-1 text-sm">{app.description}</p>}
           </a>
         ))}
@@ -185,7 +197,7 @@ function SourcePanel(props: { companyId: string; userId: string | null; slug: st
     setPreviewing(true);
     preview({ slug: props.slug, version }).then((result) => {
       const data = result as PublishPreviewData;
-      if (data.sets.length === 0) {
+      if (data.sets.length === 0 && connectionsOf(data).length === 0) {
         const params = { slug: props.slug, version: data.version };
         return act(mode === "publish" ? publish(params) : rollback(params), mode === "publish" ? `Published v${data.version}` : "Rolled back");
       }
