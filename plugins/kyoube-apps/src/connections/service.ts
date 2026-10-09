@@ -113,13 +113,42 @@ function mapFetchFailure(error: unknown, name: string): { status: number } | Dat
   return new DataError("provider_unavailable", `the connection '${name}' could not be reached; try again later`);
 }
 
+/**
+ * Ruling R14: after a secret lookup fails, calls do not ask again for this long. The core allows 30
+ * lookups a minute per company and plugin and counts the failed ones, so a broken connection polled
+ * by an app or an agent would otherwise spend the whole company's budget, and typed decisions and
+ * every other connection with it.
+ */
+export const SECRET_CALL_RETRY_MS = 15_000;
+
+/** One failed lookup, per company and connection: until when availability checks and calls back off. */
+interface SecretFailure { availableUntil: number; callUntil: number; rateLimited: boolean }
+
+/** A lookup that failed; the core's own message is never kept or repeated. */
+class SecretUnavailable extends Error {
+  constructor(readonly rateLimited: boolean) { super("secret unavailable"); }
+}
+
+/**
+ * The core refuses a lookup over its limit with this (a RateLimitExceededError on the host; the
+ * worker sees the host's message on a JSON-RPC error). The core does not count a refused lookup, and
+ * it says nothing about the secret, so it must not make the connection look broken for a minute.
+ */
+function isRateLimited(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return error.name === "RateLimitExceededError" || /rate limit exceeded for secret resolution/i.test(error.message);
+}
+
 export class ConnectionService {
   /**
-   * Ruling R3: a secret that failed to resolve is not asked for again by availability checks
-   * (`list`, `status`) until this time, per company and connection. The secret cache keeps only
-   * values, never failures, and the core allows 30 lookups a minute per company.
+   * Rulings R3 and R14: after a failed lookup, availability checks (`list`, `status`) do not ask
+   * again for 60 s and calls for 15 s, per company and connection; a lookup refused by the core's
+   * rate limit backs both off for 15 s only. The secret cache keeps only values, never failures.
    */
-  private readonly unavailableUntil = new Map<string, number>();
+  private readonly failures = new Map<string, SecretFailure>();
+  /** Bumped by `invalidate`, so a lookup that started before a config change never records a failure after it. */
+  private readonly generations = new Map<string, number>();
+  private epoch = 0;
 
   constructor(private readonly deps: ConnectionServiceDeps) {}
 
@@ -143,28 +172,58 @@ export class ConnectionService {
     return `${companyId}\u0000${name}`;
   }
 
-  /** Never throws. One secret lookup per connection per minute at most, whether it works or not. */
-  private async available(companyId: string, connection: Connection): Promise<boolean> {
+  private generation(companyId: string): string {
+    return `${this.epoch}:${this.generations.get(companyId) ?? 0}`;
+  }
+
+  /**
+   * Looks the secret up (the cache permitting) and records a failure for the back-offs, unless
+   * `invalidate` ran while the lookup was under way: then the result belongs to the old config.
+   */
+  private async lookupSecret(companyId: string, connection: Connection): Promise<string> {
     const key = this.availabilityKey(companyId, connection.name);
-    const until = this.unavailableUntil.get(key);
-    if (until !== undefined && until > this.now()) return false;
+    const generation = this.generation(companyId);
     try {
       const value = await this.secret(companyId, connection);
       if (typeof value !== "string" || value === "") throw new Error("empty");
-      this.unavailableUntil.delete(key);
-      return true;
-    } catch {
-      this.unavailableUntil.set(key, this.now() + SECRET_CACHE_MS);
-      return false;
+      if (this.generation(companyId) === generation) this.failures.delete(key);
+      return value;
+    } catch (error) {
+      const rateLimited = isRateLimited(error);
+      if (this.generation(companyId) === generation) {
+        const now = this.now();
+        this.failures.set(key, rateLimited
+          ? { availableUntil: now + SECRET_CALL_RETRY_MS, callUntil: now + SECRET_CALL_RETRY_MS, rateLimited }
+          : { availableUntil: now + SECRET_CACHE_MS, callUntil: now + SECRET_CALL_RETRY_MS, rateLimited });
+      }
+      throw new SecretUnavailable(rateLimited);
+    }
+  }
+
+  private static problemText(rateLimited: boolean): string {
+    return rateLimited ? "too many secret lookups just now; try again in a minute" : "secret doesn't resolve";
+  }
+
+  /** Never throws: the problem, or null when the connection is ready. While a secret fails, one lookup per connection per minute at most. */
+  private async availability(companyId: string, connection: Connection): Promise<string | null> {
+    const failure = this.failures.get(this.availabilityKey(companyId, connection.name));
+    if (failure && failure.availableUntil > this.now()) return ConnectionService.problemText(failure.rateLimited);
+    try {
+      await this.lookupSecret(companyId, connection);
+      return null;
+    } catch (error) {
+      return ConnectionService.problemText(error instanceof SecretUnavailable && error.rateLimited);
     }
   }
 
   invalidate(companyId?: string | null): void {
     if (companyId) {
+      this.generations.set(companyId, (this.generations.get(companyId) ?? 0) + 1);
       const prefix = `${companyId}\u0000`;
-      for (const key of [...this.unavailableUntil.keys()]) if (key.startsWith(prefix)) this.unavailableUntil.delete(key);
+      for (const key of [...this.failures.keys()]) if (key.startsWith(prefix)) this.failures.delete(key);
     } else {
-      this.unavailableUntil.clear();
+      this.epoch += 1;
+      this.failures.clear();
     }
   }
 
@@ -179,7 +238,7 @@ export class ConnectionService {
       baseUrl: connection.baseUrl,
       auth: connection.auth,
       methods: connection.methods,
-      available: await this.available(companyId, connection),
+      available: (await this.availability(companyId, connection)) === null,
       access: accessFor(connection),
     })));
   }
@@ -209,8 +268,8 @@ export class ConnectionService {
     schemaNameFor(companyId);
     const { connections, problems } = await this.connections(companyId);
     const rows = await Promise.all(connections.map(async (connection) => {
-      const available = await this.available(companyId, connection);
-      return { name: connection.name, baseUrl: connection.baseUrl, auth: connection.auth, methods: connection.methods, available, problem: available ? null : "secret doesn't resolve" };
+      const problem = await this.availability(companyId, connection);
+      return { name: connection.name, baseUrl: connection.baseUrl, auth: connection.auth, methods: connection.methods, available: problem === null, problem };
     }));
     return { connections: rows, problems };
   }
@@ -334,19 +393,25 @@ export class ConnectionService {
     if (!levelAllows(await this.deps.levelFor(companyId, actor), op)) throw forbidden(`calling '${connection.name}' with ${call.method} requires ${op} access to company data`);
   }
 
-  /** `call` always asks (the cache permitting), even while availability checks are backing off. */
+  /**
+   * `call` asks again sooner than availability checks (15 s after a failure rather than 60 s), but
+   * never while that back-off runs: it then answers as the failed lookup did, without a lookup.
+   */
   private async secretForCall(companyId: string, connection: Connection): Promise<string> {
-    const key = this.availabilityKey(companyId, connection.name);
+    const failure = this.failures.get(this.availabilityKey(companyId, connection.name));
+    if (failure && failure.callUntil > this.now()) throw this.secretError(connection, failure.rateLimited);
     try {
-      const value = await this.secret(companyId, connection);
-      if (typeof value !== "string" || value === "") throw new Error("empty");
-      this.unavailableUntil.delete(key);
-      return value;
-    } catch {
-      // The core's message is never repeated: it is not the caller's to read.
-      this.unavailableUntil.set(key, this.now() + SECRET_CACHE_MS);
-      throw new DataError("disabled", `the connection '${connection.name}' secret could not be read; check the secret picked in the plugin settings`);
+      return await this.lookupSecret(companyId, connection);
+    } catch (error) {
+      throw this.secretError(connection, error instanceof SecretUnavailable && error.rateLimited);
     }
+  }
+
+  /** The core's message is never repeated: it is not the caller's to read. */
+  private secretError(connection: Connection, rateLimited: boolean): DataError {
+    return rateLimited
+      ? new DataError("limit", `the connection '${connection.name}' secret could not be read just now: too many secret lookups for this company; try again in a minute`)
+      : new DataError("disabled", `the connection '${connection.name}' secret could not be read; check the secret picked in the plugin settings`);
   }
 
   /** A meta transaction that only writes the audit row: there is no change to commit with it. */
