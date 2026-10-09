@@ -272,7 +272,9 @@ and what data level they hold. Group tables are in `kyoube_meta` (`groups`, `gro
   own processes can read it, so a request carrying it came from the kyoube CLI; the plugins compare it
   in constant time and read the file on every request, so a missing or unreadable file refuses that
   path. It travels only in POST bodies, never in a URL, and is never logged. The board key's user
-  therefore does not have to be an owner or admin, or even a member, of each company. **Residual:**
+  must be a member (any role) of each company for the agent working rules and group sync to run
+  there, because the core refuses the key in any other company before a plugin runs; the token lets
+  that member pass the owner-or-admin check without holding either role. **Residual:**
   code running inside the container (an agent's harness, the Terminal) can read the token, as it can
   the board key. Delete the file to rotate it; the next pass creates a new one.
 - **Chat.** The core's Agent Chat routes skip the assignment check. A standing core patch

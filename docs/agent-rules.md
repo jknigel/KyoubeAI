@@ -41,8 +41,10 @@ The plugin routes the loop calls (`/reconcile`, `/revert`, and the group routes 
 anyone but the loop itself or a company owner or admin, because every signed-in person passes the
 core's own "board" check. The loop proves itself with the **rules token**: a random secret in
 `/kyoubeai/kyoube/rules-token` (mode 600), which `kyoube agent-rules` creates on its first run and
-sends in the body of each call. Only the container's own processes can read the file, so the board
-key's user does not have to be a member of each company. Code running inside the container can read
+sends in the body of each call. Only the container's own processes can read the file, so a request carrying it came from the
+loop. The board key's user must still be a member (any role) of each company, or the core refuses
+the call before the plugin sees it; the token lets that member pass the plugin's owner-or-admin
+check without being an owner or admin. Code running inside the container can read
 the token, as it can the board key. To rotate it, delete the file; the next pass creates a new one.
 
 ## Group restrictions

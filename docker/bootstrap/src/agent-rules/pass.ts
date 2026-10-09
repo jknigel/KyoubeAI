@@ -13,11 +13,14 @@ export interface PassDeps {
 /**
  * A failure as `kyoube doctor` should show it. A 404, 405 or 422 on a route
  * this feature depends on is the sign that a core update moved something,
- * so the message names that route. A 403 from a KyoubeAI plugin route means the plugin did not
+ * so the message names that route. A 403 "does not have access to this company" is the core refusing a board key whose user is not a member. Any other 403 from a KyoubeAI plugin route means the plugin did not
  * accept the CLI's rules token (ruling R18), so the message names the company and the file.
  */
 export function describeError(error: unknown, company?: string): string {
   if (error instanceof CoreApiError && error.route) {
+    if (isCompanyAccessRefusal(error)) {
+      return `the core refused the board key in ${company ? `"${company}"` : "this company"} (${error.route} → 403): ${error.message}; add the board key's user to ${company ? `"${company}"` : "the company"} as a member (any role)`;
+    }
     if (isRulesTokenRefusal(error)) {
       return `the plugin refused the kyoube CLI in ${company ? `"${company}"` : "this company"} (${error.route} → 403): ${error.message}; check that the rules token file (kyoube/rules-token on the home volume) exists and the node user can read it`;
     }
@@ -28,6 +31,11 @@ export function describeError(error: unknown, company?: string): string {
     return `${error.route} failed (${error.status}): ${error.message}`;
   }
   return error instanceof Error ? error.message : String(error);
+}
+
+/** The core's own refusal of a key whose user is not a member of the company; it comes before any plugin runs. */
+function isCompanyAccessRefusal(error: unknown): boolean {
+  return error instanceof CoreApiError && error.status === 403 && /does not have access to this company/i.test(error.message);
 }
 
 /** The guard and group routes of both plugins refuse 403 without the rules token or an owner or admin caller. */
