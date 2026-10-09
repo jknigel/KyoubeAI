@@ -1,7 +1,7 @@
-import type { GuardReport } from "./api.js";
+import type { GroupsApplyReport, GuardReport } from "./api.js";
 
 export interface Failure {
-  step: "list" | "governance" | "guard" | "rules";
+  step: "list" | "governance" | "guard" | "rules" | "groups";
   agent?: string;
   error: string;
 }
@@ -11,6 +11,8 @@ export interface CompanyReport {
   name: string;
   governance: "set" | "already" | "restored" | "failed";
   guard: GuardReport | null;
+  /** Absent in reports saved before groups existed. */
+  groups?: GroupsApplyReport | null;
   /** Agents whose AGENTS.md this pass wrote. */
   rulesUpdated: string[];
   skipped: Array<{ agent: string; reason: string }>;

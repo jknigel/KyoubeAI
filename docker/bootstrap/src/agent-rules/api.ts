@@ -46,6 +46,21 @@ export const GUARD_PLUGIN_ROUTES = {
   revert: "/api/plugins/kyoube.agent-rules/api/revert",
 } as const;
 
+/** What `kyoube.agent-rules`'s groups/apply route answers, read defensively. */
+export interface GroupsApplyReport {
+  protected: string[];
+  unprotected: string[];
+  people: string[];
+  skipped: Array<{ id: string; reason: string }>;
+  failures: Array<{ id: string; step: string; error: string }>;
+}
+
+export const GROUP_ROUTES = {
+  access: "/api/plugins/kyoube.apps/api/groups/agent-access",
+  report: "/api/plugins/kyoube.apps/api/groups/sync-report",
+  apply: "/api/plugins/kyoube.agent-rules/api/groups/apply",
+} as const;
+
 /** Everything `kyoube agent-rules` asks of the core, all through its REST API with the board key. */
 export interface RulesApi {
   listCompanies(): Promise<CompanySummary[]>;
@@ -57,6 +72,9 @@ export interface RulesApi {
   writeInstructionsFile(agentId: string, path: string, content: string, baseRevisionId: string | null): Promise<void>;
   reconcileGuard(companyId: string): Promise<GuardReport>;
   revertGuard(companyId: string): Promise<GuardRevertReport>;
+  getAgentAccess(companyId: string): Promise<Array<{ agentId: string; allowedUserIds: string[] }>>;
+  applyGroups(companyId: string, agents: Array<{ agentId: string; allowedUserIds: string[] }>): Promise<GroupsApplyReport>;
+  reportGroupSync(companyId: string, report: { syncedAt: string; error: string | null }): Promise<void>;
   /**
    * False while the core answers the plugin's routes 503, right after a start before its worker
    * runs, or 404 `Plugin not found`, before `ensure-plugins` has installed it (the first start after an update).
@@ -92,6 +110,17 @@ export function parseGuardReport(raw: unknown): GuardReport {
     skipped: records(body.skipped).map((item) => ({ agentId: text(item.agentId), name: text(item.name), reason: text(item.reason) })),
     failures: failures(body.failures),
     selfTest: { status, detail: text(selfTest.detail) },
+  };
+}
+
+export function parseGroupsReport(raw: unknown): GroupsApplyReport {
+  const body = record(raw);
+  return {
+    protected: strings(body.protected),
+    unprotected: strings(body.unprotected),
+    people: strings(body.people),
+    skipped: records(body.skipped).map((item) => ({ id: text(item.id), reason: text(item.reason) })),
+    failures: records(body.failures).map((item) => ({ id: text(item.id), step: text(item.step), error: text(item.error) })),
   };
 }
 
@@ -151,6 +180,16 @@ export function createRulesApi(opts: CoreClientOptions): RulesApi {
     },
     async revertGuard(companyId) {
       return parseRevertReport(await request<unknown>(GUARD_PLUGIN_ROUTES.revert, { method: "POST", body: { companyId } }));
+    },
+    async getAgentAccess(companyId) {
+      const body = record(await request<unknown>(`${GROUP_ROUTES.access}?companyId=${id(companyId)}`));
+      return records(body.agents).map((item) => ({ agentId: text(item.agentId), allowedUserIds: strings(item.allowedUserIds) })).filter((item) => item.agentId.length > 0);
+    },
+    async applyGroups(companyId, agents) {
+      return parseGroupsReport(await request<unknown>(GROUP_ROUTES.apply, { method: "POST", body: { companyId, agents } }));
+    },
+    async reportGroupSync(companyId, report) {
+      await request<unknown>(GROUP_ROUTES.report, { method: "POST", body: { companyId, ...report } });
     },
     async pluginReady() {
       // The route takes POST only. The core checks the plugin's status and

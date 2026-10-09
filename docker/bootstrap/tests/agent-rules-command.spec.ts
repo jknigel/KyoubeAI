@@ -23,6 +23,9 @@ function api(overrides: Partial<RulesApi> = {}): RulesApi & { calls: string[] } 
     writeInstructionsFile: async () => {},
     reconcileGuard: async () => { calls.push("guard"); return QUIET_GUARD; },
     revertGuard: async () => { calls.push("unguard"); return { reverted: [], failures: [] }; },
+    getAgentAccess: async () => [],
+    applyGroups: async () => ({ protected: [], unprotected: [], people: [], skipped: [], failures: [] }),
+    reportGroupSync: async () => {},
     pluginReady: async () => true,
     ...overrides,
   };
