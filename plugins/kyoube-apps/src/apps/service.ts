@@ -40,6 +40,8 @@ export function parseRuntimeMethod(value: unknown): RuntimeMethod {
   throw new DataError("invalid", `unknown app data method "${String(value)}"`);
 }
 
+const NO_APP_ACCESS = "You don't have access to this app. Ask a company admin.";
+
 export interface AppServiceDeps {
   pool: Pool;
   data: DataService;
@@ -51,6 +53,11 @@ export interface AppServiceDeps {
   now?: () => number;
   /** The guardrail on risky agent actions (milestone 4). */
   guardAgentAction?: GuardAgentAction;
+  /**
+   * Apps this person may not open because they are in a group none of whose groups includes them
+   * (docs/groups.md). Absent, every app is open as before. People only: an agent's calls never ask.
+   */
+  hiddenApps?: (companyId: string, userId: string) => Promise<Set<string>>;
 }
 
 /** What publishing and rolling back accept besides the version. */
@@ -166,6 +173,7 @@ export class AppService {
   private readonly onMutationError: AppServiceDeps["onMutationError"];
   private readonly now: () => number;
   private readonly guardAgentAction: AppServiceDeps["guardAgentAction"];
+  private readonly hiddenApps: AppServiceDeps["hiddenApps"];
 
   constructor(deps: AppServiceDeps) {
     this.pool = deps.pool;
@@ -176,13 +184,16 @@ export class AppService {
     this.onMutationError = deps.onMutationError;
     this.now = deps.now ?? Date.now;
     this.guardAgentAction = deps.guardAgentAction;
+    this.hiddenApps = deps.hiddenApps;
   }
 
   /** Live apps for this company: drafts are visible only to those who can edit them. */
   async list(companyId: string, actor: DataActor): Promise<AppRecord[]> {
     const level = await this.authorize(companyId, actor, "read", "list apps");
     const all = await this.store.list(companyId);
-    return levelAllows(level, "write") ? all : all.filter((app) => app.status === "published");
+    const visible = levelAllows(level, "write") ? all : all.filter((app) => app.status === "published");
+    const hidden = await this.hiddenFor(companyId, actor);
+    return visible.filter((app) => !hidden.has(app.id));
   }
 
   async get(companyId: string, actor: DataActor, slug: string, version: number | "current" | "latest" = "latest"): Promise<{ app: AppRecord; version: AppVersion | null }> {
@@ -190,6 +201,7 @@ export class AppService {
     const editor = levelAllows(level, "write");
     const app = await this.store.get(companyId, slug);
     if (!app || (app.status !== "published" && !editor)) throw new DataError("not_found", `app "${slug}" not found`);
+    await this.assertAppAccess(companyId, actor, app);
     // Read access buys the published app and nothing behind it: a viewer's
     // "latest" is the published version, and any other version number is a
     // miss. Without this, read access to one published app would also hand
@@ -214,6 +226,7 @@ export class AppService {
   /** Saves a new version. It stays a draft until someone with schema access publishes it. */
   async update(companyId: string, actor: DataActor, slug: string, rawManifest: unknown, rawSource: unknown, notes: string | null = null): Promise<AppVersion> {
     await this.authorize(companyId, actor, "write", "update an app");
+    await this.assertSlugAccess(companyId, actor, slug);
     const manifest = validateAppManifest(rawManifest);
     if (manifest.slug !== slug) throw new DataError("invalid", "the manifest slug must match the app being updated");
     const source = assertAppSource(rawSource);
@@ -243,6 +256,7 @@ export class AppService {
   /** Terminal in Phase 3 (ruling P3-R10): the app disappears and its slug is free again. */
   async archive(companyId: string, actor: DataActor, slug: string, opts: { guard?: GuardContext } = {}): Promise<AppRecord> {
     await this.authorize(companyId, actor, "schema", "archive an app", { fresh: true });
+    await this.assertSlugAccess(companyId, actor, slug);
     // The app's id, not just its slug, is what a person allows: a slug is free again once its app is
     // archived (ruling P3-R10), so an "Allow once" must never carry over to a replacement app. Reading
     // the app first also gives a missing one the same not_found as without the guardrail, before any
@@ -378,6 +392,7 @@ export class AppService {
     await this.authorize(companyId, actor, "schema", "publish an app", { fresh: true });
     const target = await this.store.getVersion(companyId, slug, version);
     if (!target) throw new DataError("not_found", `app "${slug}" has no version ${version}`);
+    await this.assertSlugAccess(companyId, actor, slug);
     const current = await this.currentManifest(companyId, slug);
     const sets = target.manifest.decisions ?? {};
     let provider: string | null = null;
@@ -439,6 +454,7 @@ export class AppService {
   private async makeCurrent(companyId: string, actor: DataActor, slug: string, version: number | "latest", operation: string, opts: PublishOptions = {}): Promise<{ app: AppRecord; version: number }> {
     const target = await this.store.getVersion(companyId, slug, version);
     if (!target) throw new DataError("not_found", `app "${slug}" has no version ${version}`);
+    await this.assertSlugAccess(companyId, actor, slug);
     for (const table of target.manifest.tables) await this.data.describeTable(companyId, actor, table.name);
     await this.assertDecisionFields(companyId, actor, target.manifest, false);
     // Spec §5: new or changed decision sets change what leaves the server for every viewer, so a
@@ -505,7 +521,25 @@ export class AppService {
     const app = await this.store.get(companyId, slug);
     const version = app?.status === "published" ? await this.store.getVersion(app, "current") : null;
     if (!app || !version) throw new DataError("not_found", `app "${slug}" is not published`);
+    await this.assertAppAccess(companyId, actor, app);
     return { app, version, level };
+  }
+
+  private async hiddenFor(companyId: string, actor: DataActor): Promise<Set<string>> {
+    if (actor.kind !== "user" || !actor.id || !this.hiddenApps) return new Set();
+    return this.hiddenApps(companyId, actor.id);
+  }
+
+  /** Every path that names one app runs this after it has found the app. */
+  private async assertAppAccess(companyId: string, actor: DataActor, app: AppRecord): Promise<void> {
+    if ((await this.hiddenFor(companyId, actor)).has(app.id)) throw new DataError("forbidden", NO_APP_ACCESS);
+  }
+
+  /** For paths that go on to act by slug: load the app and gate it; a missing app is left to that action's own not_found. */
+  private async assertSlugAccess(companyId: string, actor: DataActor, slug: string): Promise<void> {
+    if (actor.kind !== "user" || !this.hiddenApps) return;
+    const app = await this.store.get(companyId, slug);
+    if (app) await this.assertAppAccess(companyId, actor, app);
   }
 
   /**
