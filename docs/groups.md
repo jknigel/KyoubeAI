@@ -139,5 +139,8 @@ moves the code it anchors on.
 - `docker compose exec app kyoube doctor` shows group failures and skipped agents with the agent
   rules lines, and warns when the last pass is more than 5 minutes old.
 - `docker compose exec app kyoube agent-rules --once` runs a pass now and prints every message.
+- The loop uses the board API key, and the group routes answer only a company owner or admin. If the
+  key's user is not an owner or admin of a company, that company's agent restrictions never sync, and
+  `kyoube doctor` says so, naming the company. Add that user to the company as an owner or admin.
 - A restricted person who can still assign an agent: wait a minute, then check the pass report for
   "has a custom assignment grant" or a skipped agent.

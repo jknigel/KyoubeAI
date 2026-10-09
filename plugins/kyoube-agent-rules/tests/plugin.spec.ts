@@ -53,8 +53,15 @@ function quietGroupsPort(overrides: Partial<GroupsPort> = {}): GroupsPort {
   };
 }
 
-async function started(port: GuardPort, groups: GroupsPort = quietGroupsPort()) {
+/** A core members-list row for the harness. */
+function memberRow(id: string, principalId: string, membershipRole: string | null, status = "active", companyId = COMPANY, principalType: "user" | "agent" = "user") {
+  return { id, companyId, principalType, principalId, status, membershipRole, grants: [], createdAt: new Date(), updatedAt: new Date() } as never;
+}
+
+/** The caller, "user-1", is an owner of both test companies unless the test says otherwise. */
+async function started(port: GuardPort, groups: GroupsPort = quietGroupsPort(), members = [memberRow("m-own", "user-1", "owner"), memberRow("m-own2", "user-1", "owner", "active", OTHER)]) {
   const harness = createTestHarness({ manifest });
+  harness.seed({ accessMembers: members });
   const plugin = createAgentRulesPlugin({ port: () => port, groupsPort: () => groups });
   await plugin.definition.setup(harness.ctx);
   return plugin;
@@ -283,6 +290,67 @@ describe("kyoube.agent-rules groups routes", () => {
     const plain = await started(guard);
     await plain.definition.onApiRequest!(request("guard.reconcile"));
     expect(writes).toEqual(["boss"]);
+  });
+});
+
+// Ruling R13: "board" admits every signed-in person; these routes need a company owner or admin.
+describe("kyoube.agent-rules routes: owner or admin only", () => {
+  const FORBIDDEN = { status: 403, body: { error: "forbidden: company owner or admin required", code: "forbidden" } };
+  const BODIES: Record<string, Record<string, unknown>> = { "guard.reconcile": {}, "guard.revert": {}, "groups.apply": { agents: [] } };
+
+  /** Ports that record every host call, so a refused request can be shown to have done nothing. */
+  function recording() {
+    const calls: string[] = [];
+    const note = (name: string) => async () => { calls.push(name); return [] as never; };
+    const guard = quietPort({ listAgents: note("listAgents"), readRecord: async () => { calls.push("readRecord"); return { ...EMPTY_RECORD }; }, setPolicy: note("setPolicy"), setGrants: note("setGrants"), writeRecord: note("writeRecord") });
+    const groups = quietGroupsPort({
+      listAgents: note("groups.listAgents"), listMembers: note("groups.listMembers"), setPolicy: note("groups.setPolicy"), setUserGrants: note("groups.setUserGrants"),
+      readGroupsRecord: async () => { calls.push("readGroupsRecord"); return { ...structuredClone(EMPTY_GROUPS_RECORD), protected: ["a1"], required: ["a1"] }; },
+      writeGroupsRecord: note("writeGroupsRecord"),
+    });
+    return { calls, guard, groups };
+  }
+
+  for (const routeKey of Object.keys(BODIES)) {
+    for (const role of ["operator", "viewer"]) {
+      it(`refuses an ${role} on ${routeKey}, touching nothing`, async () => {
+        const { calls, guard, groups } = recording();
+        const plugin = await started(guard, groups, [memberRow("m1", "user-1", role)]);
+        expect(await plugin.definition.onApiRequest!(request(routeKey, "user", COMPANY, BODIES[routeKey]))).toEqual(FORBIDDEN);
+        expect(calls).toEqual([]);
+      });
+    }
+    it(`refuses ${routeKey} to an owner of another company, a suspended admin and a non-member`, async () => {
+      const { calls, guard, groups } = recording();
+      for (const members of [[memberRow("m1", "user-1", "owner", "active", OTHER)], [memberRow("m1", "user-1", "admin", "suspended")], []]) {
+        const plugin = await started(guard, groups, members);
+        expect(await plugin.definition.onApiRequest!(request(routeKey, "user", COMPANY, BODIES[routeKey]))).toEqual(FORBIDDEN);
+      }
+      expect(calls).toEqual([]);
+    });
+    for (const role of ["owner", "Admin"]) {
+      it(`serves ${routeKey} to an ${role.toLowerCase()} (role compared case-insensitively)`, async () => {
+        const { calls, guard, groups } = recording();
+        const plugin = await started(guard, groups, [memberRow("m1", "user-1", role)]);
+        expect(await plugin.definition.onApiRequest!(request(routeKey, "user", COMPANY, BODIES[routeKey]))).toMatchObject({ status: 200 });
+        expect(calls.length).toBeGreaterThan(0);
+      });
+    }
+  }
+
+  it("uses the actor's userId when the host gives one", async () => {
+    const plugin = await started(quietPort(), quietGroupsPort(), [memberRow("m1", "user-9", "admin")]);
+    const req = { ...request("guard.revert"), actor: { actorType: "user" as const, actorId: "board-key", userId: "user-9" } };
+    expect(await plugin.definition.onApiRequest!(req)).toMatchObject({ status: 200 });
+  });
+
+  it("answers 500, doing nothing, when the members list cannot be read", async () => {
+    const { calls, guard, groups } = recording();
+    const harness = createTestHarness({ manifest });
+    const plugin = createAgentRulesPlugin({ port: () => guard, groupsPort: () => groups });
+    await plugin.definition.setup({ ...harness.ctx, access: { ...harness.ctx.access, members: { ...harness.ctx.access.members, list: async () => { throw new Error("host down"); } } } });
+    expect(await plugin.definition.onApiRequest!(request("groups.apply", "user", COMPANY, { agents: [] }))).toMatchObject({ status: 500, body: { error: "groups.apply failed: host down" } });
+    expect(calls).toEqual([]);
   });
 });
 

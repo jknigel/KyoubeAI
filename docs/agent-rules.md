@@ -37,6 +37,12 @@ and writes only what differs:
   only a plugin set an agent's scoped grant.
 - It records each pass in `/kyoubeai/.kyoube/agent-rules.json`, which `kyoube doctor` reads.
 
+The board key's user must be an **owner or admin of each company**. The plugin routes the loop calls
+(`/reconcile`, `/revert`, and the group routes below) refuse anyone else, because every signed-in
+person passes the core's own "board" check. In a company where the key's user is an operator, a viewer
+or not a member, the guard and group steps fail with `kyoube doctor` naming the company: add that user
+to the company as an owner or admin. Companies created by another admin are the usual case.
+
 ## Group restrictions
 
 When a company has user groups (`docs/groups.md`), the same loop also applies which people may give

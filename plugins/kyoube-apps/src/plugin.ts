@@ -130,6 +130,7 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
   // Host handles the board-only group routes need; onApiRequest runs outside setup.
   let hostMembers: PluginContext["access"]["members"] | null = null;
   let hostAgents: PluginContext["agents"] | null = null;
+  let hostRoles: RoleResolver | null = null;
   // The decision service and the provider resolver live in this closure for the same reason the
   // other services do (ruling P2-R5); `onConfigChanged` drops the resolver's cached keys.
   let decisions: DecisionService | null = null;
@@ -197,6 +198,7 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
       groups = groupService;
       hostMembers = ctx.access.members;
       hostAgents = ctx.agents;
+      hostRoles = roles;
       const dataService = (deps.createService ?? ((serviceDeps) => new DataService(serviceDeps)))({
         pool: dbPool,
         // Ruling P4-R13: a schema, grant or settings change asks the host again; everything else
@@ -478,10 +480,12 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
       const groupService = groups;
       const members = hostMembers;
       const agentsHost = hostAgents;
-      if (groupService && members && agentsHost) {
+      const roleHost = hostRoles;
+      if (groupService && members && agentsHost && roleHost) {
         const handled = await handleGroupsApiRequest(groupService, input, {
           listUserIds: async (c) => new Set((await members.list({ companyId: c })).filter((m) => m.principalType === "user" && m.status === "active").map((m) => m.principalId)),
           listAgentIds: async (c) => new Set((await agentsHost.list({ companyId: c })).filter((a) => a.status !== "terminated").map((a) => a.id)),
+          resolveRoleFresh: (c, u) => roleHost.resolveFresh(c, u),
         }, onError);
         if (handled) return handled;
       }
