@@ -66,6 +66,17 @@ describe("GroupService", () => {
     unlocked = true;
   });
 
+  it("writes a group_delete audit row with ids only", async () => {
+    const doomed = await groups.save(C, user("owner"), { name: "Alice's team", dataLevel: "read", members: ["op"], agents: ["agent-7"], apps: [appId] });
+    await groups.remove(C, user("admin"), doomed.id);
+    const rows = await db.pool.query<{ operation: string; actor_kind: string; actor_id: string; details: Record<string, unknown> }>(
+      "SELECT operation, actor_kind, actor_id, details FROM kyoube_meta.audit WHERE company_id = $1 AND operation = 'group_delete' AND details->>'groupId' = $2", [C, doomed.id]);
+    expect(rows.rows).toHaveLength(1);
+    expect(rows.rows[0]).toMatchObject({ actor_kind: "user", actor_id: "admin" });
+    expect(rows.rows[0]!.details).toEqual({ groupId: doomed.id, dataLevel: "read", members: ["op"], agents: ["agent-7"], apps: [appId] });
+    expect(JSON.stringify(rows.rows[0]!.details)).not.toContain("Alice");
+  });
+
   it("prunes and lists agent access for the watcher", async () => {
     await groups.save(C, user("owner"), { name: "Ops", members: ["op", "left"], agents: ["agent-1", "agent-gone"], apps: [] });
     expect(await groups.agentAccess(C, { userIds: new Set(["op"]), agentIds: new Set(["agent-1"]) })).toEqual([{ agentId: "agent-1", allowedUserIds: ["op"] }]);
