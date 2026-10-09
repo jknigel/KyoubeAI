@@ -32,14 +32,15 @@ await esbuild.build({
   logLevel: "info",
 });
 
-// Worker bundle: dependencies stay external (shipped via pnpm deploy). It
-// still needs the `.md` loader: the worker imports the manifest module,
-// which inlines the skill markdown.
+// Worker bundle: the runtime dependencies stay external (shipped via pnpm
+// deploy); @kyoube/license is a workspace devDependency, bundled in so
+// `pnpm deploy --prod` needs no copy of it. It still needs the `.md` loader: the worker
+// imports the manifest module, which inlines the skill markdown.
 await esbuild.build({
   entryPoints: { worker: "src/worker.ts" },
   outdir: "dist",
   bundle: true,
-  packages: "external",
+  external: ["@paperclipai/plugin-sdk", "@paperclipai/plugin-sdk/*", "pg", "pgsql-ast-parser", "zod"],
   platform: "node",
   format: "esm",
   target: ["node24"],
