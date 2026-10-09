@@ -145,7 +145,7 @@ reachable at a public HTTPS address; an internal API on a private network cannot
 
 A version that adds a connection or widens one from `read` to `read-write` has to be published by a
 person. The publish dialog lists each declared connection with its host and base path, its auth
-style, the connection's methods and the app's declared access, and marks what is new or changed. The
+style, the connection's methods and the app's declared access, and marks only the connections the version adds or widens. The
 person confirms that the app may call these services with the company's credentials, and the REST
 body carries `connectionsConfirmed: true`. Without it, that publish fails with `invalid`.
 

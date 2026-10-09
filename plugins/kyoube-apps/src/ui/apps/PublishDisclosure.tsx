@@ -15,10 +15,35 @@ export interface PublishPreviewData {
   sets: Array<{ key: string; table: string; fields: string[]; advisory: boolean; questions: Array<{ key: string; type: string; text: string }> }>;
 }
 
-export interface PublishConnection { name: string; access: "read" | "read-write"; baseUrl: string | null; auth: string | null; methods: string | null; available: boolean; missing: boolean }
+export interface PublishConnection {
+  name: string;
+  access: "read" | "read-write";
+  baseUrl: string | null;
+  auth: string | null;
+  methods: string | null;
+  available: boolean;
+  missing: boolean;
+  /** The published version lacks this connection (absent from an older worker: not marked). */
+  added?: boolean;
+  /** The published version declares it `read` and this one `read-write`. */
+  widened?: boolean;
+}
 
 export const connectionsOf = (preview: PublishPreviewData): PublishConnection[] => preview.connections?.list ?? [];
 export const connectionsChanged = (preview: PublishPreviewData): boolean => connectionsOf(preview).length > 0 && preview.connections?.changed === true;
+
+const AUTH_LABELS: Record<string, string> = { bearer: "bearer token", header: "API key header", basic: "basic auth" };
+const METHOD_LABELS: Record<string, string> = { read: "GET only", "read-write": "GET, POST, PUT, PATCH, DELETE" };
+
+/** Spec §2: what the person confirms, per connection; the change mark says what this version adds. */
+export function connectionDetails(entry: PublishConnection): { host: string | null; auth: string | null; methods: string | null; change: string | null } {
+  return {
+    host: entry.baseUrl ? entry.baseUrl.replace(/^https?:\/\//, "") : null,
+    auth: entry.auth ? AUTH_LABELS[entry.auth] ?? entry.auth : null,
+    methods: entry.methods ? METHOD_LABELS[entry.methods] ?? entry.methods : null,
+    change: entry.added ? "new in this version" : entry.widened ? "widened from read to read-write" : null,
+  };
+}
 
 const PROVIDER_NAMES: Record<string, string> = {
   typesafe: "TypeSafe",
@@ -61,12 +86,21 @@ export function PublishDisclosure(props: { preview: PublishPreviewData; appName:
         <section className="rounded border p-2" data-kyoube-connections="">
           <div className="font-medium">Connections</div>
           <ul className="list-disc pl-5">
-            {connections.map((entry) => (
-              <li key={entry.name} className={preview.connections?.changed ? "font-medium" : undefined}>
-                <code>{entry.name}</code> ({entry.access}){entry.baseUrl && <> <span className="break-all" data-kyoube-break="">{entry.baseUrl.replace(/^https?:\/\//, "")}</span></>}
-                {entry.missing ? <span className="text-red-600"> — not set up; ask a company admin</span> : !entry.available ? <span className="text-red-600"> — its secret doesn't resolve</span> : null}
-              </li>
-            ))}
+            {connections.map((entry) => {
+              const details = connectionDetails(entry);
+              return (
+                <li key={entry.name} data-kyoube-connection={entry.name} {...(details.change ? { "data-kyoube-changed": entry.added ? "added" : "widened", className: "font-medium" } : {})}>
+                  <code>{entry.name}</code>{details.host && <> <span className="break-all" data-kyoube-break="">{details.host}</span></>}
+                  {details.change && <span className="text-amber-700"> ({details.change})</span>}
+                  <div className="font-normal text-foreground/80">
+                    {details.auth && <>Auth: {details.auth} · </>}
+                    {details.methods && <>Connection allows: {details.methods} · </>}
+                    This app: {entry.access}
+                  </div>
+                  {entry.missing ? <div className="font-normal text-red-600">Not set up; ask a company admin.</div> : !entry.available ? <div className="font-normal text-red-600">Its secret doesn't resolve or can't be used right now.</div> : null}
+                </li>
+              );
+            })}
           </ul>
           {preview.connections?.changed && (
             <>

@@ -128,17 +128,24 @@ export function decisionSetsChanged(current: AppManifest | null, target: AppMani
   return JSON.stringify(canonical(current?.decisions ?? {})) !== JSON.stringify(canonical(next));
 }
 
+export interface ConnectionChange { name: string; access: "read" | "read-write"; added: boolean; widened: boolean }
+
 /**
- * Whether publishing `target` over `current` adds a connection the current version lacks, or widens
- * one from `read` to `read-write`. Removing or narrowing a connection never counts, and neither does
- * a reorder: those only shrink what the app can reach.
+ * Ruling R12, per connection `target` declares: `added` when the current published version lacks it,
+ * `widened` when it goes from `read` to `read-write`. Removing or narrowing a connection never
+ * counts, and neither does a reorder: those only shrink what the app can reach.
  */
-export function connectionsChanged(current: AppManifest | null, target: AppManifest): boolean {
+export function connectionChanges(current: AppManifest | null, target: AppManifest): ConnectionChange[] {
   const before = new Map((current?.connections ?? []).map((c) => [c.name, c.access]));
-  return (target.connections ?? []).some((c) => {
+  return (target.connections ?? []).map((c) => {
     const was = before.get(c.name);
-    return was === undefined || (was === "read" && c.access === "read-write");
+    return { name: c.name, access: c.access, added: was === undefined, widened: was === "read" && c.access === "read-write" };
   });
+}
+
+/** Whether publishing `target` over `current` needs a person's confirmation for its connections. */
+export function connectionsChanged(current: AppManifest | null, target: AppManifest): boolean {
+  return connectionChanges(current, target).some((c) => c.added || c.widened);
 }
 
 export function assertAppSource(source: unknown): string {
