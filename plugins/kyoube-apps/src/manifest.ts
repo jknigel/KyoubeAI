@@ -7,6 +7,7 @@ import { decisionToolDeclarations } from "./decisions/tools.js";
 import { APPS_PAGE_ROUTE } from "./apps/page-route.js";
 import { appToolDeclarations } from "./apps/tools.js";
 import { DECISIONS_CONFIG_SCHEMA } from "./decisions/config.js";
+import { CONNECTIONS_CONFIG_SCHEMA } from "./connections/config.js";
 import appsSkillMarkdown from "./skills/kyoube-apps.md";
 import decisionsSkillMarkdown from "./skills/kyoube-decisions.md";
 import skillMarkdown from "./skills/kyoube-data.md";
@@ -71,7 +72,10 @@ const manifest: PaperclipPluginManifestV1 = {
     "issue.interactions.read",
   ],
   entrypoints: { worker: "./dist/worker.js", ui: "./dist/ui" },
-  instanceConfigSchema: DECISIONS_CONFIG_SCHEMA,
+  instanceConfigSchema: {
+    ...DECISIONS_CONFIG_SCHEMA,
+    properties: { ...DECISIONS_CONFIG_SCHEMA.properties, ...CONNECTIONS_CONFIG_SCHEMA.properties },
+  },
   tools: [...toolDeclarations(), ...appToolDeclarations(), ...decisionToolDeclarations()],
   apiRoutes: [...API_ROUTES, ...APP_API_ROUTES, ...DECISION_API_ROUTES, ...GROUP_API_ROUTES],
   jobs: [

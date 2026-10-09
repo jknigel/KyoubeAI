@@ -132,7 +132,7 @@ describe("ProviderResolver", () => {
 
 describe("manifest", () => {
   it("declares the provider config with a secret-ref key and the two capabilities", () => {
-    expect(manifest.instanceConfigSchema).toEqual(DECISIONS_CONFIG_SCHEMA);
+    expect(manifest.instanceConfigSchema).toMatchObject({ type: "object", properties: DECISIONS_CONFIG_SCHEMA.properties });
     expect(DECISIONS_CONFIG_SCHEMA.properties.decisionsApiKey).toEqual({ type: ["string", "object"], format: "secret-ref", title: "Typed decisions: API key", description: "A company secret holding the provider's API key." });
     expect(manifest.capabilities).toEqual(expect.arrayContaining(["http.outbound", "secrets.read-ref"]));
   });
