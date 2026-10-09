@@ -1,6 +1,6 @@
 // tests/unit/app-manifest-connections.spec.ts
 import { describe, expect, it } from "vitest";
-import { MAX_APP_CONNECTIONS, connectionsChanged, validateAppManifest } from "../../src/apps/manifest.js";
+import { MAX_APP_CONNECTIONS, connectionChanges, connectionsChanged, validateAppManifest } from "../../src/apps/manifest.js";
 
 const base = { name: "Pay", slug: "pay", tables: [{ name: "tickets" }] };
 const withConns = (connections: unknown) => validateAppManifest({ ...base, connections });
@@ -22,6 +22,23 @@ describe("connections in the manifest", () => {
     const many = Array.from({ length: MAX_APP_CONNECTIONS + 1 }, (_, i) => ({ name: `c${i}` }));
     expect(() => withConns(many)).toThrow("invalid");
     expect(withConns(many.slice(0, MAX_APP_CONNECTIONS)).connections).toHaveLength(MAX_APP_CONNECTIONS);
+  });
+});
+
+describe("connectionChanges", () => {
+  const m = (c?: unknown) => (c ? withConns(c) : validateAppManifest(base));
+  it("marks each declared connection as added, widened or neither, the same way connectionsChanged decides", () => {
+    const current = m([{ name: "keep" }, { name: "wide" }, { name: "narrow", access: "read-write" }, { name: "gone" }]);
+    const target = m([{ name: "keep" }, { name: "wide", access: "read-write" }, { name: "narrow" }, { name: "new" }]);
+    expect(connectionChanges(current, target)).toEqual([
+      { name: "keep", access: "read", added: false, widened: false },
+      { name: "wide", access: "read-write", added: false, widened: true },
+      { name: "narrow", access: "read", added: false, widened: false },
+      { name: "new", access: "read", added: true, widened: false },
+    ]);
+    expect(connectionsChanged(current, target)).toBe(true);
+    expect(connectionChanges(null, m([{ name: "a", access: "read-write" }]))).toEqual([{ name: "a", access: "read-write", added: true, widened: false }]);
+    expect(connectionChanges(m([{ name: "a" }]), m())).toEqual([]);
   });
 });
 

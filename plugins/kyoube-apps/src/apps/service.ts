@@ -13,7 +13,7 @@ import type { GuardAgentAction, GuardContext, GuardedAction } from "../decisions
 import type { DecisionService } from "../decisions/service.js";
 import { getLoggedDecision, recordOutcome, type Outcome } from "../decisions/store.js";
 import type { ConnectionResponse, ConnectionService } from "../connections/service.js";
-import { assertAppSource, connectionsChanged, decisionSetsChanged, validateAppManifest, type AppManifest } from "./manifest.js";
+import { assertAppSource, connectionChanges, connectionsChanged, decisionSetsChanged, validateAppManifest, type AppManifest } from "./manifest.js";
 import { AppStore, type AppRecord, type AppVersion } from "./store.js";
 
 /** What a running app is told about itself, its viewer, and the tables it may touch. */
@@ -103,7 +103,12 @@ export interface PublishPreview {
   connections: {
     /** The version adds or changes connections: a person must publish it, with `connectionsConfirmed`. */
     changed: boolean;
-    list: Array<{ name: string; access: "read" | "read-write"; baseUrl: string | null; auth: string | null; methods: string | null; available: boolean; missing: boolean }>;
+    /**
+     * Each declared connection as the dialog shows it. `added` (the published version lacks it) and
+     * `widened` (read → read-write) mark the entries the confirmation is about; `changed` is true
+     * exactly when one of them is.
+     */
+    list: Array<{ name: string; access: "read" | "read-write"; baseUrl: string | null; auth: string | null; methods: string | null; available: boolean; missing: boolean; added: boolean; widened: boolean }>;
   };
 }
 
@@ -440,7 +445,7 @@ export class AppService {
         // The dialog still shows what would be sent; it just cannot name the provider.
       }
     }
-    const declared = target.manifest.connections ?? [];
+    const declared = connectionChanges(current, target.manifest);
     let configured: Awaited<ReturnType<NonNullable<AppServiceDeps["connections"]>["status"]>>["connections"] = [];
     if (declared.length > 0 && this.connections) {
       try { configured = (await this.connections.status(companyId)).connections; } catch { configured = []; }
@@ -449,10 +454,13 @@ export class AppService {
       version: target.version,
       changed: decisionSetsChanged(current, target.manifest),
       connections: {
-        changed: connectionsChanged(current, target.manifest),
+        changed: declared.some((entry) => entry.added || entry.widened),
         list: declared.map((entry) => {
           const row = configured.find((candidate) => candidate.name === entry.name);
-          return { name: entry.name, access: entry.access, baseUrl: row?.baseUrl ?? null, auth: row?.auth ?? null, methods: row?.methods ?? null, available: row?.available === true, missing: !row };
+          return {
+            name: entry.name, access: entry.access, baseUrl: row?.baseUrl ?? null, auth: row?.auth ?? null, methods: row?.methods ?? null,
+            available: row?.available === true, missing: !row, added: entry.added, widened: entry.widened,
+          };
         }),
       },
       provider,

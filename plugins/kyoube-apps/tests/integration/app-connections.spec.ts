@@ -95,9 +95,22 @@ describe("publishing connections", () => {
     const preview = await apps.publishPreview(C, OWNER, "c-prev");
     expect(preview.connections.changed).toBe(true);
     expect(preview.connections.list).toEqual([
-      { name: "crm", access: "read-write", baseUrl: "https://crm.example.com/", auth: "header", methods: "read-write", available: true, missing: false },
-      { name: "off", access: "read", baseUrl: "https://off.example.com/", auth: "basic", methods: "read", available: false, missing: false },
-      { name: "ghost", access: "read", baseUrl: null, auth: null, methods: null, available: false, missing: true },
+      { name: "crm", access: "read-write", baseUrl: "https://crm.example.com/", auth: "header", methods: "read-write", available: true, missing: false, added: true, widened: false },
+      { name: "off", access: "read", baseUrl: "https://off.example.com/", auth: "basic", methods: "read", available: false, missing: false, added: true, widened: false },
+      { name: "ghost", access: "read", baseUrl: null, auth: null, methods: null, available: false, missing: true, added: true, widened: false },
+    ]);
+  });
+
+  it("marks in the preview only what the next version adds or widens over the published one", async () => {
+    await apps.create(C, OWNER, manifest("c-delta", [{ name: "stripe" }, { name: "crm" }]), SOURCE);
+    await apps.publish(C, OWNER, "c-delta", undefined, { connectionsConfirmed: true });
+    await apps.update(C, OWNER, "c-delta", manifest("c-delta", [{ name: "stripe" }, { name: "crm", access: "read-write" }, { name: "off" }]), SOURCE);
+    const preview = await apps.publishPreview(C, OWNER, "c-delta");
+    expect(preview.connections.changed).toBe(true);
+    expect(preview.connections.list.map(({ name, added, widened }) => ({ name, added, widened }))).toEqual([
+      { name: "stripe", added: false, widened: false },
+      { name: "crm", added: false, widened: true },
+      { name: "off", added: true, widened: false },
     ]);
   });
 });

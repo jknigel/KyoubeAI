@@ -141,6 +141,68 @@ describe("Publish dialog connections", () => {
   });
 });
 
+const mixed = (overrides: Partial<PublishPreviewData> = {}): PublishPreviewData => ({
+  version: 3, changed: false, provider: null, available: true,
+  connections: {
+    changed: true,
+    list: [
+      { name: "stripe", access: "read", baseUrl: "https://api.stripe.com/v1/", auth: "bearer", methods: "read", available: true, missing: false, added: false, widened: false },
+      { name: "crm", access: "read-write", baseUrl: "https://crm.example.com/api/", auth: "header", methods: "read-write", available: true, missing: false, added: false, widened: true },
+      { name: "slack", access: "read", baseUrl: "https://slack.example.com/", auth: "basic", methods: "read-write", available: false, missing: false, added: true, widened: false },
+      { name: "ghost", access: "read", baseUrl: null, auth: null, methods: null, available: false, missing: true, added: true, widened: false },
+    ],
+  },
+  sets: [],
+  ...overrides,
+});
+const entry = (name: string) => container.querySelector<HTMLElement>(`[data-kyoube-connection="${name}"]`)!;
+
+describe("Publish dialog connection details (spec §2)", () => {
+  it("shows each connection's host and base path, auth style, methods and the app's declared access", async () => {
+    installBridge();
+    await act(async () => root.render(createElement(PublishDialog, { slug: "pay", appName: "Payments", mode: "publish", preview: mixed(), onDone: () => {}, onCancel: () => {} })));
+    const stripe = entry("stripe").textContent!;
+    expect(stripe).toContain("api.stripe.com/v1/");
+    expect(stripe).not.toContain("https://");
+    expect(stripe).toContain("Auth: bearer token");
+    expect(stripe).toContain("Connection allows: GET only");
+    expect(stripe).toContain("This app: read");
+    const crm = entry("crm").textContent!;
+    expect(crm).toContain("crm.example.com/api/");
+    expect(crm).toContain("Auth: API key header");
+    expect(crm).toContain("Connection allows: GET, POST, PUT, PATCH, DELETE");
+    expect(crm).toContain("This app: read-write");
+    expect(entry("slack").textContent).toContain("Auth: basic auth");
+    expect(entry("slack").textContent).toContain("can't be used right now");
+    expect(entry("ghost").textContent).toContain("Not set up; ask a company admin.");
+    expect(entry("ghost").textContent).toContain("This app: read");
+  });
+
+  it("highlights only the connections this version adds or widens", async () => {
+    installBridge();
+    await act(async () => root.render(createElement(PublishDialog, { slug: "pay", appName: "Payments", mode: "publish", preview: mixed(), onDone: () => {}, onCancel: () => {} })));
+    expect(entry("stripe").getAttribute("data-kyoube-changed")).toBeNull();
+    expect(entry("stripe").className).not.toContain("font-medium");
+    expect(entry("stripe").textContent).not.toContain("new in this version");
+    expect(entry("crm").getAttribute("data-kyoube-changed")).toBe("widened");
+    expect(entry("crm").className).toContain("font-medium");
+    expect(entry("crm").textContent).toContain("widened from read to read-write");
+    expect(entry("slack").getAttribute("data-kyoube-changed")).toBe("added");
+    expect(entry("slack").textContent).toContain("new in this version");
+    expect(entry("ghost").getAttribute("data-kyoube-changed")).toBe("added");
+    expect([...container.querySelectorAll("[data-kyoube-changed]")].map((el) => el.getAttribute("data-kyoube-connection"))).toEqual(["crm", "slack", "ghost"]);
+  });
+
+  it("highlights nothing when the version only keeps or narrows connections", async () => {
+    installBridge();
+    const kept = mixed();
+    kept.connections = { changed: false, list: kept.connections!.list.slice(0, 1) };
+    await act(async () => root.render(createElement(PublishDialog, { slug: "pay", appName: "Payments", mode: "publish", preview: kept, onDone: () => {}, onCancel: () => {} })));
+    expect(container.querySelectorAll("[data-kyoube-changed]")).toHaveLength(0);
+    expect(container.querySelector('input[type="checkbox"]')).toBeNull();
+  });
+});
+
 describe("Apps page", () => {
   it("shows a Uses line for an app that declares connections", async () => {
     installBridge();
