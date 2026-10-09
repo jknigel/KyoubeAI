@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createRulesApi, GUARD_PLUGIN_ROUTES } from "../src/agent-rules/api.js";
+import { createRulesApi, GROUP_ROUTES, GUARD_PLUGIN_ROUTES } from "../src/agent-rules/api.js";
 import { CoreApiError } from "../src/core-api.js";
 
 interface Seen { url: string; method: string; body: unknown }
@@ -118,5 +118,23 @@ describe("createRulesApi", () => {
   it("returns empty object when interactionResolverGovernance is null", async () => {
     const { impl } = fakeFetch(() => ({ status: 200, body: { id: "c1", interactionResolverGovernance: null } }));
     expect(await api(impl).getGovernance("c1")).toEqual({});
+  });
+
+  it("reads agent access, applies groups and reports the sync through the board-only routes", async () => {
+    const { impl, seen } = fakeFetch((req) =>
+      req.url.includes("agent-access")
+        ? { status: 200, body: { agents: [{ agentId: "a1", allowedUserIds: ["u1", 3] }, { agentId: 5 }] } }
+        : req.url.endsWith("/apply")
+          ? { status: 200, body: { protected: ["a1"], people: ["u1", 2], skipped: [{ id: "a9", reason: "r" }], failures: [{ id: "u2", step: "grants", error: "e" }] } }
+          : { status: 200, body: { ok: true } });
+    const client = api(impl);
+    expect(await client.getAgentAccess("c1")).toEqual([{ agentId: "a1", allowedUserIds: ["u1"] }]);
+    expect(await client.applyGroups("c1", [{ agentId: "a1", allowedUserIds: ["u1"] }])).toEqual({
+      protected: ["a1"], unprotected: [], people: ["u1"], skipped: [{ id: "a9", reason: "r" }], failures: [{ id: "u2", step: "grants", error: "e" }],
+    });
+    await client.reportGroupSync("c1", { syncedAt: "t", error: null });
+    expect(seen[0]).toEqual({ url: `http://app:3100${GROUP_ROUTES.access}?companyId=c1`, method: "GET", body: undefined });
+    expect(seen[1]).toEqual({ url: `http://app:3100${GROUP_ROUTES.apply}`, method: "POST", body: { companyId: "c1", agents: [{ agentId: "a1", allowedUserIds: ["u1"] }] } });
+    expect(seen[2]).toEqual({ url: `http://app:3100${GROUP_ROUTES.report}`, method: "POST", body: { companyId: "c1", syncedAt: "t", error: null } });
   });
 });

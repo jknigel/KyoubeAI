@@ -27,7 +27,7 @@ export function describeError(error: unknown): string {
 }
 
 function companyReport(company: CompanySummary): CompanyReport {
-  return { companyId: company.id, name: company.name || company.id, governance: "already", guard: null, rulesUpdated: [], skipped: [], failures: [], writes: 0 };
+  return { companyId: company.id, name: company.name || company.id, governance: "already", guard: null, groups: null, rulesUpdated: [], skipped: [], failures: [], writes: 0 };
 }
 
 async function listCompanies(deps: PassDeps, report: PassReport): Promise<CompanySummary[] | null> {
@@ -89,6 +89,33 @@ async function editAgents(api: RulesApi, companyId: string, entry: CompanyReport
   }
 }
 
+/**
+ * Groups (docs/groups.md): read who may assign which agent from kyoube.apps, have kyoube.agent-rules
+ * apply it, and tell kyoube.apps how it went. A failed read skips the step: an unreadable list must
+ * never be applied as "no groups", which would lift every restriction.
+ */
+async function groupsStep(deps: PassDeps, companyId: string, entry: CompanyReport): Promise<void> {
+  const syncedAt = deps.now().toISOString();
+  let error: string | null = null;
+  try {
+    const access = await deps.api.getAgentAccess(companyId);
+    const groups = await deps.api.applyGroups(companyId, access);
+    entry.groups = groups;
+    entry.writes += groups.protected.length + groups.unprotected.length + groups.people.length;
+    for (const skipped of groups.skipped) entry.skipped.push({ agent: skipped.id, reason: skipped.reason });
+    for (const failure of groups.failures) entry.failures.push({ step: "groups", agent: failure.id, error: `${failure.step}: ${failure.error}` });
+    if (groups.failures.length > 0) error = `${groups.failures.length} failure(s); see kyoube doctor`;
+  } catch (caught) {
+    error = describeError(caught);
+    entry.failures.push({ step: "groups", error });
+  }
+  try {
+    await deps.api.reportGroupSync(companyId, { syncedAt, error });
+  } catch (caught) {
+    entry.failures.push({ step: "groups", error: `could not report the sync: ${describeError(caught)}` });
+  }
+}
+
 /** One pass: in every company, G1, then G2 through the plugin, then the rules block. Each step and each agent fails on its own. */
 export async function applyPass(deps: PassDeps, state: AgentRulesState): Promise<{ report: PassReport; state: AgentRulesState }> {
   const report: PassReport = { at: deps.now().toISOString(), mode: "apply", companies: [], failures: [] };
@@ -124,6 +151,7 @@ export async function applyPass(deps: PassDeps, state: AgentRulesState): Promise
       entry.failures.push({ step: "guard", error: describeError(error) });
     }
 
+    await groupsStep(deps, company.id, entry);
     await editAgents(deps.api, company.id, entry, applyRules);
     report.companies.push(entry);
   }

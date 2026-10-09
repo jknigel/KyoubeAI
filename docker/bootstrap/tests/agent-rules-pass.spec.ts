@@ -45,6 +45,12 @@ class FakeApi implements RulesApi {
   }
   async revertGuard(companyId: string): Promise<GuardRevertReport> { this.calls.push(`unguard ${companyId}`); return { reverted: [], failures: [] }; }
   async pluginReady() { return true; }
+  access: Record<string, Array<{ agentId: string; allowedUserIds: string[] }>> = { c1: [] };
+  groupsReport = { protected: [] as string[], unprotected: [] as string[], people: [] as string[], skipped: [] as Array<{ id: string; reason: string }>, failures: [] as Array<{ id: string; step: string; error: string }> };
+  syncReports: Array<{ companyId: string; syncedAt: string; error: string | null }> = [];
+  async getAgentAccess(companyId: string) { this.check(`access:${companyId}`); return structuredClone(this.access[companyId] ?? []); }
+  async applyGroups(companyId: string, agents: Array<{ agentId: string; allowedUserIds: string[] }>) { this.check(`applyGroups:${companyId}`); this.calls.push(`groups ${companyId} ${agents.length}`); return structuredClone(this.groupsReport); }
+  async reportGroupSync(companyId: string, report: { syncedAt: string; error: string | null }) { this.syncReports.push({ companyId, ...report }); }
 }
 
 const deps = (api: RulesApi) => ({ api, now: () => NOW });
@@ -53,7 +59,7 @@ describe("applyPass", () => {
   it("sets G1, reconciles G2 and writes the rules block, then records it all", async () => {
     const api = new FakeApi();
     const { report, state } = await applyPass(deps(api), EMPTY_STATE);
-    expect(api.calls).toEqual(["governance c1", "guard c1", "write a1"]);
+    expect(api.calls).toEqual(["governance c1", "guard c1", "groups c1 0", "write a1"]);
     expect(api.governance.c1?.request_confirmation).toEqual({ defaultPolicy: "human_only", cap: "human_only" });
     expect(api.files.a1?.startsWith(RULES_BLOCK)).toBe(true);
     expect(report.companies[0]).toMatchObject({ companyId: "c1", governance: "set", rulesUpdated: ["Writer"], writes: 2, failures: [] });
@@ -68,7 +74,7 @@ describe("applyPass", () => {
     const first = await applyPass(deps(api), EMPTY_STATE);
     api.calls = [];
     const second = await applyPass(deps(api), first.state);
-    expect(api.calls).toEqual(["guard c1"]);
+    expect(api.calls).toEqual(["guard c1", "groups c1 0"]);
     expect(second.report.companies[0]?.writes).toBe(0);
     expect(second.state.governancePrevious.c1?.request_confirmation).toEqual({ cap: "anyone" });
   });
@@ -239,5 +245,34 @@ describe("revertPass", () => {
       suggest_tasks: { defaultPolicy: "human_only", cap: "human_only" },
     });
     expect(state.governancePrevious).toEqual({});
+  });
+});
+
+describe("group step", () => {
+  it("reads agent access, applies it after the guard, and reports the sync", async () => {
+    const api = new FakeApi();
+    api.access.c1 = [{ agentId: "a1", allowedUserIds: ["u1"] }];
+    api.groupsReport.people = ["u1"];
+    const { report } = await applyPass({ api, now: () => NOW }, EMPTY_STATE);
+    expect(api.calls).toContain("groups c1 1");
+    expect(report.companies[0]!.groups?.people).toEqual(["u1"]);
+    expect(api.syncReports).toEqual([{ companyId: "c1", syncedAt: NOW.toISOString(), error: null }]);
+  });
+
+  it("skips the group step entirely when agent access cannot be read", async () => {
+    const api = new FakeApi();
+    api.failing.add("access:c1");
+    const { report } = await applyPass({ api, now: () => NOW }, EMPTY_STATE);
+    expect(api.calls.some((call) => call.startsWith("groups "))).toBe(false);
+    expect(report.companies[0]!.failures).toContainEqual(expect.objectContaining({ step: "groups" }));
+    expect(api.syncReports[0]!.error).toMatch(/refused access:c1/);
+  });
+
+  it("reports group failures from the plugin as pass failures", async () => {
+    const api = new FakeApi();
+    api.groupsReport.failures = [{ id: "u2", step: "grants", error: "nope" }];
+    const { report } = await applyPass({ api, now: () => NOW }, EMPTY_STATE);
+    expect(report.companies[0]!.failures).toContainEqual({ step: "groups", agent: "u2", error: "grants: nope" });
+    expect(api.syncReports[0]!.error).toBe("1 failure(s); see kyoube doctor");
   });
 });
