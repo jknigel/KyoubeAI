@@ -165,8 +165,9 @@ company's own role before touching anything, so cross-company data access is imp
 Postgres level, not just at the plugin's: no other company role holds any privilege on a schema that
 isn't its own.
 
-- **Access levels** are `none < read < write < schema`, held per person (via their company role) or per
-  agent (an explicit grant, defaulting to `none`), set under **Company Settings → Data access**.
+- **Access levels** are `none < read < write < schema`, held per person (via their company role, or a
+  user group's level, see [Groups](#groups)) or per agent (an explicit grant, defaulting to `none`), set
+  under **Company Settings → Data access**.
 - **UI data reads are advisory, not an authorization check** — the same shape of residual as
   `terminal.can_open` above. The plugin's UI-facing reads (`data.tables`, `data.table`, `data.rows`,
   `data.count`, `data.access`, behind `DataPage.tsx`, `SidebarEntry.tsx`, and the apps gallery's
@@ -219,6 +220,51 @@ isn't its own.
   delete rows at their previous level. Nothing they do in that window is unaudited — every mutation is
   recorded in `kyoube_meta.audit` with their identity — and the window closes on its own. Revoking a
   company's data access entirely (rather than one member's) takes effect at once.
+
+## Groups
+
+User groups (`docs/groups.md`) restrict which people may open which apps, give work to which agents,
+and what data level they hold. Group tables are in `kyoube_meta` (`groups`, `group_members`,
+`group_agents`, `group_apps`).
+
+- **Apps.** An app in a group is hidden from the gallery and refused (`forbidden`) on get, runtime,
+  runtime data, decide and preview for anyone outside its groups. The check is in `AppService`, reads
+  the tables on every call (no cache) and so does not depend on the browser.
+- **Data levels.** `DataService.levelFor` takes the highest level among a person's groups that set
+  one, otherwise the role mapping. A group level is never below `read`: the Data page's UI reads
+  build their actor from a client-supplied id (see [Data](#data)) and are safe only because `read` is
+  the floor. A group level cannot reveal anything a member could not already read.
+- **Owners and admins** are exempt from all of it and always `schema`.
+- **Managing groups, and data-access administration.** Only owners and admins, with the caller's
+  role re-read from the core on every mutation. Agent grants, data settings and typed-decision
+  settings stay with owners and admins by role: a group's `schema` level never grants them. The
+  settings page reads groups through host-authenticated actions, never the client-supplied id path,
+  so a client-supplied id cannot reveal who is in a group.
+- **Audit.** Every group mutation writes one `kyoube_meta.audit` row in the same transaction,
+  recording ids and never people's names.
+- **Licence.** Any valid key unlocks creating and changing groups. Enforcement never depends on the
+  licence: an expired or removed key leaves existing groups in force, and deleting a group is always
+  allowed.
+- **Agents.** Enforcement uses the core's own checks. `kyoube.agent-rules` marks listed agents
+  protected and scopes people's `tasks:assign` grants, once a minute, so a change takes up to a
+  minute to apply. A grant someone scoped by hand is left alone and reported, and one changed after
+  KyoubeAI wrote it stays as they set it (unless it equals the person's original role default or
+  KyoubeAI's last write). An agent whose authorization policy has keys KyoubeAI does not change cannot
+  be protected, is reported as skipped, and is not restricted. If the agent-access list cannot be read
+  or is malformed, the company's group step is skipped and reported, never applied as "no groups".
+  While the watcher is not running, agent restrictions stop updating; `kyoube doctor` warns.
+- **Chat.** The core's Agent Chat routes skip the assignment check. A standing core patch
+  (`groups-chat-open-assign-check`, `groups-chat-message-assign-check`) adds it, for protected agents,
+  when a chat is opened and when a message is sent. Other chat actions in an open chat (answering an
+  interaction card, uploading an attachment) are only checked against the chat's owner by the core.
+  Someone who loses the right cannot reopen their chat panel; the conversation stays readable as an
+  issue. A side effect beyond groups: viewers can no longer chat with protected manager agents.
+- **Residual: agents are visible.** The core has no per-agent visibility, so people outside a group
+  can still see its agents, their tasks and their runs. Groups restrict giving work and chat, not
+  seeing.
+- **Residual: group names are visible.** Any company member can see which groups restrict an agent
+  (the agent page's Access tab). Do not put people's names in group names.
+- **Residual: people are shown by id and role.** The core's plugin API gives no display names.
 
 ## Apps
 

@@ -4,6 +4,27 @@ All notable changes to KyoubeAI are recorded here, in terms of what changed for 
 building on it. The format is loosely [Keep a Changelog](https://keepachangelog.com/); versioning is
 [SemVer](https://semver.org/).
 
+## 1.7.0 (unreleased)
+
+### Added
+
+- User groups (licensed): decide which people may use which agents and apps, and set a group data
+  level. A group holds people, agents, apps and an optional data level (read, write or schema; never
+  below read, highest wins). An agent or app in no group stays open to everyone; owners and admins are
+  never restricted. Manage groups under Settings, Groups; the agent page gets an Access tab and the
+  Data access page shows where each level comes from. Agent changes apply within about a minute
+  through the agent rules loop. Any valid licence unlocks creating and changing groups; existing
+  groups keep being enforced, and can be deleted, without one. See [docs/groups.md](docs/groups.md).
+- `kyoube.apps` gains the `ui.detailTab.register` capability and `kyoube.agent-rules` gains
+  `access.members.read`; the bootstrap reinstalls the plugins on update to pick them up (`docs/architecture.md`, "Plugin hot reload").
+
+### Changed
+
+- Agent chat honours assignment rules for protected agents (second standing core patch,
+  `groups-chat-open-assign-check` and `groups-chat-message-assign-check`). Opening a chat with a
+  protected agent, and sending a message in one, needs the right to assign it. Viewers can no longer
+  chat with protected manager agents, which they could never assign to.
+
 ## 1.6.0 - 2026-10-08
 
 ### Changed

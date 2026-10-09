@@ -33,7 +33,7 @@ docker compose
 │   │    ├─ adapters: claude_local · pi_local · hermes_local
 │   │    ├─ plugin runtime
 │   │    │     ├─ worker  kyoube.terminal   — node-pty PTY sessions
-│   │    │     ├─ worker  kyoube.apps       — DataService + AppService
+│   │    │     ├─ worker  kyoube.apps       — DataService + AppService + user groups (docs/groups.md)
 │   │    │     ├─ worker  kyoube.files      — WorkspaceFiles over each project's folder
 │   │    │     ├─ worker  kyoube.agent-rules — protected manager agents (docs/agent-rules.md)
 │   │    │     ├─ worker  kyoube.license    — the Licence page (docs/licensing.md); reads files on the home volume, never the core database
@@ -74,7 +74,18 @@ is one of these plugins, the `@kyoube/app-sdk` package the apps plugin injects i
 `@kyoube/plugin-agent-rules` (`plugins/kyoube-agent-rules`) has no UI and no tools. It holds the one
 part of the agent working rules the core lets only a plugin do: setting a manager agent's assignment
 policy and its own-team grant through the SDK's `ctx.authorization`. `kyoube agent-rules` calls its two
-board-only routes once a minute (`docs/agent-rules.md`).
+board-only routes once a minute (`docs/agent-rules.md`), plus a third, `POST /groups/apply`, that applies
+which people may assign which agents (`docs/groups.md`). It reads company members through the
+`access.members.read` capability, added for that.
+
+User groups live in `kyoube.apps` (`plugins/kyoube-apps/src/groups/`, migration `0006_groups.sql`): the
+group store and service, the licence check, and the Groups settings page and agent **Access** tab (a
+`detailTab` slot on `agent` entities, which needed the `ui.detailTab.register` capability). Data levels
+(`DataService.levelFor`) and the apps gallery and runtime (`AppService`) consult the groups on every
+call. Agents cannot be restricted from inside `kyoube.apps`: plugins cannot call each other, and only
+agent-rules holds the `authorization.*` capabilities. So `kyoube.apps` serves two board-only routes,
+`GET /groups/agent-access` (which agents may be assigned by whom) and `POST /groups/sync-report` (the
+watcher's result, shown on the Groups page), and the watcher carries the data across (below).
 
 ## Request paths
 
@@ -270,10 +281,13 @@ each plugin's own dependency:
 ### Core patches
 
 The image is the pinned core, rebranded and themed, with a short, bounded list of behaviour fixes.
-The one standing behaviour change in the core is the licensing hook (`docs/licensing.md`): a Better Auth
-`user.create.before` hook that calls `/opt/kyoube/license/enforce.mjs`.
+There are two standing behaviour changes in the core. The first is the licensing hook
+(`docs/licensing.md`): a Better Auth `user.create.before` hook that calls `/opt/kyoube/license/enforce.mjs`.
+The second is for user groups (`docs/groups.md`): `groups-chat-open-assign-check` and
+`groups-chat-message-assign-check` add the core's own assignment check to the Agent Chat routes, for
+protected agents only, because those routes otherwise skip it.
 `docker/core-patches/patches.mjs` carries fixes to upstream bugs that had to ship here first, and the
-standing licensing entries. The temporary fixes are nine in the served UI (the first-run wizard's "Skip
+standing entries (licensing, user groups). The temporary fixes are nine in the served UI (the first-run wizard's "Skip
 for now", and the pi and Hermes task-chat transcript fixes), one in the Hermes adapter's server source
 (`hermes-quiet-default`, upstream PR #12016, in `packages/adapters/hermes/src/server/execute.ts`, which
 the server runs through tsx) and one in the compiled server code: `anthropic-signin-setup-token` (the command Claude subscription
@@ -286,7 +300,7 @@ that code or already carries the fix fails the build with the patch's id — the
 entry. The one exception: an entry may also declare the shape of the upstream fix (`upstreamFix`), and
 on a core that carries it exactly once the entry is skipped with `<id>: already fixed upstream` in the
 build log, so the weekly build against the core's pre-releases keeps working; the entry is still deleted
-at the first stable core that carries the fix. The temporary entries are meant to go away, the licensing ones stay; `CONTRIBUTING.md` ("Never patch the core") has the rules, and
+at the first stable core that carries the fix. The temporary entries are meant to go away, the standing ones (licensing, user groups) stay; `CONTRIBUTING.md` ("Never patch the core") has the rules, and
 `docs/upgrading.md` what to do when the step fails at a bump.
 
 ### Plugin hot reload
@@ -302,7 +316,10 @@ the same path, which reactivates the same row under the new manifest.
 
 The entrypoint also starts `kyoube agent-rules --watch` in the background
 (`docker/bootstrap/src/commands/agent-rules.ts`), which keeps the agent working rules in force
-(`docs/agent-rules.md`).
+(`docs/agent-rules.md`). Its pass ends with a group step (`groupsStep` in
+`docker/bootstrap/src/agent-rules/pass.ts`): per company it reads `GET /groups/agent-access` from `kyoube.apps`, posts the result to
+`POST /groups/apply` on `kyoube.agent-rules`, and reports the outcome to `POST /groups/sync-report`. A
+failed read skips the step for that company and is never applied as "no groups".
 
 ### SDK `apiVersion` and the stable-contract rule
 
