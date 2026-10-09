@@ -160,10 +160,10 @@ or widens a connection.
 ## What is logged
 
 Every call writes one audit row: the connection, method, path **without** the query, status, duration,
-response size, who called, and how (`app@version` for an app, `agent` or the person for a direct
-call). Request and response bodies, query values, headers and the secret are never recorded. Agent
-calls also add a line to the activity log; app calls do not, because they are frequent. A
-completed write whose audit row cannot be saved still returns its response (the failure is
+response size, who called, and how (`app@<slug>@<version>` for an app, e.g. `app@dash@3`, and
+`agent` or `person` for a direct call). Request and response bodies, query values, headers and the
+secret are never recorded. Agent calls also add a line to the activity log; app calls do not,
+because they are frequent. A completed write whose audit row cannot be saved still returns its response (the failure is
 logged on the server). A GET whose audit row cannot be saved fails, so a read is never unrecorded.
 
 ## Troubleshooting
