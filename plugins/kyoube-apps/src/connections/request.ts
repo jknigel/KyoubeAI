@@ -175,6 +175,17 @@ export function buildUrl(connection: Connection, path: string, query: Record<str
   return url.toString();
 }
 
+const CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/;
+
+/**
+ * Whether the secret can go out as this connection's header value. Bearer and header auth send it as
+ * it is, so a control character (most often a newline pasted with the key) can never be sent; basic
+ * auth base64-encodes it.
+ */
+export function secretHasControlChar(connection: Connection, secret: string): boolean {
+  return (connection.auth === "bearer" || connection.auth === "header") && CONTROL_CHAR_RE.test(secret);
+}
+
 export function buildHeaders(connection: Connection, call: ParsedCall, secret: string): Record<string, string> {
   const headers: Record<string, string> = Object.create(null);
   for (const [name, value] of Object.entries(call.headers)) {
@@ -184,11 +195,11 @@ export function buildHeaders(connection: Connection, call: ParsedCall, secret: s
   }
   if (typeof secret !== "string" || secret === "") throw bad("the connection's secret is empty");
   if (connection.auth === "bearer") {
-    if (/[\x00-\x1f\x7f]/.test(secret)) throw bad("the connection's secret cannot be sent as a header value");
+    if (CONTROL_CHAR_RE.test(secret)) throw bad("the connection's secret cannot be sent as a header value");
     headers.authorization = `Bearer ${secret}`;
   } else if (connection.auth === "header") {
     if (!connection.headerName) throw bad("the connection has no header name");
-    if (/[\x00-\x1f\x7f]/.test(secret)) throw bad("the connection's secret cannot be sent as a header value");
+    if (CONTROL_CHAR_RE.test(secret)) throw bad("the connection's secret cannot be sent as a header value");
     headers[connection.headerName] = secret;
   } else if (connection.auth === "basic") {
     headers.authorization = `Basic ${Buffer.from(secret, "utf8").toString("base64")}`;

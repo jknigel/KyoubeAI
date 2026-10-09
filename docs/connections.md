@@ -36,9 +36,10 @@ when the plugin settings are saved. The core allows a company 30 secret lookups 
 failed ones, so after a secret fails to resolve, calls on that connection answer `disabled` for 15
 seconds without asking again (the status checks wait a minute). Saving the settings clears that wait.
 Company Settings, then Data access, then Connections shows each connection's host, auth style and
-methods, its status ("ready", "secret doesn't resolve", "too many secret lookups just now" or
-"missing", the last for a connection some app declares that is not configured), and which published
-apps use it.
+methods, its status ("ready", "secret doesn't resolve", "the secret contains a line break or other
+control character" (often a newline pasted with a bearer or header key; save the secret again
+without it), "too many secret lookups just now" or "missing", the last for a connection some app
+declares that is not configured), and which published apps use it.
 
 Give a connection the narrowest methods that do the job. A `read` connection cannot be written to
 whatever an app or agent asks for.
@@ -166,7 +167,7 @@ logged on the server). A GET whose audit row cannot be saved fails, so a read is
 
 | What you see | Likely cause |
 |---|---|
-| `disabled` | The connection is missing, renamed or removed, or its secret does not resolve. Check the Connections section under Data access, and the secret under Company, then Secrets. |
+| `disabled` | The connection is missing, renamed or removed, or its secret does not resolve or contains a line break. Check the Connections section under Data access, and the secret under Company, then Secrets. |
 | `forbidden` | The app does not declare the connection, or the declaration, the connection or the person's level does not allow the method; for an agent, it has no grant or only a `read` one. |
 | `invalid` | The path, query, header or body broke a rule above, or a publish lacks `connectionsConfirmed`. |
 | `too_large` | The response is over 2 MiB. Ask the service for less (a filter, a page size). |
