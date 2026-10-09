@@ -6,6 +6,7 @@ import type { GuardAgentAction, GuardContext, GuardedAction } from "../decisions
 import { isBulkTarget, rowTargetParams } from "../decisions/guardrail.js";
 import { withMeta, type AuditEntry } from "./audit.js";
 import { DataError } from "./errors.js";
+import { highestLevel, isManagerRole, type GroupLevel } from "../groups/levels.js";
 import { isAiColumn } from "./field-kinds.js";
 import type { QuerySpec } from "./filter.js";
 import { getAgentLevel, getCompanySettings, listAgentGrants, setAgentGrant, setCompanySettings, type AgentGrant, type CompanySettings } from "./grants.js";
@@ -49,6 +50,11 @@ export interface DataServiceDeps {
    * it is true for schema changes and for grant/settings changes, false for reads and row writes.
    */
   resolveUserRole: (companyId: string, userId: string, fresh: boolean) => Promise<string | null>;
+  /**
+   * The data levels of the groups a person is in (docs/groups.md). Absent, groups play no part.
+   * Group levels are read on every call, like agent grants, so a change takes effect at once.
+   */
+  groupLevels?: (companyId: string, userId: string) => Promise<GroupLevel[]>;
   onMutation?: (event: MutationEvent) => Promise<void>;
   onMutationError?: (error: unknown, event: MutationEvent) => void;
 }
@@ -89,12 +95,14 @@ export class DataService {
   private readonly records: RecordsService;
   private readonly pool: Pool;
   private readonly resolveUserRole: DataServiceDeps["resolveUserRole"];
+  private readonly groupLevels: DataServiceDeps["groupLevels"];
   private readonly onMutation: DataServiceDeps["onMutation"];
   private readonly onMutationError: DataServiceDeps["onMutationError"];
 
   constructor(deps: DataServiceDeps) {
     this.pool = deps.pool;
     this.resolveUserRole = deps.resolveUserRole;
+    this.groupLevels = deps.groupLevels;
     this.onMutation = deps.onMutation;
     this.onMutationError = deps.onMutationError;
     this.schema = new SchemaService(deps.pool);
@@ -148,7 +156,14 @@ export class DataService {
     if (actor.kind === "system") return "schema";
     if (!actor.id) return "none";
     // Agent grants are read from kyoube_meta on every call, so they are never stale.
-    if (actor.kind === "user") return roleToLevel(await this.resolveUserRole(companyId, actor.id, opts.fresh === true));
+    if (actor.kind === "user") {
+      const role = await this.resolveUserRole(companyId, actor.id, opts.fresh === true);
+      const base = roleToLevel(role);
+      // Someone outside the company gets nothing, and owners and admins are never restricted by a group.
+      if (base === "none" || isManagerRole(role) || !this.groupLevels) return base;
+      const levels = await this.groupLevels(companyId, actor.id);
+      return levels.length > 0 ? highestLevel(levels) : base;
+    }
     return getAgentLevel(this.pool, companyId, actor.id);
   }
 
@@ -452,8 +467,10 @@ export class DataService {
    * The company row has to exist before either table can reference it.
    */
   private async authorizeAdmin(companyId: string, actor: DataActor): Promise<void> {
-    if (actor.kind !== "user") throw new DataError("forbidden", "only company admins manage data access");
-    assertLevel(await this.levelFor(companyId, actor, { fresh: true }), "schema", "managing data access");
+    if (actor.kind !== "user" || !actor.id) throw new DataError("forbidden", "only company admins manage data access");
+    // By role, not by level: a group can give someone schema access to tables, never the right to
+    // decide who else gets access (docs/groups.md).
+    assertLevel(roleToLevel(await this.resolveUserRole(companyId, actor.id, true)), "schema", "managing data access");
     await this.scope(companyId);
   }
 
