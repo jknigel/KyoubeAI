@@ -7,6 +7,7 @@ import { MAX_APP_NOTES } from "./apps/manifest.js";
 import { AppService, parseDecideInput, parseRuntimeMethod, type AppServiceDeps } from "./apps/service.js";
 import { registerAppTools } from "./apps/tools.js";
 import { handleDecisionsApiRequest } from "./decisions/api-routes.js";
+import { handleGroupsApiRequest } from "./groups/api-routes.js";
 import { AiColumnService } from "./decisions/columns.js";
 import { API_KEY_CONFIG_PATH, ProviderResolver, validateDecisionsConfig } from "./decisions/config.js";
 import { guardFrom, guardOption } from "./decisions/guardrail.js";
@@ -126,6 +127,9 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
   let apps: AppService | null = null;
   // The group service lives here for the same reason (ruling P2-R5).
   let groups: GroupService | null = null;
+  // Host handles the board-only group routes need; onApiRequest runs outside setup.
+  let hostMembers: PluginContext["access"]["members"] | null = null;
+  let hostAgents: PluginContext["agents"] | null = null;
   // The decision service and the provider resolver live in this closure for the same reason the
   // other services do (ruling P2-R5); `onConfigChanged` drops the resolver's cached keys.
   let decisions: DecisionService | null = null;
@@ -191,6 +195,8 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
         onMutationError: dataActivity.onError,
       });
       groups = groupService;
+      hostMembers = ctx.access.members;
+      hostAgents = ctx.agents;
       const dataService = (deps.createService ?? ((serviceDeps) => new DataService(serviceDeps)))({
         pool: dbPool,
         // Ruling P4-R13: a schema, grant or settings change asks the host again; everything else
@@ -469,6 +475,16 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
       // gets it instead (via the logger captured during `setup`).
       const log = logger;
       const onError = log ? (message: string, meta?: Record<string, unknown>) => log.error(message, meta) : undefined;
+      const groupService = groups;
+      const members = hostMembers;
+      const agentsHost = hostAgents;
+      if (groupService && members && agentsHost) {
+        const handled = await handleGroupsApiRequest(groupService, input, {
+          listUserIds: async (c) => new Set((await members.list({ companyId: c })).filter((m) => m.principalType === "user" && m.status === "active").map((m) => m.principalId)),
+          listAgentIds: async (c) => new Set((await agentsHost.list({ companyId: c })).filter((a) => a.status !== "terminated").map((a) => a.id)),
+        }, onError);
+        if (handled) return handled;
+      }
       if (input.routeKey === "skills.install") {
         // Declared `auth: "board"`, which the host enforces before the request
         // reaches this worker (a board key arrives here as a user actor);
@@ -518,6 +534,9 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
         providers = null;
         logger = null;
         installSkillsForCompany = null;
+        hostMembers = null;
+        hostAgents = null;
+        groups = null;
       }
     },
   });
