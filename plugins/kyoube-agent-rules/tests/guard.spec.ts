@@ -205,6 +205,18 @@ describe("reconcileGuard", () => {
     const unexcluded = await selfTest(core, C, core.agents, new Set());
     expect(unexcluded.status).toBe("fail");
   });
+
+  it("never unprotects an agent a group still needs", async () => {
+    const fake = new FakeCore([agent("boss", null), agent("a", "boss")]);
+    await reconcileGuard(fake, C);
+    expect(isProtected(fake.policies.get("boss") ?? null)).toBe(true);
+    fake.agents = [agent("boss", null), agent("a", null)]; // boss is no longer a manager
+    await reconcileGuard(fake, C, new Set(["boss"]));
+    expect(isProtected(fake.policies.get("boss") ?? null)).toBe(true);
+    expect(fake.record.protected).toContain("boss");
+    await reconcileGuard(fake, C, new Set());
+    expect(isProtected(fake.policies.get("boss") ?? null)).toBe(false);
+  });
 });
 
 describe("revertGuard", () => {
@@ -227,6 +239,18 @@ describe("revertGuard", () => {
     await reconcileGuard(core, C);
     await revertGuard(core, C);
     expect(isProtected(core.policies.get("solo") ?? null)).toBe(true);
+  });
+
+  it("keeps an agent a group still needs protected, but forgets it", async () => {
+    const core = org();
+    await reconcileGuard(core, C);
+    const report = await revertGuard(core, C, new Set(["cto"]));
+    expect(report.failures).toEqual([]);
+    expect(report.reverted).toContain("cto");
+    expect(isProtected(core.policies.get("cto") ?? null)).toBe(true);
+    expect(core.policies.get("ceo")).toBeNull();
+    expect(core.grants.get("cto")).toEqual([BROAD]);
+    expect(core.record).toEqual({ protected: [], scoped: [], broadRemoved: [], changeGranted: {} });
   });
 
   it("drops a deleted agent from the record without a failure", async () => {
