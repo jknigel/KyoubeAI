@@ -12,6 +12,9 @@ import { appErrorPayload, parseAppsPath } from "./bridge.js";
 interface AppRecord { slug: string; name: string; description: string | null; icon: string | null; status: string; currentVersion: number | null; latestVersion: number }
 interface AppVersion { version: number; manifest: Record<string, unknown>; source: string; notes: string | null; createdAt: string }
 
+/** The refusal AppService gives a person outside every group an app is in; shown as a notice, not an error. */
+const NO_ACCESS = "You don't have access to this app. Ask a company admin.";
+
 /** Narrows an app-supplied tone to the host's toast tones, so an unknown string cannot reach the host. */
 function toastTone(tone: string): PluginToastTone {
   return tone === "success" || tone === "warn" || tone === "error" ? tone : "info";
@@ -114,7 +117,9 @@ function Runner(props: { companyId: string; userId: string | null; slug: string 
           <button type="button" className={button} onClick={() => { setMenuOpen(false); reload(); }}>Reload</button>
         </div>
       )}
-      {error && <div className="text-sm text-red-600">{error.code === "not_found" ? "This app is not published yet." : error.message}</div>}
+      {error && (error.code === "forbidden" && error.message.includes(NO_ACCESS)
+        ? <div role="alert" className="rounded border p-3 text-sm">{NO_ACCESS}</div>
+        : <div className="text-sm text-red-600">{error.code === "not_found" ? "This app is not published yet." : error.message}</div>)}
       {showSource && <SourcePanel companyId={props.companyId} userId={props.userId} slug={props.slug} onChanged={reload} />}
       {state && (
         <AppRunner
