@@ -162,7 +162,8 @@ kyoube.connections.call(name, { method?, path?, query?, headers?, body? })
 - Who may call: the viewer must be able to open the app. A GET needs data level `read`; any other
   method needs `write`, a `read-write` declaration and a `read-write` connection.
 - Calls count in the frame's 60 per 10 seconds, with their own ceiling of **30 per 10 seconds**.
-  Fetch once and keep the result; do not call per row.
+  Fetch once and keep the result; do not call per row. An app that keeps hitting a ceiling for three
+  windows running is stopped.
 
 A version that adds a connection or widens one needs a person to publish it. The publish dialog shows
 each connection's host and base path, auth style, methods and the app's declared access, and marks
