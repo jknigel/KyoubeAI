@@ -97,7 +97,7 @@ export function GroupsSettingsPage({ context }: PluginCompanySettingsPageProps) 
               <tbody>
                 {groups.map((group) => (
                   <tr key={group.id} className="border-t">
-                    <td className="px-2 py-1"><button type="button" className="break-all text-left underline" data-kyoube-break="" onClick={() => setDraft({ id: group.id, name: group.name, level: group.dataLevel ?? "", members: group.members, agents: group.agents, apps: group.apps })}>{group.name}</button></td>
+                    <td className="px-2 py-1"><button type="button" className="break-words text-left underline" data-kyoube-break="" onClick={() => setDraft({ id: group.id, name: group.name, level: group.dataLevel ?? "", members: group.members, agents: group.agents, apps: group.apps })}>{group.name}</button></td>
                     <td className="px-2 py-1">{group.dataLevel ?? "from role"}</td>
                     <td className="px-2 py-1">{group.members.length}</td>
                     <td className="px-2 py-1">{group.agents.length}</td>
