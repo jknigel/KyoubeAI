@@ -107,3 +107,12 @@ describe("header names that are object prototype keys", () => {
     expect(problems).toHaveLength(1);
   });
 });
+
+describe("base URL normalisation", () => {
+  it.each(["https://api.example.com/v1/?", "https://api.example.com/v1/#", "https://api.example.com/v1?", "https://api.example.com/v1"])(
+    "stores %s without a stray ? or #", (baseUrl) => {
+      const { connections } = parseConnections({ connections: [{ name: "x", baseUrl, auth: "bearer", secret: { type: "secret_ref" } }] });
+      expect(connections[0]?.baseUrl).toBe("https://api.example.com/v1/");
+    },
+  );
+});

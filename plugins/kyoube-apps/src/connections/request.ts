@@ -109,13 +109,27 @@ const FORBIDDEN_CHARS_RE = /[^\x20-\x7e]|[?#\\]/;
 const FORBIDDEN_ESCAPE_RE = /%(?:2e|2f|5c|00|c0|c1|25(?:2e|2f|5c|00))/i;
 const BAD_PERCENT_RE = /%(?![0-9a-f]{2})/i;
 
-/** True when a server could read this segment as "." or "..": after one percent-decode and NFKC folding (full-width dots), cut at ";",
- * trailing whitespace and dots do not count, and nothing but dots (or nothing) is left. */
-function isDotLikeSegment(segment: string): boolean {
-  let decoded: string;
-  try { decoded = decodeURIComponent(segment); } catch { return true; }
-  const name = decoded.normalize("NFKC").split(";", 1)[0] ?? "";
-  return /^[\s.]*$/.test(name);
+const MAX_DECODE_ROUNDS = 3;
+// Slash and backslash lookalikes that NFKC does not fold (division slash, fraction slash, big solidus,
+// set minus, ...), plus the full-width forms in case a decoder folds them.
+const LOOKALIKE_SLASH_RE = /[\u2044\u2215\u29f8\u2216\u29f5\u29f9\uff0f\uff3c]/;
+
+/** Returns a refusal message when a server (or a chain of proxies decoding repeatedly) could read the
+ * segment as ".", "..", or as containing a slash, backslash or NUL; null when it is a plain name.
+ * The segment is decoded until it stops changing (at most 3 rounds), and every round is NFKC-folded
+ * (full-width dots and slashes), cut at ";", and trimmed. */
+function segmentProblem(segment: string): string | null {
+  let current = segment;
+  for (let round = 0; ; round++) {
+    const folded = current.normalize("NFKC");
+    if (/[/\\\0]/.test(current) || /[/\\\0]/.test(folded) || LOOKALIKE_SLASH_RE.test(current)) return "path segments may not decode to a slash, backslash or NUL";
+    if (/^[\s.]*$/.test(folded.split(";", 1)[0] ?? "")) return "path may not contain . or .. segments, or segments a server could read as one";
+    let decoded: string;
+    try { decoded = decodeURIComponent(current); } catch { return "path segments must be valid UTF-8 when percent-decoded"; }
+    if (decoded === current) return null;
+    if (round >= MAX_DECODE_ROUNDS) return "path segments may not be encoded more than three times";
+    current = decoded;
+  }
 }
 
 export function buildUrl(connection: Connection, path: string, query: Record<string, string>): string {
@@ -128,7 +142,8 @@ export function buildUrl(connection: Connection, path: string, query: Record<str
   if (BAD_PERCENT_RE.test(path)) throw bad("path contains a malformed percent escape");
   if (FORBIDDEN_ESCAPE_RE.test(path)) throw bad("path may not contain encoded dots, slashes, NULs or overlong encodings");
   for (const segment of path.split("/")) {
-    if (segment !== "" && isDotLikeSegment(segment)) throw bad("path may not contain . or .. segments, or segments a server could read as one");
+    const problem = segment === "" ? null : segmentProblem(segment);
+    if (problem) throw bad(problem);
   }
 
   let base: URL;

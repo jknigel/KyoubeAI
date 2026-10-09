@@ -150,6 +150,9 @@ describe("buildUrl", () => {
     ["caf%C3%A9", "https://api.example.com/v1/caf%C3%A9"],
     ["javascript:x", "https://api.example.com/v1/javascript:x"],
     ["https:evil.example", "https://api.example.com/v1/https:evil.example"],
+    [".well-known/x", "https://api.example.com/v1/.well-known/x"],
+    ["v1.2/x", "https://api.example.com/v1/v1.2/x"],
+    ["a;jsessionid=1", "https://api.example.com/v1/a;jsessionid=1"],
     ["a.b./c", "https://api.example.com/v1/a.b./c"],
   ])("allows path %j", (path, expected) => {
     expect(buildUrl(base, path, {})).toBe(expected);
@@ -199,6 +202,17 @@ describe("buildUrl", () => {
     ["a trailing percent", "a%"],
     ["an encoded full-width dot", "%EF%BC%8E%EF%BC%8E/x"],
     ["a literal colon-slash-slash", "a://b"],
+    ["double-encoded dots", "%25%32%65%25%32%65/x"],
+    ["double-encoded dots, partly encoded", "%252%65%252%65/x"],
+    ["double-encoded dots, mixed", "%25%32e%25%32e/x"],
+    ["double-encoded slashes", "a%25%32%66..%25%32%66x"],
+    ["triple-encoded dot", "%2525%2532%2565"],
+    ["a full-width slash after dots", "..%EF%BC%8Fx"],
+    ["a division slash", "a%E2%88%95b"],
+    ["a full-width backslash", "a%EF%BC%BCb"],
+    ["invalid UTF-8 (lone byte)", "caf%E9"],
+    ["invalid UTF-8 (0xff)", "x%ff"],
+    ["more than three encodings", "%25252525252e"],
     ["a dot-dot in the middle", "a/../b"],
     ["a dot-dot at the end", "a/.."],
     ["a dot-dot escaping", "../v2/x"],
@@ -250,6 +264,11 @@ describe("buildUrl", () => {
       expect(url.pathname.startsWith("/v1/")).toBe(true);
       expect(url.username + url.password + url.hash).toBe("");
     }
+  });
+
+  it("gives invalid UTF-8 its own message", () => {
+    expect(failure(() => buildUrl(base, "caf%E9", {})).message).toContain("valid UTF-8");
+    expect(failure(() => buildUrl(base, "x%ff", {})).message).toContain("valid UTF-8");
   });
 
   it("refuses a path that is not a string", () => {
