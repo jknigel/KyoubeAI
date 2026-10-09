@@ -248,7 +248,7 @@ describe("kyoube.agent-rules groups routes", () => {
     const grants: Array<[string, unknown]> = [];
     const plugin = await started(quietPort(), quietGroupsPort({
       listAgents: async () => [{ id: "a1", name: "A1", status: "idle", reportsTo: null }, { id: "a2", name: "A2", status: "idle", reportsTo: null }],
-      listMembers: async () => [{ userId: "u1", role: "operator" }],
+      listMembers: async () => [{ userId: "u1", role: "operator", status: "active" }],
       listUserGrants: async () => [{ permissionKey: "tasks:assign", scope: null }],
       setPolicy: async (_c, id) => { policies.push(id); },
       setUserGrants: async (_c, id, list) => { grants.push([id, list]); },
@@ -287,7 +287,7 @@ describe("kyoube.agent-rules groups routes", () => {
 });
 
 describe("groupsPortFromContext", () => {
-  it("reads active people with their role, and reads and writes their grants and the groups record", async () => {
+  it("reads every person with their role and status, and reads and writes their grants and the groups record", async () => {
     const harness = createTestHarness({ manifest });
     const member = (id: string, principalType: "user" | "agent", principalId: string, status: string, membershipRole: string | null) =>
       ({ id, companyId: COMPANY, principalType, principalId, status, membershipRole, grants: [], createdAt: new Date(), updatedAt: new Date() }) as never;
@@ -297,11 +297,17 @@ describe("groupsPortFromContext", () => {
         member("m2", "user", "u2", "suspended", "operator"),
         member("m3", "agent", "a1", "active", null),
         member("m4", "user", "u3", "active", null),
+        member("m5", "user", "u4", "archived", "viewer"),
       ],
       principalGrants: [{ id: "g1", companyId: COMPANY, principalType: "user", principalId: "u1", permissionKey: "tasks:assign", scope: null, grantedByUserId: null, createdAt: new Date(), updatedAt: new Date() } as never],
     });
     const port = groupsPortFromContext(harness.ctx);
-    expect(await port.listMembers(COMPANY)).toEqual([{ userId: "u1", role: "operator" }, { userId: "u3", role: null }]);
+    expect(await port.listMembers(COMPANY)).toEqual([
+      { userId: "u1", role: "operator", status: "active" },
+      { userId: "u2", role: "operator", status: "suspended" },
+      { userId: "u3", role: null, status: "active" },
+      { userId: "u4", role: "viewer", status: "archived" },
+    ]);
     expect(await port.listUserGrants(COMPANY, "u1")).toEqual([{ permissionKey: "tasks:assign", scope: null }]);
     await port.setUserGrants(COMPANY, "u1", [{ permissionKey: "tasks:assign", scope: { agentIds: ["a1"] } }]);
     expect(await port.listUserGrants(COMPANY, "u1")).toEqual([{ permissionKey: "tasks:assign", scope: { agentIds: ["a1"] } }]);
@@ -319,5 +325,9 @@ describe("parseGroupsRecord", () => {
     expect(parseGroupsRecord(undefined)).toEqual(EMPTY_GROUPS_RECORD);
     expect(parseGroupsRecord({ protected: ["a", 2], required: "x", people: { u1: { original: null, applied: { permissionKey: "tasks:assign", scope: { agentIds: ["a"] } } }, u2: { applied: "x" }, u3: null } }))
       .toEqual({ protected: ["a"], required: [], people: { u1: { original: null, applied: { permissionKey: "tasks:assign", scope: { agentIds: ["a"] } } } } });
+    const row = { permissionKey: "tasks:assign", scope: { agentIds: ["a"] } };
+    // A pending write (null: remove the row) and a first entry for a person who held no row survive; a bad pending does not.
+    expect(parseGroupsRecord({ people: { u1: { original: null, applied: null, pending: row }, u2: { original: row, applied: row, pending: null }, u3: { original: null, applied: null, pending: "x" } } }).people)
+      .toEqual({ u1: { original: null, applied: null, pending: row }, u2: { original: row, applied: row, pending: null } });
   });
 });

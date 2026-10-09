@@ -88,10 +88,11 @@ export function groupsPortFromContext(ctx: PluginContext): GroupsPort {
     getPolicy: guard.getPolicy,
     setPolicy: guard.setPolicy,
     async listMembers(companyId) {
-      const rows = await ctx.access.members.list({ companyId });
+      // Archived members too: groups forgets a person only once they are gone from this list.
+      const rows = await ctx.access.members.list({ companyId, includeArchived: true });
       return rows
-        .filter((row) => row.principalType === "user" && row.status === "active")
-        .map((row) => ({ userId: row.principalId, role: row.membershipRole ? row.membershipRole.toLowerCase() : null }));
+        .filter((row) => row.principalType === "user")
+        .map((row) => ({ userId: row.principalId, role: row.membershipRole ? row.membershipRole.toLowerCase() : null, status: row.status }));
     },
     async listUserGrants(companyId, userId) {
       const rows = await ctx.authorization.grants.list({ companyId, principalType: "user", principalId: userId });

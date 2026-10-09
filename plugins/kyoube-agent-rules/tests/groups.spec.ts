@@ -42,6 +42,8 @@ class FakeCore implements GroupsPort {
   record: GroupsRecord = structuredClone(EMPTY_GROUPS_RECORD);
   writes: string[] = [];
   failing = new Set<string>();
+  /** Writes the core takes and then reports as failed (a timeout after the commit). */
+  ghost = new Set<string>();
   constructor(public agents: AgentRow[], public members: MemberRow[]) {}
   private fail(key: string) { if (this.failing.has(key)) throw new Error(`refused ${key}`); }
   async listAgents() { return this.agents.map((row) => ({ ...row })); }
@@ -49,7 +51,12 @@ class FakeCore implements GroupsPort {
   async getPolicy(_c: string, id: string) { return structuredClone(this.policies.get(id) ?? null); }
   async setPolicy(_c: string, id: string, policy: Policy) { this.fail(`setPolicy:${id}`); this.writes.push(`policy ${id}`); this.policies.set(id, structuredClone(policy)); }
   async listUserGrants(_c: string, id: string) { return structuredClone(this.userGrants.get(id) ?? []); }
-  async setUserGrants(_c: string, id: string, grants: Grant[]) { this.fail(`setUserGrants:${id}`); this.writes.push(`grants ${id}`); this.userGrants.set(id, structuredClone(grants)); }
+  async setUserGrants(_c: string, id: string, grants: Grant[]) {
+    this.fail(`setUserGrants:${id}`);
+    this.writes.push(`grants ${id}`);
+    this.userGrants.set(id, structuredClone(grants));
+    if (this.ghost.has(`setUserGrants:${id}`)) throw new Error(`timed out ${id}`);
+  }
   async readGroupsRecord() { return structuredClone(this.record); }
   async writeGroupsRecord(_c: string, record: GroupsRecord) { this.fail("writeRecord"); this.record = structuredClone(record); }
 }
@@ -61,7 +68,8 @@ const CHECKOUTS: Grant = { permissionKey: "tasks:manage_active_checkouts", scope
 
 function core() {
   const fake = new FakeCore([agent("a1"), agent("a2"), agent("a3", "boss"), agent("boss")], [
-    { userId: "u-in", role: "operator" }, { userId: "u-out", role: "operator" }, { userId: "admin", role: "admin" }, { userId: "v", role: "viewer" },
+    { userId: "u-in", role: "operator", status: "active" }, { userId: "u-out", role: "operator", status: "active" },
+    { userId: "admin", role: "admin", status: "active" }, { userId: "v", role: "viewer", status: "active" },
   ]);
   fake.userGrants.set("u-in", [BROAD]);
   fake.userGrants.set("u-out", [BROAD, CHECKOUTS]);
@@ -146,11 +154,102 @@ describe("applyGroups", () => {
     const report = await applyGroups(fake, C, ACCESS);
     expect(report.failures).toContainEqual(expect.objectContaining({ id: "u-in", step: "grants" }));
     expect(fake.userGrants.get("u-out")).toEqual([CHECKOUTS, scoped(["a3", "boss"])]);
-    // The failed person is not remembered as changed, so the next pass simply retries.
-    expect(fake.record.people["u-in"]).toBeUndefined();
+    // The write stays pending (R8): the core's row is still one of KyoubeAI's, so the next pass retries.
+    expect(fake.record.people["u-in"]).toEqual({ original: BROAD, applied: BROAD, pending: scoped(["a1", "a3", "boss"]) });
     fake.failing.clear();
-    await applyGroups(fake, C, ACCESS);
+    const retry = await applyGroups(fake, C, ACCESS);
     expect(fake.userGrants.get("u-in")).toEqual([scoped(["a1", "a3", "boss"])]);
+    expect(retry.skipped).toEqual([]);
+    expect(fake.record.people["u-in"]).toEqual({ original: BROAD, applied: scoped(["a1", "a3", "boss"]) });
+  });
+});
+
+describe("applyGroups after an interrupted grant write", () => {
+  const CHANGED = { id: "u-out", reason: "its assignment grant was changed by a person; KyoubeAI leaves it as they set it" };
+  const ACCESS_A1 = [{ agentId: "a1", allowedUserIds: [] }];
+  const ACCESS_BOTH = [{ agentId: "a1", allowedUserIds: [] }, { agentId: "a2", allowedUserIds: [] }];
+
+  it("scopes a person whose first write was cut off after the write-ahead", async () => {
+    const fake = core();
+    // The process died after recording the pending row, before the core took it.
+    fake.record = { protected: [], required: ["a1", "a2"], people: { "u-out": { original: BROAD, applied: BROAD, pending: scoped(["a3", "boss"]) } } };
+    const report = await applyGroups(fake, C, ACCESS);
+    expect(fake.userGrants.get("u-out")).toEqual([CHECKOUTS, scoped(["a3", "boss"])]);
+    expect(report.skipped).not.toContainEqual(CHANGED);
+    expect(fake.record.people["u-out"]).toEqual({ original: BROAD, applied: scoped(["a3", "boss"]) });
+  });
+
+  it("re-scopes a person whose re-scope was cut off, and keeps managing them", async () => {
+    const fake = core();
+    await applyGroups(fake, C, ACCESS_A1);
+    expect(fake.userGrants.get("u-out")).toEqual([CHECKOUTS, scoped(["a2", "a3", "boss"])]);
+    // a2 becomes restricted; the process dies after the write-ahead.
+    fake.record = { ...fake.record, required: ["a1", "a2"], people: { ...fake.record.people, "u-out": { original: BROAD, applied: scoped(["a2", "a3", "boss"]), pending: scoped(["a3", "boss"]) } } };
+    const report = await applyGroups(fake, C, ACCESS_BOTH);
+    expect(fake.userGrants.get("u-out")).toEqual([CHECKOUTS, scoped(["a3", "boss"])]);
+    expect(report.skipped).toEqual([]);
+    expect(fake.record.people["u-out"]).toEqual({ original: BROAD, applied: scoped(["a3", "boss"]) });
+    // Still managed, never "custom": undoing groups gives the original back.
+    await applyGroups(fake, C, []);
+    expect(fake.userGrants.get("u-out")).toEqual([CHECKOUTS, BROAD]);
+  });
+
+  it("adopts a write the core took but reported as failed, and can still undo it", async () => {
+    const fake = core();
+    fake.ghost.add("setUserGrants:u-out");
+    const first = await applyGroups(fake, C, ACCESS);
+    expect(first.failures).toContainEqual(expect.objectContaining({ id: "u-out", step: "grants" }));
+    expect(fake.record.people["u-out"]).toEqual({ original: BROAD, applied: BROAD, pending: scoped(["a3", "boss"]) });
+    fake.ghost.clear();
+    fake.writes = [];
+    const second = await applyGroups(fake, C, ACCESS);
+    expect(fake.writes).toEqual([]);
+    expect(second.skipped).toEqual([]);
+    expect(fake.record.people["u-out"]).toEqual({ original: BROAD, applied: scoped(["a3", "boss"]) });
+    await applyGroups(fake, C, []);
+    expect(fake.userGrants.get("u-out")).toEqual([CHECKOUTS, BROAD]);
+    expect(fake.record).toEqual(EMPTY_GROUPS_RECORD);
+  });
+
+  it("quietly drops the entry of a restore the core took before the record was cleared", async () => {
+    const fake = core();
+    await applyGroups(fake, C, ACCESS);
+    // The core holds the original again; the process died before the entry was dropped.
+    fake.userGrants.set("u-out", [CHECKOUTS, BROAD]);
+    fake.record.people["u-out"] = { ...fake.record.people["u-out"]!, pending: BROAD };
+    fake.writes = [];
+    const report = await applyGroups(fake, C, []);
+    expect(report.skipped).toEqual([]);
+    expect(fake.writes).not.toContain("grants u-out");
+    expect(fake.record.people["u-out"]).toBeUndefined();
+    expect(fake.userGrants.get("u-out")).toEqual([CHECKOUTS, BROAD]);
+  });
+
+  it("leaves a suspended member alone and keeps their entry, then manages them again", async () => {
+    const fake = core();
+    await applyGroups(fake, C, ACCESS);
+    const entry = structuredClone(fake.record.people["u-out"]);
+    fake.members = fake.members.map((m) => (m.userId === "u-out" ? { ...m, status: "suspended" } : m));
+    fake.writes = [];
+    const widened = [{ agentId: "a1", allowedUserIds: ["u-in", "u-out"] }, { agentId: "a2", allowedUserIds: [] }];
+    await applyGroups(fake, C, widened);
+    expect(fake.writes).not.toContain("grants u-out");
+    expect(fake.record.people["u-out"]).toEqual(entry);
+    fake.members = fake.members.map((m) => (m.userId === "u-out" ? { ...m, status: "active" } : m));
+    const report = await applyGroups(fake, C, widened);
+    expect(report.skipped).toEqual([]);
+    expect(fake.userGrants.get("u-out")).toEqual([CHECKOUTS, scoped(["a1", "a3", "boss"])]);
+    await applyGroups(fake, C, []);
+    expect(fake.userGrants.get("u-out")).toEqual([CHECKOUTS, BROAD]);
+  });
+
+  it("re-scopes a row a person set by hand back to the original (accepted R8 consequence)", async () => {
+    const fake = core();
+    await applyGroups(fake, C, ACCESS);
+    fake.userGrants.set("u-out", [CHECKOUTS, BROAD]);
+    const report = await applyGroups(fake, C, ACCESS);
+    expect(report.skipped).toEqual([]);
+    expect(fake.userGrants.get("u-out")).toEqual([CHECKOUTS, scoped(["a3", "boss"])]);
   });
 });
 

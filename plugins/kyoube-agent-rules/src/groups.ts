@@ -6,9 +6,17 @@
 import { canExtendPolicy, isProtected, managerIds, sameGrants, withoutProtection, withProtection, type AgentRow, type Grant, type Policy } from "./policy.js";
 
 export interface AgentAccess { agentId: string; allowedUserIds: string[] }
-export interface MemberRow { userId: string; role: string | null }
-/** One person's `tasks:assign` row before KyoubeAI changed it, and the row it wrote. */
-export interface PersonEntry { original: Grant | null; applied: Grant }
+/** A user member of the company, whatever their status (suspended and archived included). */
+export interface MemberRow { userId: string; role: string | null; status: string }
+/**
+ * One person's `tasks:assign` row (null: no row) as KyoubeAI tracks it.
+ * - `original`: the row before KyoubeAI changed it.
+ * - `applied`: the last row KyoubeAI confirmed in the core. On a first change this
+ *   starts as the row the core held (so equal to `original`); the type allows null for
+ *   a person who held none.
+ * - `pending`: a write KyoubeAI started but has not confirmed; absent when there is none.
+ */
+export interface PersonEntry { original: Grant | null; applied: Grant | null; pending?: Grant | null }
 export interface GroupsRecord {
   /** Agents this feature set to protected (and so may unprotect). */
   protected: string[];
@@ -101,49 +109,62 @@ export async function applyGroups(port: GroupsPort, companyId: string, access: A
     } catch (error) { report.failures.push({ id, step: "policy", error: message(error) }); }
   }
 
+  // Every user member, whatever their status: only a person who is gone from the list
+  // entirely is forgotten. A suspended or archived member keeps their entry, so they are
+  // still managed when they come back.
   const members = await port.listMembers(companyId);
   const memberIds = new Set(members.map((m) => m.userId));
+  // Keeps the person's place in `people`, so an unchanged entry compares equal and is not rewritten.
+  const withEntry = (id: string, entry: PersonEntry | null): GroupsRecord => {
+    if (entry) return { ...record, people: { ...record.people, [id]: entry } };
+    const { [id]: _gone, ...people } = record.people;
+    return { ...record, people };
+  };
   for (const id of Object.keys(record.people)) {
     // Gone from the company: the core refuses grants for non-members, and there is nothing to give back.
-    if (!memberIds.has(id)) { const { [id]: _gone, ...people } = record.people; await remember(id, { ...record, people }); }
+    if (!memberIds.has(id)) await remember(id, withEntry(id, null));
   }
 
   for (const member of members) {
+    if (member.status !== "active") continue;
     const id = member.userId;
     try {
       const grants = await port.listUserGrants(companyId, id);
       const others = grants.filter((grant) => grant.permissionKey !== ASSIGN);
       const current = grants.find((grant) => grant.permissionKey === ASSIGN) ?? null;
-      const entry = record.people[id];
-      if (entry && !sameGrant(current, entry.applied)) {
-        const { [id]: _changed, ...people } = record.people;
-        await remember(id, { ...record, people });
+      const stored = record.people[id];
+      // The core's row is KyoubeAI's own when it is any row KyoubeAI held, wrote or started to
+      // write for this person; an interrupted write (a crash, a lost reply, a failed record
+      // write) always leaves one of these. Only a row matching none of them is a person's
+      // change. Deliberately, a row a person sets by hand that equals `original` or `applied`
+      // is read as KyoubeAI's and managed again (the accepted cost of surviving interruptions).
+      if (stored && !(sameGrant(current, stored.applied) || sameGrant(current, stored.original) || (stored.pending !== undefined && sameGrant(current, stored.pending)))) {
+        await remember(id, withEntry(id, null));
         report.skipped.push({ id, reason: "its assignment grant was changed by a person; KyoubeAI leaves it as they set it" });
         continue;
       }
+      // What the core holds is now confirmed: it is the applied row, and any pending write is settled.
+      const entry: PersonEntry | null = stored ? { original: stored.original, applied: current } : null;
       const original = entry ? entry.original : current;
       const desired = planPerson({ role: member.role, original, liveAgentIds: liveIds, access, userId: id });
       if (desired === "custom") { report.skipped.push({ id, reason: "has a custom assignment grant" }); continue; }
+      const restoring = sameGrant(desired, original);
       if (sameGrant(desired, current)) {
-        if (entry && sameGrant(desired, original)) { const { [id]: _done, ...people } = record.people; await remember(id, { ...record, people }); }
+        // Nothing to write: forget a finished restore, or record what an interrupted pass left.
+        if (entry) await remember(id, withEntry(id, restoring ? null : entry));
         continue;
       }
-      const restoring = sameGrant(desired, original);
-      const next: GroupsRecord = restoring
-        ? { ...record, people: Object.fromEntries(Object.entries(record.people).filter(([key]) => key !== id)) }
-        : { ...record, people: { ...record.people, [id]: { original, applied: desired! } } };
-      // Write-ahead for a new change; for a restore, the record is cleared only after the core took it.
-      const before = record;
-      if (!restoring && !(await remember(id, next))) continue;
+      // Write-ahead: the row about to be written is pending until the core has taken it.
+      if (!(await remember(id, withEntry(id, { original, applied: current, pending: desired })))) continue;
       try {
         await port.setUserGrants(companyId, id, desired ? [...others, desired] : others);
       } catch (error) {
-        // The core kept the old row: take the entry back too, or the next pass would read the
-        // mismatch as a person's own change and stop managing this person.
-        if (!restoring) await remember(id, before);
-        throw error;
+        // The record keeps the pending write: whichever row the core holds now, the next
+        // pass recognises it as KyoubeAI's and finishes the change.
+        report.failures.push({ id, step: "grants", error: message(error) });
+        continue;
       }
-      if (restoring) await remember(id, next);
+      await remember(id, withEntry(id, restoring ? null : { original, applied: desired }));
       report.people.push(id);
     } catch (error) { report.failures.push({ id, step: "grants", error: message(error) }); }
   }
@@ -166,7 +187,10 @@ export function parseGroupsRecord(value: unknown): GroupsRecord {
   if (typeof raw.people === "object" && raw.people !== null) {
     for (const [id, entry] of Object.entries(raw.people as Record<string, unknown>)) {
       const e = entry as Record<string, unknown> | null;
-      if (e && isGrant(e.applied) && (e.original === null || isGrant(e.original))) people[id] = { original: e.original as Grant | null, applied: e.applied };
+      const row = (v: unknown) => v === null || isGrant(v);
+      if (!e || !row(e.original) || !row(e.applied) || (e.pending !== undefined && !row(e.pending))) continue;
+      people[id] = { original: e.original as Grant | null, applied: e.applied as Grant | null };
+      if (e.pending !== undefined) people[id].pending = e.pending as Grant | null;
     }
   }
   return { protected: list(raw.protected), required: list(raw.required), people };
