@@ -253,6 +253,17 @@ and what data level they hold. Group tables are in `kyoube_meta` (`groups`, `gro
   be protected, is reported as skipped, and is not restricted. If the agent-access list cannot be read
   or is malformed, the company's group step is skipped and reported, never applied as "no groups".
   While the watcher is not running, agent restrictions stop updating; `kyoube doctor` warns.
+- **Sync routes: owners and admins only.** A plugin route declared `auth: "board"` is not limited to
+  instance admins: the core's board check only asks whether the caller is a signed-in person rather
+  than an agent, so every company member passes it. "Board-only" therefore means "no agents". The
+  routes that read or change who may use which agent check more: `kyoube.apps`
+  `GET /groups/agent-access` and `POST /groups/sync-report`, and `kyoube.agent-rules`
+  `POST /groups/apply`, `POST /reconcile` and `POST /revert` answer 403 unless the caller's company
+  role, read fresh from the core's members list on every request, is owner or admin. The check runs
+  before any work, so a refused request reads, writes and records nothing. The watcher calls them with
+  the board API key, so the key's user must be an owner or admin of every company the agent rules and
+  group sync should run in; where it is not, that company's guard and group steps fail and
+  `kyoube doctor` names the company.
 - **Chat.** The core's Agent Chat routes skip the assignment check. A standing core patch
   (`groups-chat-open-assign-check`, `groups-chat-message-assign-check`) adds it, for protected agents,
   when a chat is opened and when a message is sent. Other chat actions in an open chat (answering an

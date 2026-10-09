@@ -86,6 +86,9 @@ call. Agents cannot be restricted from inside `kyoube.apps`: plugins cannot call
 agent-rules holds the `authorization.*` capabilities. So `kyoube.apps` serves two board-only routes,
 `GET /groups/agent-access` (which agents may be assigned by whom) and `POST /groups/sync-report` (the
 watcher's result, shown on the Groups page), and the watcher carries the data across (below).
+The core's "board" check admits every signed-in person, so these five routes (and the agent-rules
+ones above) also require the caller to be an owner or admin of the company, read fresh from the
+core's members list (`SECURITY.md`, Groups).
 
 ## Request paths
 

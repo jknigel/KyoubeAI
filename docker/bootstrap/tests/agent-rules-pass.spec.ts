@@ -1,14 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { AgentRef, GuardReport, GuardRevertReport, InstructionsBundle, RulesApi } from "../src/agent-rules/api.js";
-import { GUARD_PLUGIN_ROUTES } from "../src/agent-rules/api.js";
+import { GROUP_ROUTES, GUARD_PLUGIN_ROUTES } from "../src/agent-rules/api.js";
 import { RULES_BLOCK } from "../src/agent-rules/block.js";
 import type { Governance } from "../src/agent-rules/governance.js";
 import { applyPass, revertPass } from "../src/agent-rules/pass.js";
+import { failureLines } from "../src/agent-rules/report.js";
 import { EMPTY_STATE } from "../src/agent-rules/state.js";
 import { CoreApiError } from "../src/core-api.js";
 
 const NOW = new Date("2026-10-01T10:00:00Z");
 const MANAGED: InstructionsBundle = { mode: "managed", entryFile: "AGENTS.md", hasEntryFile: true, editable: true, legacyPromptTemplateActive: false };
+const FORBIDDEN = "forbidden: company owner or admin required";
 const QUIET_GUARD: GuardReport = { managers: [], updated: [], skipped: [], failures: [], selfTest: { status: "not_applicable", detail: "" } };
 
 class FakeApi implements RulesApi {
@@ -39,16 +41,22 @@ class FakeApi implements RulesApi {
     this.revisions[agentId] = (this.revisions[agentId] ?? 0) + 1;
   }
   async reconcileGuard(companyId: string) {
+    if (this.failing.has("guard403")) throw new CoreApiError(403, { error: FORBIDDEN }, FORBIDDEN, `POST ${GUARD_PLUGIN_ROUTES.reconcile}`);
     if (this.failing.has("guard404")) throw new CoreApiError(404, { error: "Plugin not found" }, "Plugin not found", `POST ${GUARD_PLUGIN_ROUTES.reconcile}`);
     this.calls.push(`guard ${companyId}`);
     return this.guard;
   }
-  async revertGuard(companyId: string): Promise<GuardRevertReport> { this.calls.push(`unguard ${companyId}`); return { reverted: [], failures: [] }; }
+  async revertGuard(companyId: string): Promise<GuardRevertReport> {
+    if (this.failing.has("guard403")) throw new CoreApiError(403, { error: FORBIDDEN }, FORBIDDEN, `POST ${GUARD_PLUGIN_ROUTES.revert}`);
+    this.calls.push(`unguard ${companyId}`); return { reverted: [], failures: [] }; }
   async pluginReady() { return true; }
   access: Record<string, Array<{ agentId: string; allowedUserIds: string[] }>> = { c1: [] };
   groupsReport = { protected: [] as string[], unprotected: [] as string[], people: [] as string[], skipped: [] as Array<{ id: string; reason: string }>, failures: [] as Array<{ id: string; step: string; error: string }> };
   syncReports: Array<{ companyId: string; syncedAt: string; error: string | null }> = [];
-  async getAgentAccess(companyId: string) { this.check(`access:${companyId}`); return structuredClone(this.access[companyId] ?? []); }
+  async getAgentAccess(companyId: string) {
+    if (this.failing.has("access403")) throw new CoreApiError(403, { error: FORBIDDEN }, FORBIDDEN, `GET ${GROUP_ROUTES.access}?companyId=${companyId}`);
+    this.check(`access:${companyId}`);
+    return structuredClone(this.access[companyId] ?? []); }
   async applyGroups(companyId: string, agents: Array<{ agentId: string; allowedUserIds: string[] }>) { this.check(`applyGroups:${companyId}`); this.calls.push(`groups ${companyId} ${agents.length}`); return structuredClone(this.groupsReport); }
   async reportGroupSync(companyId: string, report: { syncedAt: string; error: string | null }) { this.syncReports.push({ companyId, ...report }); }
 }
@@ -275,6 +283,27 @@ describe("group step", () => {
     expect(api.calls.some((call) => call.startsWith("groups "))).toBe(false);
     expect(report.companies[0]!.failures).toContainEqual({ step: "groups", error: expect.stringMatching(/unreadable agent-access list/) });
     expect(api.syncReports[0]!.error).toMatch(/unreadable agent-access list/);
+  });
+
+  it("names the company and the owner-or-admin requirement when the board key's user is refused", async () => {
+    const api = new FakeApi();
+    api.failing.add("guard403");
+    api.failing.add("access403");
+    const { report } = await applyPass({ api, now: () => NOW }, EMPTY_STATE);
+    const failures = report.companies[0]!.failures;
+    expect(failures).toContainEqual({ step: "guard", error: expect.stringMatching(/^the board key's user must be an owner or admin of "Acme" for agent rules and group sync to run there; .*\(POST \/api\/plugins\/kyoube\.agent-rules\/api\/reconcile → 403\)/) });
+    expect(failures).toContainEqual({ step: "groups", error: expect.stringMatching(/^the board key's user must be an owner or admin of "Acme" .*\(GET \/api\/plugins\/kyoube\.apps\/api\/groups\/agent-access\?companyId=c1 → 403\)/) });
+    // Nothing applied, and no sync report the same refusal would only bounce.
+    expect(api.calls.some((call) => call.startsWith("groups "))).toBe(false);
+    expect(api.syncReports).toEqual([]);
+    expect(failureLines(report)[0]).toMatch(/^kyoube: agent rules: Acme: guard failed: the board key's user must be an owner or admin of "Acme"/);
+  });
+
+  it("names the company on a refused revert too", async () => {
+    const api = new FakeApi();
+    api.failing.add("guard403");
+    const { report } = await revertPass({ api, now: () => NOW }, EMPTY_STATE);
+    expect(report.companies[0]!.failures).toContainEqual({ step: "guard", error: expect.stringMatching(/owner or admin of "Acme".*\/revert → 403/) });
   });
 
   it("reports group failures from the plugin as pass failures", async () => {

@@ -13,10 +13,14 @@ export interface PassDeps {
 /**
  * A failure as `kyoube doctor` should show it. A 404, 405 or 422 on a route
  * this feature depends on is the sign that a core update moved something,
- * so the message names that route.
+ * so the message names that route. A 403 from a KyoubeAI plugin route means the board key's user
+ * is not an owner or admin of that company (ruling R13), so the message names the company.
  */
-export function describeError(error: unknown): string {
+export function describeError(error: unknown, company?: string): string {
   if (error instanceof CoreApiError && error.route) {
+    if (isOwnerAdminRefusal(error)) {
+      return `the board key's user must be an owner or admin of ${company ? `"${company}"` : "this company"} for agent rules and group sync to run there; add that user as an owner or admin of the company (${error.route} → 403): ${error.message}`;
+    }
     if (error.status === 404 && error.route.includes("/api/plugins/kyoube.agent-rules/")) {
       return `the kyoube.agent-rules plugin is not installed or not ready (${error.route} → 404): ${error.message}`;
     }
@@ -24,6 +28,11 @@ export function describeError(error: unknown): string {
     return `${error.route} failed (${error.status}): ${error.message}`;
   }
   return error instanceof Error ? error.message : String(error);
+}
+
+/** The guard and group routes of both plugins refuse 403 unless the caller is the company's owner or admin. */
+function isOwnerAdminRefusal(error: unknown): boolean {
+  return error instanceof CoreApiError && error.status === 403 && /\/api\/plugins\/kyoube\.(agent-rules|apps)\//.test(error.route);
 }
 
 function companyReport(company: CompanySummary): CompanyReport {
@@ -106,13 +115,15 @@ async function groupsStep(deps: PassDeps, companyId: string, entry: CompanyRepor
     for (const failure of groups.failures) entry.failures.push({ step: "groups", agent: failure.id, error: `${failure.step}: ${failure.error}` });
     if (groups.failures.length > 0) error = `${groups.failures.length} failure(s); see kyoube doctor`;
   } catch (caught) {
-    error = describeError(caught);
+    error = describeError(caught, entry.name);
     entry.failures.push({ step: "groups", error });
+    // Refused for want of an owner or admin: the sync report would be refused the same way.
+    if (isOwnerAdminRefusal(caught)) return;
   }
   try {
     await deps.api.reportGroupSync(companyId, { syncedAt, error });
   } catch (caught) {
-    entry.failures.push({ step: "groups", error: `could not report the sync: ${describeError(caught)}` });
+    entry.failures.push({ step: "groups", error: `could not report the sync: ${describeError(caught, entry.name)}` });
   }
 }
 
@@ -148,7 +159,7 @@ export async function applyPass(deps: PassDeps, state: AgentRulesState): Promise
       for (const failure of guard.failures) entry.failures.push({ step: "guard", agent: failure.name, error: `${failure.step}: ${failure.error}` });
       if (guard.selfTest.status === "fail") entry.failures.push({ step: "guard", error: `self-test failed: ${guard.selfTest.detail}` });
     } catch (error) {
-      entry.failures.push({ step: "guard", error: describeError(error) });
+      entry.failures.push({ step: "guard", error: describeError(error, entry.name) });
     }
 
     await groupsStep(deps, company.id, entry);
@@ -185,7 +196,7 @@ export async function revertPass(deps: PassDeps, state: AgentRulesState): Promis
       entry.writes += reverted.reverted.length;
       for (const failure of reverted.failures) entry.failures.push({ step: "guard", agent: failure.name, error: `${failure.step}: ${failure.error}` });
     } catch (error) {
-      entry.failures.push({ step: "guard", error: describeError(error) });
+      entry.failures.push({ step: "guard", error: describeError(error, entry.name) });
     }
 
     await editAgents(deps.api, company.id, entry, removeRules);

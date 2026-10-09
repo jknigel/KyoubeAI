@@ -115,6 +115,22 @@ export function groupsPortFromContext(ctx: PluginContext): GroupsPort {
   };
 }
 
+/** A person's company role (lower case), or null when they are not an active member. */
+export type CompanyRoleReader = (companyId: string, userId: string) => Promise<string | null>;
+
+/** Reads the role fresh from the core on every call: no cache, so a demotion applies at once. */
+export function companyRoleFromContext(ctx: PluginContext): CompanyRoleReader {
+  return async (companyId, userId) => {
+    const rows = await ctx.access.members.list({ companyId });
+    const row = rows.find((m) => m.principalType === "user" && m.status === "active" && m.principalId === userId);
+    return row?.membershipRole ? row.membershipRole.toLowerCase() : null;
+  };
+}
+
+function isManager(role: string | null): boolean {
+  return role === "owner" || role === "admin";
+}
+
 export interface AgentRulesPluginDeps {
   /** Tests swap the host adapters for fakes; production adapts `ctx`. */
   port?: (ctx: PluginContext) => GuardPort;
@@ -127,6 +143,7 @@ export function createAgentRulesPlugin(deps: AgentRulesPluginDeps = {}): Papercl
   // one process would share.
   let port: GuardPort | null = null;
   let groupsPort: GroupsPort | null = null;
+  let roleOf: CompanyRoleReader | null = null;
   let logError: ((message: string, meta?: Record<string, unknown>) => void) | null = null;
   // Serialized per company, so a reconcile and a revert never interleave their reads and writes of the record.
   const lastCall = new Map<string, Promise<unknown>>();
@@ -141,6 +158,7 @@ export function createAgentRulesPlugin(deps: AgentRulesPluginDeps = {}): Papercl
     async setup(ctx: PluginContext) {
       port = (deps.port ?? portFromContext)(ctx);
       groupsPort = (deps.groupsPort ?? groupsPortFromContext)(ctx);
+      roleOf = companyRoleFromContext(ctx);
       logError = (message, meta) => ctx.logger.error(message, meta);
       ctx.logger.info(`${PLUGIN_ID} worker ready`);
     },
@@ -153,7 +171,15 @@ export function createAgentRulesPlugin(deps: AgentRulesPluginDeps = {}): Papercl
       // reaches this worker; checked again so a mis-declared route could never
       // let an agent loosen its own guardrail.
       if (input.actor.actorType === "agent") return { status: 403, body: { error: "forbidden: board access required", code: "forbidden" } };
+      const readRole = roleOf;
+      if (!readRole) return { status: 503, body: { error: "plugin not ready" } };
       try {
+        // "board" admits every signed-in person: only a company owner or admin, by a fresh read of
+        // the core's members list, may change agent policies and grants (ruling R13). Before any work.
+        const userId = input.actor.userId ?? input.actor.actorId;
+        if (input.actor.actorType !== "user" || !userId || !isManager(await readRole(input.companyId, userId))) {
+          return { status: 403, body: { error: "forbidden: company owner or admin required", code: "forbidden" } };
+        }
         // Agents user groups restrict: the manager rule never unprotects them.
         const keep = async () => new Set((await groups.readGroupsRecord(input.companyId)).required);
         if (input.routeKey === "guard.reconcile") return { status: 200, body: await serialized(input.companyId, async () => reconcileGuard(guard, input.companyId, await keep())) };
