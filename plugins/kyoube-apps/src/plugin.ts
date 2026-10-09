@@ -471,6 +471,7 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
       // Typed decisions from a running app (docs/decisions.md). `set` and `input` arrive from app
       // code through the bridge; `parseDecideInput` and AppService check them before anything runs.
       action("apps.decide", (c, a, p) => appService.runtimeDecide(c, a, str(p, "slug"), str(p, "set"), parseDecideInput(p.input)));
+      action("apps.connection_call", (c, a, p) => appService.runtimeConnection(c, a, str(p, "slug"), str(p, "name"), p.request));
       action("apps.decision_outcome", (c, a, p) => appService.decideOutcome(c, a, str(p, "slug"), str(p, "decisionId"), str(p, "question"), p.value));
       action("apps.publish_preview", (c, a, p) => appService.publishPreview(c, a, str(p, "slug"), p.version === undefined || p.version === null || p.version === "latest" ? "latest" : versionNumber(p)));
 

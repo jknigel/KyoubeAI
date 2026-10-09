@@ -104,6 +104,7 @@ function scrubNonceScript(): void {
     // unsaved values; the host builds the state from the set's declared fields and nothing else.
     decide: (set: string, input: { rowId: string } | { values: Record<string, unknown> }) => call("decisions.decide", { set, input }),
     decideOutcome: (decisionId: string, question: string, value: string | boolean) => call("decisions.outcome", { decisionId, question, value }),
+    connections: { call: (name: string, request: Record<string, unknown> = {}) => call("connections.call", { name, request }) },
     Error: KyoubeAppError,
   };
   Object.defineProperty(window, "kyoube", { value: Object.freeze(kyoube), writable: false, configurable: false });
