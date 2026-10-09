@@ -229,7 +229,9 @@ and what data level they hold. Group tables are in `kyoube_meta` (`groups`, `gro
 
 - **Apps.** An app in a group is hidden from the gallery and refused (`forbidden`) on get, runtime,
   runtime data, decide and preview for anyone outside its groups. The check is in `AppService`, reads
-  the tables on every call (no cache) and so does not depend on the browser.
+  the tables on every call (no cache) and so does not depend on the browser. Restricting an app
+  hides and refuses the app only: its tables stay reachable on the Data page and through any other
+  app that declares them, at the person's own data level.
 - **Data levels.** `DataService.levelFor` takes the highest level among a person's groups that set
   one, otherwise the role mapping. A group level is never below `read`: the Data page's UI reads
   build their actor from a client-supplied id (see [Data](#data)) and are safe only because `read` is
