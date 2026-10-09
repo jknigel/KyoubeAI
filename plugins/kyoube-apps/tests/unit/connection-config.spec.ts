@@ -97,3 +97,13 @@ describe("merged manifest schema", () => {
     expect(props.connections).toEqual(CONNECTIONS_CONFIG_SCHEMA.properties.connections);
   });
 });
+
+describe("header names that are object prototype keys", () => {
+  it.each(["__proto__", "Constructor", "PROTOTYPE"])("refuses %s for header auth", (headerName) => {
+    const { connections, problems } = parseConnections({
+      connections: [{ name: "x", baseUrl: "https://a.example/", auth: "header", headerName, secret: { type: "secret_ref" } }],
+    });
+    expect(connections).toEqual([]);
+    expect(problems).toHaveLength(1);
+  });
+});
