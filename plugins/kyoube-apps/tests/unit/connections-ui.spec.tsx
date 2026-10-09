@@ -201,6 +201,15 @@ describe("Publish dialog connection details (spec §2)", () => {
     expect(container.querySelectorAll("[data-kyoube-changed]")).toHaveLength(0);
     expect(container.querySelector('input[type="checkbox"]')).toBeNull();
   });
+
+  it("does not warn about typed decisions for an app that declares connections only", async () => {
+    installBridge();
+    await act(async () => root.render(createElement(PublishDialog, { slug: "pay", appName: "Payments", mode: "publish", preview: mixed({ available: false }), onDone: () => {}, onCancel: () => {} })));
+    expect(container.textContent).not.toContain("Typed decisions for apps are switched off");
+    const withSet = mixed({ available: false, sets: [{ key: "triage", table: "tickets", fields: ["title"], advisory: false, questions: [{ key: "urgent", type: "check", text: "Is it urgent?" }] }] });
+    await act(async () => root.render(createElement(PublishDialog, { slug: "pay", appName: "Payments", mode: "publish", preview: withSet, onDone: () => {}, onCancel: () => {} })));
+    expect(container.textContent).toContain("Typed decisions for apps are switched off");
+  });
 });
 
 describe("Apps page", () => {
