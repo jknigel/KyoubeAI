@@ -1,8 +1,8 @@
-import { mkdtemp, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { readBoardKey, resolveBoardApiKey, resolveBoardKeyPath, writeBoardKey } from "../src/key-store.js";
+import { ensureRulesToken, readBoardKey, resolveBoardApiKey, resolveBoardKeyPath, resolveRulesTokenPath, writeBoardKey } from "../src/key-store.js";
 import { renderConfigFromEnv } from "../src/config.js";
 
 describe("key-store", () => {
@@ -49,5 +49,47 @@ describe("key-store", () => {
     expect(await resolveBoardApiKey({ KYOUBE_BOARD_API_KEY: "from-env" }, filePath)).toBe("from-env");
     expect(await resolveBoardApiKey({}, filePath)).toBe("from-file");
     expect(await resolveBoardApiKey({}, path.join(dir, "missing.json"))).toBeNull();
+  });
+});
+
+// Ruling R18: the kyoube CLI's rules token, beside the board key.
+describe("rules token", () => {
+  it("lives beside the board key", () => {
+    const config = renderConfigFromEnv({ KYOUBE_DATABASE_URL: "postgres://x", PAPERCLIP_HOME: "/data" });
+    expect(resolveRulesTokenPath(config)).toBe("/data/kyoube/rules-token");
+  });
+
+  it("creates 32 random bytes as hex with mode 600, leaves no temporary file, and reuses the file after", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "kyoube-rules-"));
+    const filePath = path.join(dir, "kyoube", "rules-token");
+    const token = await ensureRulesToken(filePath);
+    expect(token).toMatch(/^[0-9a-f]{64}$/);
+    expect((await stat(filePath)).mode & 0o777).toBe(0o600);
+    expect(await readFile(filePath, "utf8")).toBe(`${token}\n`);
+    expect(await readdir(path.dirname(filePath))).toEqual(["rules-token"]);
+    expect(await ensureRulesToken(filePath)).toBe(token);
+  });
+
+  it("keeps an existing token as it is", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "kyoube-rules-"));
+    const filePath = path.join(dir, "rules-token");
+    await writeFile(filePath, "existing-token\n", { mode: 0o600 });
+    expect(await ensureRulesToken(filePath)).toBe("existing-token");
+    expect(await readFile(filePath, "utf8")).toBe("existing-token\n");
+  });
+
+  it("replaces a blank file with a new token", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "kyoube-rules-"));
+    const filePath = path.join(dir, "rules-token");
+    await writeFile(filePath, "\n", { mode: 0o600 });
+    expect(await ensureRulesToken(filePath)).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("gives two first runs at once the same token", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "kyoube-rules-"));
+    const filePath = path.join(dir, "rules-token");
+    const tokens = await Promise.all([ensureRulesToken(filePath), ensureRulesToken(filePath), ensureRulesToken(filePath)]);
+    expect(new Set(tokens).size).toBe(1);
+    expect(await readdir(dir)).toEqual(["rules-token"]);
   });
 });

@@ -1,4 +1,5 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { randomBytes, randomUUID } from "node:crypto";
+import { link, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { KyoubeConfig } from "./config.js";
 
@@ -53,6 +54,47 @@ export async function readBoardKey(
 export async function writeBoardKey(filePath: string, record: BoardKeyRecord): Promise<void> {
   await mkdir(path.dirname(filePath), { recursive: true });
   await writeFile(filePath, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
+}
+
+/**
+ * The kyoube CLI's rules token (ruling R18): 32 random bytes as hex, mode 600, beside the board key.
+ * `kyoube agent-rules` sends it in the body of every call to the agent-rules and group routes, and
+ * the plugins read the same file to tell the CLI's calls from any other signed-in person's.
+ */
+export function resolveRulesTokenPath(config: Pick<KyoubeConfig, "home">): string {
+  return path.posix.join(config.home, "kyoube", "rules-token");
+}
+
+/** The stored rules token; null when the file is missing, and "" when it exists but is blank. */
+async function readRulesToken(filePath: string): Promise<string | null> {
+  try {
+    return (await readFile(filePath, "utf8")).trim();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+/**
+ * Returns the rules token, creating the file first when it is missing (or blank). The new token is
+ * written to a private temporary file and then linked into place, which fails if another process
+ * created the file meanwhile, so two first runs agree on one token. Never logs the token.
+ */
+export async function ensureRulesToken(filePath: string): Promise<string> {
+  const existing = await readRulesToken(filePath);
+  if (existing) return existing;
+  await mkdir(path.dirname(filePath), { recursive: true });
+  const temporary = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  await writeFile(temporary, `${randomBytes(32).toString("hex")}\n`, { mode: 0o600, flag: "wx" });
+  try {
+    if (existing === "") await rename(temporary, filePath);
+    else await link(temporary, filePath).catch((error: NodeJS.ErrnoException) => { if (error.code !== "EEXIST") throw error; });
+  } finally {
+    await rm(temporary, { force: true });
+  }
+  const token = await readRulesToken(filePath);
+  if (!token) throw new Error(`could not create the rules token at ${filePath}`);
+  return token;
 }
 
 export async function resolveBoardApiKey(

@@ -1,10 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { createTestHarness } from "@paperclipai/plugin-sdk/testing";
 import manifest, { API_ROUTES, PLUGIN_ID, PLUGIN_VERSION } from "../src/manifest.js";
-import { createAgentRulesPlugin, groupsPortFromContext, parseRecord, portFromContext } from "../src/plugin.js";
+import { createAgentRulesPlugin, FORBIDDEN_MESSAGE, groupsPortFromContext, parseRecord, portFromContext } from "../src/plugin.js";
 import { EMPTY_RECORD, type GuardPort } from "../src/guard.js";
 import { EMPTY_GROUPS_RECORD, parseGroupsRecord, type GroupsPort } from "../src/groups.js";
 import pkg from "../package.json" with { type: "json" };
+import { mkdtempSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { rulesTokenMatches } from "../src/rules-token.js";
+
+/** The kyoube CLI's rules token (ruling R18), in a temporary file the tests point the plugin at. */
+const TOKEN = "ab".repeat(32);
+const TOKEN_DIR = mkdtempSync(path.join(os.tmpdir(), "kyoube-rules-token-"));
+const TOKEN_PATH = path.join(TOKEN_DIR, "rules-token");
+writeFileSync(TOKEN_PATH, `${TOKEN}\n`, { mode: 0o600 });
+const MISSING_TOKEN_PATH = path.join(TOKEN_DIR, "absent");
 
 const COMPANY = "11111111-1111-4111-8111-111111111111";
 const OTHER = "22222222-2222-4222-8222-222222222222";
@@ -59,10 +70,10 @@ function memberRow(id: string, principalId: string, membershipRole: string | nul
 }
 
 /** The caller, "user-1", is an owner of both test companies unless the test says otherwise. */
-async function started(port: GuardPort, groups: GroupsPort = quietGroupsPort(), members = [memberRow("m-own", "user-1", "owner"), memberRow("m-own2", "user-1", "owner", "active", OTHER)]) {
+async function started(port: GuardPort, groups: GroupsPort = quietGroupsPort(), members = [memberRow("m-own", "user-1", "owner"), memberRow("m-own2", "user-1", "owner", "active", OTHER)], rulesTokenPath = TOKEN_PATH) {
   const harness = createTestHarness({ manifest });
   harness.seed({ accessMembers: members });
-  const plugin = createAgentRulesPlugin({ port: () => port, groupsPort: () => groups });
+  const plugin = createAgentRulesPlugin({ port: () => port, groupsPort: () => groups, rulesTokenPath });
   await plugin.definition.setup(harness.ctx);
   return plugin;
 }
@@ -293,9 +304,10 @@ describe("kyoube.agent-rules groups routes", () => {
   });
 });
 
-// Ruling R13: "board" admits every signed-in person; these routes need a company owner or admin.
-describe("kyoube.agent-rules routes: owner or admin only", () => {
-  const FORBIDDEN = { status: 403, body: { error: "forbidden: company owner or admin required", code: "forbidden" } };
+// Rulings R13 and R18: "board" admits every signed-in person; these routes need the kyoube CLI's rules
+// token or a company owner or admin.
+describe("kyoube.agent-rules routes: rules token, or owner or admin", () => {
+  const FORBIDDEN = { status: 403, body: { error: FORBIDDEN_MESSAGE, code: "forbidden" } };
   const BODIES: Record<string, Record<string, unknown>> = { "guard.reconcile": {}, "guard.revert": {}, "groups.apply": { agents: [] } };
 
   /** Ports that record every host call, so a refused request can be shown to have done nothing. */
@@ -338,6 +350,31 @@ describe("kyoube.agent-rules routes: owner or admin only", () => {
     }
   }
 
+  for (const routeKey of Object.keys(BODIES)) {
+    it(`serves ${routeKey} to the kyoube CLI's rules token, for a board user who is not a member`, async () => {
+      const { calls, guard, groups } = recording();
+      const plugin = await started(guard, groups, []);
+      expect(await plugin.definition.onApiRequest!(request(routeKey, "user", COMPANY, { ...BODIES[routeKey], rulesToken: TOKEN }))).toMatchObject({ status: 200 });
+      expect(calls.length).toBeGreaterThan(0);
+    });
+    it(`refuses ${routeKey} with a wrong or short token, or when the token file is missing, touching nothing`, async () => {
+      const { calls, guard, groups } = recording();
+      const plugin = await started(guard, groups, [memberRow("m1", "user-1", "operator")]);
+      for (const rulesToken of [`${TOKEN.slice(0, -1)}c`, TOKEN.slice(0, 10), "", 42, null]) {
+        expect(await plugin.definition.onApiRequest!(request(routeKey, "user", COMPANY, { ...BODIES[routeKey], rulesToken }))).toEqual(FORBIDDEN);
+      }
+      const noFile = await started(guard, groups, [], MISSING_TOKEN_PATH);
+      expect(await noFile.definition.onApiRequest!(request(routeKey, "user", COMPANY, { ...BODIES[routeKey], rulesToken: TOKEN }))).toEqual(FORBIDDEN);
+      expect(calls).toEqual([]);
+    });
+    it(`still refuses an agent on ${routeKey}, even with the token`, async () => {
+      const { calls, guard, groups } = recording();
+      const plugin = await started(guard, groups);
+      expect(await plugin.definition.onApiRequest!(request(routeKey, "agent", COMPANY, { ...BODIES[routeKey], rulesToken: TOKEN }))).toMatchObject({ status: 403 });
+      expect(calls).toEqual([]);
+    });
+  }
+
   it("uses the actor's userId when the host gives one", async () => {
     const plugin = await started(quietPort(), quietGroupsPort(), [memberRow("m1", "user-9", "admin")]);
     const req = { ...request("guard.revert"), actor: { actorType: "user" as const, actorId: "board-key", userId: "user-9" } };
@@ -347,10 +384,23 @@ describe("kyoube.agent-rules routes: owner or admin only", () => {
   it("answers 500, doing nothing, when the members list cannot be read", async () => {
     const { calls, guard, groups } = recording();
     const harness = createTestHarness({ manifest });
-    const plugin = createAgentRulesPlugin({ port: () => guard, groupsPort: () => groups });
+    const plugin = createAgentRulesPlugin({ port: () => guard, groupsPort: () => groups, rulesTokenPath: TOKEN_PATH });
     await plugin.definition.setup({ ...harness.ctx, access: { ...harness.ctx.access, members: { ...harness.ctx.access.members, list: async () => { throw new Error("host down"); } } } });
     expect(await plugin.definition.onApiRequest!(request("groups.apply", "user", COMPANY, { agents: [] }))).toMatchObject({ status: 500, body: { error: "groups.apply failed: host down" } });
     expect(calls).toEqual([]);
+  });
+});
+
+describe("rulesTokenMatches", () => {
+  it("matches only the file's exact token, and refuses when the file is missing or empty", async () => {
+    expect(await rulesTokenMatches(TOKEN_PATH, TOKEN)).toBe(true);
+    expect(await rulesTokenMatches(TOKEN_PATH, `${TOKEN}0`)).toBe(false);
+    expect(await rulesTokenMatches(TOKEN_PATH, undefined)).toBe(false);
+    expect(await rulesTokenMatches(MISSING_TOKEN_PATH, TOKEN)).toBe(false);
+    const empty = path.join(TOKEN_DIR, "empty");
+    writeFileSync(empty, "\n");
+    expect(await rulesTokenMatches(empty, "")).toBe(false);
+    expect(await rulesTokenMatches(empty, "\n")).toBe(false);
   });
 });
 

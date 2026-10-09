@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -110,6 +110,22 @@ describe("runAgentRules", () => {
     expect(lines).toEqual(["kyoube: agent rules: 1 company, 0 changes, 0 skipped, 0 failures; self-test not applicable"]);
     const saved = JSON.parse(await readFile(path.join(home, ".kyoube", "agent-rules.json"), "utf8"));
     expect(saved.lastPass.mode).toBe("apply");
+  });
+
+  it("creates the rules token once (mode 600) and hands the same token to the API on every run, rules on, off or reverting", async () => {
+    const { deps, home, lines } = await setup();
+    const tokens: string[] = [];
+    const fake = api();
+    const capturing = { ...deps, createApi: (_opts: unknown, rulesToken: string) => { tokens.push(rulesToken); return fake; } };
+    expect(await runAgentRules([], { once: true }, ENV, capturing)).toBe(0);
+    expect(await runAgentRules([], { once: true }, { ...ENV, KYOUBE_AGENT_RULES: "off" }, capturing)).toBe(0);
+    expect(await runAgentRules(["off"], {}, ENV, capturing)).toBe(0);
+    const file = path.join(home, "kyoube", "rules-token");
+    const stored = (await readFile(file, "utf8")).trim();
+    expect(stored).toMatch(/^[0-9a-f]{64}$/);
+    expect((await stat(file)).mode & 0o777).toBe(0o600);
+    expect(tokens).toEqual([stored, stored, stored]);
+    expect(lines.join("\n")).not.toContain(stored);
   });
 
   it("--once exits 1 and prints each failure", async () => {
