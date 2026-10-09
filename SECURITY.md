@@ -252,8 +252,10 @@ and what data level they hold. Group tables are in `kyoube_meta` (`groups`, `gro
   minute to apply. A grant someone scoped by hand is left alone and reported, and one changed after
   KyoubeAI wrote it stays as they set it (unless it equals the person's original role default or
   KyoubeAI's last write). An agent whose authorization policy has keys KyoubeAI does not change cannot
-  be protected, is reported as skipped, and is not restricted. If the agent-access list cannot be read
-  or is malformed, the company's group step is skipped and reported, never applied as "no groups".
+  be protected and is reported as skipped. The core already refuses everyone assignment to an agent
+  with such a policy, but the chat check below covers protected agents only and does not cover it.
+  If the agent-access list cannot be read or is malformed, the company's group step is skipped and
+  reported, never applied as "no groups".
   While the watcher is not running, agent restrictions stop updating; `kyoube doctor` warns.
 - **Sync routes: owners and admins only.** A plugin route declared `auth: "board"` is not limited to
   instance admins: the core's board check only asks whether the caller is a signed-in person rather
@@ -278,6 +280,11 @@ and what data level they hold. Group tables are in `kyoube_meta` (`groups`, `gro
 - **Residual: group names are visible.** Any company member can see which groups restrict an agent
   (the agent page's Access tab). Do not put people's names in group names.
 - **Residual: people are shown by id and role.** The core's plugin API gives no display names.
+- **Residual: `data.access` can hint at a colleague's group.** The Data page's `data.access` read
+  builds its actor from a client-supplied user id (the existing model, see [Data](#data)), and returns
+  that person's effective level, which now includes any group level. A member who sends a named
+  colleague's id can therefore learn their level and, by comparing it with their role, whether a group
+  sets it (not which group).
 
 ## Apps
 

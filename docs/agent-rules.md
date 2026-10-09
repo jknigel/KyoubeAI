@@ -57,7 +57,8 @@ work to which agents. After the guard step, each pass:
 
 If the list cannot be read, the group step is skipped for that company and reported. It is never
 applied as "no groups". An agent whose authorization policy has keys KyoubeAI does not change cannot
-be protected; it shows under `agent rules skipped` and the restriction is not in force for it.
+be protected; it shows under `agent rules skipped`. The core already refuses everyone assignment to
+an agent with such a policy, but the chat check (protected agents only) does not cover it.
 
 `kyoube agent-rules off` does not remove group enforcement: delete the groups for that. The group
 step runs even with `KYOUBE_AGENT_RULES=off` (see [Turn it off](#turn-it-off)).
@@ -107,8 +108,8 @@ manager: the manager is protected.
   - an `AGENTS.md` whose markers were damaged by hand
   - a manager whose authorization policy KyoubeAI does not change
   - an agent waiting for approval
-  - an agent a group restricts whose authorization policy KyoubeAI does not change (the restriction
-    is not in force for it)
+  - an agent a group restricts whose authorization policy KyoubeAI does not change (the core already
+    refuses everyone assignment to it; the chat check does not cover it)
   - a person whose assignment grant someone scoped by hand
   - an instructions bundle with no `AGENTS.md`
 

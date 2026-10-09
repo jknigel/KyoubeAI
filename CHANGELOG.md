@@ -11,8 +11,8 @@ building on it. The format is loosely [Keep a Changelog](https://keepachangelog.
 - User groups (licensed): decide which people may use which agents and apps, and set a group data
   level. A group holds people, agents, apps and an optional data level (read, write or schema; never
   below read, highest wins). An agent or app in no group stays open to everyone; owners and admins are
-  never restricted. Manage groups under Settings, Groups; the agent page gets an Access tab and the
-  Data access page shows where each level comes from. Agent changes apply within about a minute
+  never restricted. Manage groups under Company Settings, Groups; the agent page gets an Access tab
+  and the Data access page shows where each level comes from. Agent changes apply within about a minute
   through the agent rules loop. Any valid licence unlocks creating and changing groups; existing
   groups keep being enforced, and can be deleted, without one. See [docs/groups.md](docs/groups.md).
 - `kyoube.apps` 0.10.0 gains the `ui.detailTab.register` capability and `kyoube.agent-rules` 0.3.0 gains
