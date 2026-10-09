@@ -15,7 +15,7 @@ building on it. The format is loosely [Keep a Changelog](https://keepachangelog.
   Data access page shows where each level comes from. Agent changes apply within about a minute
   through the agent rules loop. Any valid licence unlocks creating and changing groups; existing
   groups keep being enforced, and can be deleted, without one. See [docs/groups.md](docs/groups.md).
-- `kyoube.apps` gains the `ui.detailTab.register` capability and `kyoube.agent-rules` gains
+- `kyoube.apps` 0.10.0 gains the `ui.detailTab.register` capability and `kyoube.agent-rules` 0.3.0 gains
   `access.members.read`; the bootstrap reinstalls the plugins on update to pick them up (`docs/architecture.md`, "Plugin hot reload").
 
 ### Changed
