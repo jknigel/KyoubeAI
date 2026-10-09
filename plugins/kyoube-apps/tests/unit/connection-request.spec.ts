@@ -143,8 +143,14 @@ describe("buildUrl", () => {
     ["a b", "https://api.example.com/v1/a%20b"],
     ["a%20b", "https://api.example.com/v1/a%20b"],
     ["file.v2.json", "https://api.example.com/v1/file.v2.json"],
-    ["...", "https://api.example.com/v1/..."],
     ["a;b=c", "https://api.example.com/v1/a;b=c"],
+    ["images:annotate", "https://api.example.com/v1/images:annotate"],
+    ["text:synthesize", "https://api.example.com/v1/text:synthesize"],
+    ["v1/projects/p:batchGet", "https://api.example.com/v1/v1/projects/p:batchGet"],
+    ["caf%C3%A9", "https://api.example.com/v1/caf%C3%A9"],
+    ["javascript:x", "https://api.example.com/v1/javascript:x"],
+    ["https:evil.example", "https://api.example.com/v1/https:evil.example"],
+    ["a.b./c", "https://api.example.com/v1/a.b./c"],
   ])("allows path %j", (path, expected) => {
     expect(buildUrl(base, path, {})).toBe(expected);
   });
@@ -169,12 +175,30 @@ describe("buildUrl", () => {
     ["an absolute https URL", "https://evil.example/x"],
     ["an absolute URL to the same host", "https://api.example.com/v1/x"],
     ["an upper-case scheme", "HTTPS://evil.example"],
-    ["a scheme without slashes", "https:evil.example"],
-    ["javascript:", "javascript:alert(1)"],
-    ["data:", "data:text/plain,x"],
-    ["a colon scheme with a path", "mailto:a@b.c"],
     ["a dot segment", "."],
     ["a leading dot-dot", ".."],
+    ["dots only", "..."],
+    ["dots only, long", "...."],
+    ["semicolon after dot-dot", "..;/admin"],
+    ["semicolon dot-dot repeated", "a/..;/..;/x"],
+    ["semicolon after a dot", ".;"],
+    ["semicolon params only", "a/;x/b"],
+    ["encoded semicolon after dot-dot", "..%3b/x"],
+    ["dot-dot and a space", ".. /x"],
+    ["dot-dot and an encoded space", "..%20/x"],
+    ["dot-dot and an encoded tab", "..%09/x"],
+    ["a trailing-dot dot segment", "a/. ./b"],
+    ["an encoded space only", "%20"],
+    ["a %u escape", "%u002e%u002e"],
+    ["an overlong dot", "%c0%ae%c0%ae"],
+    ["an upper-case overlong dot", "%C0%AE/x"],
+    ["an overlong slash", "..%c0%afx"],
+    ["a 0xC1 lead byte", "%c1%9c"],
+    ["a truncated escape", "%2"],
+    ["a non-hex escape", "%zz"],
+    ["a trailing percent", "a%"],
+    ["an encoded full-width dot", "%EF%BC%8E%EF%BC%8E/x"],
+    ["a literal colon-slash-slash", "a://b"],
     ["a dot-dot in the middle", "a/../b"],
     ["a dot-dot at the end", "a/.."],
     ["a dot-dot escaping", "../v2/x"],
@@ -213,6 +237,19 @@ describe("buildUrl", () => {
   ];
   it.each(refused)("refuses %s", (_label, path) => {
     invalid(() => buildUrl(base, path, {}));
+  });
+
+  it("tells the caller how to write non-ASCII characters", () => {
+    expect(failure(() => buildUrl(base, "caf\u00e9", {})).message).toContain("%C3%A9");
+  });
+
+  it("joins as text: a leading scheme never changes the origin or the path prefix", () => {
+    for (const p of ["javascript:x", "https:evil.example", "evil.example:443", "a@evil.example", ":@evil.example", "x:y@z/q"]) {
+      const url = new URL(buildUrl(base, p, {}));
+      expect(url.origin).toBe("https://api.example.com");
+      expect(url.pathname.startsWith("/v1/")).toBe(true);
+      expect(url.username + url.password + url.hash).toBe("");
+    }
   });
 
   it("refuses a path that is not a string", () => {
@@ -273,6 +310,20 @@ describe("buildHeaders", () => {
     }
     // Basic encodes the secret, so control characters in it are harmless there.
     expect(buildHeaders(conn({ auth: "basic" }), call(), "a\nb").authorization).toMatch(/^Basic /);
+  });
+  it("refuses a secret with any control character for bearer and header auth, without echoing it", () => {
+    for (const auth of ["bearer", "header"] as const) {
+      for (const bad of ["ab\tcd", "ab\x01cd", "ab\x7fcd", "ab\x1fcd"]) {
+        const error = failure(() => buildHeaders(conn({ auth, headerName: auth === "header" ? "x-api-key" : null }), call(), bad));
+        expect(error.code).toBe("invalid");
+        expect(error.message).not.toContain("ab");
+      }
+    }
+  });
+  it("cannot lose the auth header to a prototype key", () => {
+    const headers = buildHeaders(conn({ auth: "header", headerName: "__proto__" }), call(), SECRET);
+    expect(Object.keys(headers)).toEqual(["__proto__"]);
+    expect(headers["__proto__"]).toBe(SECRET);
   });
   it("does not mutate the call", () => {
     const c = call({ accept: "x" });

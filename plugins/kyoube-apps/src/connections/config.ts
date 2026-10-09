@@ -74,6 +74,7 @@ function parseOne(item: unknown, index: number, seen: Set<string>): Connection |
     if (!header) return "auth \"header\" needs a header name";
     if (!HEADER_TOKEN_RE.test(header)) return `"${header}" is not a valid header name`;
     const lower = header.toLowerCase();
+    if (lower === "__proto__" || lower === "constructor" || lower === "prototype") return `"${header}" is not a usable header name`;
     if (FORBIDDEN_HEADERS.has(lower) || lower.startsWith("proxy-")) return `the header "${header}" cannot be used for a secret`;
     headerName = lower;
   }

@@ -98,45 +98,60 @@ export function pathWithoutQuery(path: string): string {
   return cut === -1 ? path : path.slice(0, cut);
 }
 
-// Refused before URL resolution, which would silently normalise "..", "%2e", tabs and backslashes.
-const ABSOLUTE_RE = /^[a-z][a-z0-9+.-]*:/i;
-// Any control character (URL parsing strips tab/CR/LF), anything outside printable ASCII (full-width dots
-// and slashes, ideographic full stops), `?` and `#` (the query goes in `query`), backslash.
+// Refused before the URL is built: URL parsing would silently normalise "..", "%2e", tabs and
+// backslashes, and servers normalise further (";params", trailing dots/spaces, legacy encodings).
+// Any control character (URL parsing strips tab/CR/LF), anything outside printable ASCII (full-width
+// dots and slashes, ideographic full stops; percent-encode, e.g. "%C3%A9"), `?` and `#` (the query goes
+// in `query`) and backslash.
 const FORBIDDEN_CHARS_RE = /[^\x20-\x7e]|[?#\\]/;
-// Encoded dot, slash, backslash, NUL, and the double-encoded forms of the first three.
-const FORBIDDEN_ESCAPE_RE = /%(?:2e|2f|5c|00|25(?:2e|2f|5c|00))/i;
+// Encoded dot, slash, backslash, NUL, the double-encoded forms of those, and the overlong UTF-8 lead
+// bytes 0xC0/0xC1 (legacy decoders turn "%c0%ae" into a dot).
+const FORBIDDEN_ESCAPE_RE = /%(?:2e|2f|5c|00|c0|c1|25(?:2e|2f|5c|00))/i;
+const BAD_PERCENT_RE = /%(?![0-9a-f]{2})/i;
+
+/** True when a server could read this segment as "." or "..": after one percent-decode and NFKC folding (full-width dots), cut at ";",
+ * trailing whitespace and dots do not count, and nothing but dots (or nothing) is left. */
+function isDotLikeSegment(segment: string): boolean {
+  let decoded: string;
+  try { decoded = decodeURIComponent(segment); } catch { return true; }
+  const name = decoded.normalize("NFKC").split(";", 1)[0] ?? "";
+  return /^[\s.]*$/.test(name);
+}
 
 export function buildUrl(connection: Connection, path: string, query: Record<string, string>): string {
   if (typeof path !== "string") throw bad("path must be a string");
   if (path.length > MAX_PATH_CHARS) throw bad(`path is longer than ${MAX_PATH_CHARS} characters`);
-  if (FORBIDDEN_CHARS_RE.test(path)) throw bad("path may not contain control or non-ASCII characters, ?, # or backslashes (put the query in query)");
+  if (FORBIDDEN_CHARS_RE.test(path)) throw bad("path may not contain control or non-ASCII characters (percent-encode them, e.g. %C3%A9), ?, # or backslashes (put the query in query)");
   if (path.startsWith("/")) throw bad("path must be relative to the connection's base URL (no leading slash)");
   if (path !== path.trim()) throw bad("path may not start or end with a space");
-  if (ABSOLUTE_RE.test(path)) throw bad("path must be relative to the connection's base URL (no scheme)");
-  if (FORBIDDEN_ESCAPE_RE.test(path)) throw bad("path may not contain encoded dots, slashes or NULs");
-  const segments = path.split("/");
-  segments.forEach((segment, i) => {
-    if (segment === "." || segment === "..") throw bad("path may not contain . or .. segments");
-    if (segment === "" && i < segments.length - 1) throw bad("path may not contain empty segments");
-  });
+  if (path.includes("//")) throw bad("path may not contain empty segments or //");
+  if (BAD_PERCENT_RE.test(path)) throw bad("path contains a malformed percent escape");
+  if (FORBIDDEN_ESCAPE_RE.test(path)) throw bad("path may not contain encoded dots, slashes, NULs or overlong encodings");
+  for (const segment of path.split("/")) {
+    if (segment !== "" && isDotLikeSegment(segment)) throw bad("path may not contain . or .. segments, or segments a server could read as one");
+  }
 
   let base: URL;
   let url: URL;
   try {
     base = new URL(connection.baseUrl);
-    url = new URL(path, base);
+    // Joined as text: the path is only ever text after the base, so a "scheme:" in the first segment
+    // (Google-style "images:annotate") cannot change the origin.
+    url = new URL(connection.baseUrl + path);
   } catch {
     throw bad("the path does not make a valid URL");
   }
   if (base.protocol !== "https:" || !base.pathname.endsWith("/")) throw bad("the connection's base URL is not usable");
-  if (url.origin !== base.origin || !url.pathname.startsWith(base.pathname)) throw bad("path leaves the connection's base URL");
+  if (url.origin !== base.origin || !url.pathname.startsWith(base.pathname) || url.username || url.password || url.hash) {
+    throw bad("path leaves the connection's base URL");
+  }
 
   for (const [key, value] of Object.entries(query)) url.searchParams.set(key, value);
   return url.toString();
 }
 
 export function buildHeaders(connection: Connection, call: ParsedCall, secret: string): Record<string, string> {
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = Object.create(null);
   for (const [name, value] of Object.entries(call.headers)) {
     const lower = name.toLowerCase();
     if (lower === "authorization" || lower === connection.headerName) throw bad(`the header "${lower}" is set by the connection and cannot be passed`);
@@ -144,11 +159,11 @@ export function buildHeaders(connection: Connection, call: ParsedCall, secret: s
   }
   if (typeof secret !== "string" || secret === "") throw bad("the connection's secret is empty");
   if (connection.auth === "bearer") {
-    if (/[\r\n\0]/.test(secret)) throw bad("the connection's secret cannot be sent as a header value");
+    if (/[\x00-\x1f\x7f]/.test(secret)) throw bad("the connection's secret cannot be sent as a header value");
     headers.authorization = `Bearer ${secret}`;
   } else if (connection.auth === "header") {
     if (!connection.headerName) throw bad("the connection has no header name");
-    if (/[\r\n\0]/.test(secret)) throw bad("the connection's secret cannot be sent as a header value");
+    if (/[\x00-\x1f\x7f]/.test(secret)) throw bad("the connection's secret cannot be sent as a header value");
     headers[connection.headerName] = secret;
   } else if (connection.auth === "basic") {
     headers.authorization = `Basic ${Buffer.from(secret, "utf8").toString("base64")}`;
