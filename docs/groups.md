@@ -61,11 +61,6 @@ Level changes take effect on the person's next action.
 The Groups page and the Data access people table list members by id and role. The core's plugin API
 gives KyoubeAI no display names (the same gap as `viewer.name` in [apps.md](apps.md)).
 
-## Group names are visible
-
-Any company member can see which groups restrict an agent: the agent page's **Access** tab shows the
-group names. Do not put people's names in a group name.
-
 ## Apps
 
 An app in a group is listed and opened only by members of one of its groups. Everyone else does not
@@ -80,8 +75,11 @@ restrictions.
 
 ## Agents
 
-Someone outside the agent's groups cannot assign it a task or chat with it. The agent page's
-**Access** tab says who may give the agent work: everyone, or the named groups plus owners and admins.
+Someone outside the agent's groups cannot assign it a task or chat with it. The Groups page is where
+an agent's restrictions are seen: each group lists its agents, and an agent in no group is open to
+everyone. Only owners and admins see that page; anyone else who tries to assign or chat with a
+restricted agent gets the core's own refusal. (Core 2026.1005.0 shows plugin tabs only on issues,
+projects and workspaces, so there is no tab on the agent page.)
 
 - **Takes effect within about a minute.** The agent rules loop (`kyoube agent-rules --watch`) applies
   group changes once a minute. Apps and data levels change at once.

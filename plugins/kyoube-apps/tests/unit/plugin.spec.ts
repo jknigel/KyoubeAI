@@ -137,6 +137,20 @@ describe("kyoube.apps manifest", () => {
     expect([...required].filter((capability) => !manifest.capabilities.includes(capability as never))).toEqual([]);
   });
 
+  it("has no agent detail tab: core 2026.1005.0 renders plugin detail tabs only for issues, projects and workspaces (R20)", async () => {
+    expect((manifest.ui?.slots ?? []).map((slot) => [slot.type, slot.id])).toEqual([
+      ["page", "data-page"],
+      ["sidebar", "data-nav"],
+      ["companySettingsPage", "data-access"],
+      ["companySettingsPage", "groups"],
+      ["page", "apps-page"],
+      ["sidebar", "apps-nav"],
+    ]);
+    expect(manifest.capabilities).not.toContain("ui.detailTab.register");
+    const { harness } = await setup();
+    await expect(harness.performAction("groups.agent", { agentId: "agent-1" }, { actor: ADMIN, companyId: COMPANY })).rejects.toThrow();
+  });
+
   it("declares the capability the automatic skill install needs", () => {
     // `ctx.events.on("company.created")`; without it the host rejects the
     // subscription at runtime, not at install time.

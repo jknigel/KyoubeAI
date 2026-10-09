@@ -79,8 +79,8 @@ which people may assign which agents (`docs/groups.md`). It reads company member
 `access.members.read` capability, added for that.
 
 User groups live in `kyoube.apps` (`plugins/kyoube-apps/src/groups/`, migration `0006_groups.sql`): the
-group store and service, the licence check, and the Groups settings page and agent **Access** tab (a
-`detailTab` slot on `agent` entities, which needed the `ui.detailTab.register` capability). Data levels
+group store and service, the licence check, and the Groups settings page (a `companySettingsPage`
+slot, the only place group membership and agent restrictions are shown). Data levels
 (`DataService.levelFor`) and the apps gallery and runtime (`AppService`) consult the groups on every
 call. Agents cannot be restricted from inside `kyoube.apps`: plugins cannot call each other, and only
 agent-rules holds the `authorization.*` capabilities. So `kyoube.apps` serves two board-only routes,

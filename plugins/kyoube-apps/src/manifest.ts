@@ -51,7 +51,6 @@ const manifest: PaperclipPluginManifestV1 = {
     "jobs.schedule",
     "ui.page.register",
     "ui.sidebar.register",
-    "ui.detailTab.register",
     // Required by the `companySettingsPage` slot below: upstream's
     // UI_SLOT_CAPABILITIES (server/src/services/plugin-capability-validator.ts)
     // maps both `settingsPage` and `companySettingsPage` to
@@ -90,7 +89,6 @@ const manifest: PaperclipPluginManifestV1 = {
       { type: "sidebar", id: "data-nav", displayName: "Data", exportName: "SidebarEntry", order: 20 },
       { type: "companySettingsPage", id: "data-access", displayName: "Data access", exportName: "DataAccessSettingsPage", routePath: DATA_ACCESS_SETTINGS_ROUTE },
       { type: "companySettingsPage", id: "groups", displayName: "Groups", exportName: "GroupsSettingsPage", routePath: GROUPS_SETTINGS_ROUTE },
-      { type: "detailTab", id: "agent-access", displayName: "Access", exportName: "AgentAccessTab", entityTypes: ["agent"] },
       { type: "page", id: "apps-page", displayName: "Apps", exportName: "AppsPage", routePath: APPS_PAGE_ROUTE },
       { type: "sidebar", id: "apps-nav", displayName: "Apps", exportName: "AppsSidebarEntry", order: 30 },
     ],
