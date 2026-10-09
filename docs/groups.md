@@ -151,8 +151,9 @@ running and syncs only user groups each minute, so adding or deleting a group st
   rules lines, and warns when the last pass is more than 5 minutes old. With `KYOUBE_AGENT_RULES=off`
   they appear on their own `user groups` and `user groups skipped` lines.
 - `docker compose exec app kyoube agent-rules --once` runs a pass now and prints every message.
-- The loop uses the board API key, and the group routes answer only a company owner or admin. If the
-  key's user is not an owner or admin of a company, that company's agent restrictions never sync, and
-  `kyoube doctor` says so, naming the company. Add that user to the company as an owner or admin.
+- The group routes answer only the agent rules loop, which proves itself with the rules token
+  (`/kyoubeai/kyoube/rules-token`, see [agent-rules.md](agent-rules.md)), or a company owner or admin.
+  The board key's user does not have to be a member of each company. If `kyoube doctor` says a plugin
+  refused the kyoube CLI in a company, check that the file exists and that the `node` user can read it.
 - A restricted person who can still assign an agent: wait a minute, then check the pass report for
   "has a custom assignment grant" or a skipped agent.

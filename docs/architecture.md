@@ -84,11 +84,12 @@ group store and service, the licence check, and the Groups settings page and age
 (`DataService.levelFor`) and the apps gallery and runtime (`AppService`) consult the groups on every
 call. Agents cannot be restricted from inside `kyoube.apps`: plugins cannot call each other, and only
 agent-rules holds the `authorization.*` capabilities. So `kyoube.apps` serves two board-only routes,
-`GET /groups/agent-access` (which agents may be assigned by whom) and `POST /groups/sync-report` (the
+`POST /groups/agent-access` (which agents may be assigned by whom) and `POST /groups/sync-report` (the
 watcher's result, shown on the Groups page), and the watcher carries the data across (below).
-The core's "board" check admits every signed-in person, so these five routes (and the agent-rules
-ones above) also require the caller to be an owner or admin of the company, read fresh from the
-core's members list (`SECURITY.md`, Groups).
+The core's "board" check admits every signed-in person, so these routes (and the agent-rules ones
+above) also require the kyoube CLI's rules token in the request body (`/kyoubeai/kyoube/rules-token`,
+created by `kyoube agent-rules`) or a caller who is an owner or admin of the company, read fresh from
+the core's members list (`SECURITY.md`, Groups).
 
 ## Request paths
 
@@ -320,7 +321,7 @@ the same path, which reactivates the same row under the new manifest.
 The entrypoint also starts `kyoube agent-rules --watch` in the background
 (`docker/bootstrap/src/commands/agent-rules.ts`), which keeps the agent working rules in force
 (`docs/agent-rules.md`). Its pass ends with a group step (`groupsStep` in
-`docker/bootstrap/src/agent-rules/pass.ts`): per company it reads `GET /groups/agent-access` from `kyoube.apps`, posts the result to
+`docker/bootstrap/src/agent-rules/pass.ts`): per company it reads `POST /groups/agent-access` from `kyoube.apps`, posts the result to
 `POST /groups/apply` on `kyoube.agent-rules`, and reports the outcome to `POST /groups/sync-report`. A
 failed read skips the step for that company and is never applied as "no groups".
 
