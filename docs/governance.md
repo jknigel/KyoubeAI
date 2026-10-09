@@ -50,7 +50,8 @@ Both gates above decide whether a call is *allowed*. A company that has typed de
 `kyoube.apps`, so it covers the REST path as well as tools, for `data_drop_table`,
 `data_rename_table`, `data_remove_field`, bulk `data_update`/`data_delete`, and `apps_publish`,
 `apps_rollback`, `apps_archive`, and an agent's write requests (anything but GET) to
-connected external services. It can only hold a call, never allow one the grant level refuses.
+connected external services ([`connections.md`](connections.md); the operation is `connection_write`,
+and GET calls are never held). It can only hold a call, never allow one the grant level refuses.
 A held call waits on a people-only confirmation card on the agent's task. It is not a security
 boundary: the grant level is. Grant `schema` as narrowly as before, and use the guardrail to catch
 the allowed call that does not fit the task.
@@ -92,6 +93,16 @@ curl -fsS -X POST -H "Authorization: Bearer $BOARD_API_KEY" -H "Content-Type: ap
   "$KYOUBE_URL/api/companies/$COMPANY_ID/tools/profiles/$PROFILE_ID/bind" \
   -d '{ "targetType": "company", "targetId": "'"$COMPANY_ID"'", "priority": 100 }' | jq .
 ```
+
+The two connection tools, `kyoube.apps:connections_list` and `kyoube.apps:connections_call`, are
+deliberately not in this profile. An agent can call a connection (`connections_call`, or the REST
+route) only with a grant from an owner or admin under Company Settings, then Data access, then
+Connections, and that grant is separate from its data level; leave `connections_call` out of any
+profile for an agent that should not reach outside services, and include it (with a grant) for one
+that should. `connections_list` only lists names, hosts and the agent's own access, so it can join the
+read-only profile if you want agents to see what exists. To make every call to a service wait for a
+person regardless of the guardrail, add `kyoube.apps:connections_call` to a `require_approval`
+policy as in step 2.
 
 An agent that genuinely needs to write rows or change schema needs its **own** profile bound at
 `targetType: "agent"` (narrower scopes win) that also includes the write/schema tools it needs — this
@@ -173,6 +184,7 @@ Every attempted call — allowed, denied, rate-limited, or sent to approval — 
 | Agents, by default | `none` | Company default under **Company Settings → Data access**; grant explicitly per agent from there. |
 | A "builder" agent that designs schema and ships apps | `schema` | In a dedicated project, not the company's main one, and only for the duration of the build — drop it back down (or to `write`) once the app is published and stable. |
 | A "reviewer" or reporting agent | `read` | Enough to query and describe tables, never to change them. |
+| An agent that calls an outside service | a `read` connection grant | Company Settings → Data access → Connections; `read-write` only when it must change something there. The default is `none`. |
 
 Layer the core's profiles and policies on top of whatever grant you choose — a `schema`-level agent
 gated behind `require_approval` on its destructive calls is safer than either control alone, and both

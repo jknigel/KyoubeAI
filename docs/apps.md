@@ -37,12 +37,13 @@ it in the gallery or can open it ([groups.md](groups.md)).
 `access` is `read` (default) or `readwrite`. A call on an undeclared table is rejected. The viewer's own
 level still applies: a `viewer` can never write, whatever the app declares.
 
-An optional `decisions` key declares typed-decision sets; see [Typed decisions](#typed-decisions).
+An optional `decisions` key declares typed-decision sets; see [Typed decisions](#typed-decisions). An
+optional `connections` key declares the outside services the app may call; see [Connections](#connections).
 
 ## window.kyoube (injected before your code runs)
 
 ```ts
-await kyoube.ready()                       // → { companyId, viewer: { id, name, level }, app: { slug, name, version }, tables, decisions: { available, sets } }
+await kyoube.ready()                       // → { companyId, viewer: { id, name, level }, app: { slug, name, version }, tables, decisions: { available, sets }, connections: [{ name, access, available }] }
 kyoube.data.query(table, { where?, orderBy?, limit?, offset?, fields? })   // → { rows, limit, offset }
 kyoube.data.get(table, id)                 // → row | null
 kyoube.data.count(table, where?)           // → { count }
@@ -54,10 +55,11 @@ kyoube.ui.toast(title, "info" | "success" | "warn" | "error")
 kyoube.ui.openApp(slug)
 kyoube.decide(set, { rowId } | { values })                 // → { decisionId, model, answers: { [q]: { type, value, confidence, status } } }
 kyoube.decideOutcome(decisionId, question, value)          // → { outcome: "human_confirmed" | "human_changed" }
+kyoube.connections.call(name, { method?, path?, query?, headers?, body? })   // → { status, headers, body }
 ```
 `where` grammar: `{ field, op, value }` with `eq neq gt gte lt lte in contains starts_with is_null is_not_null`,
 combined with `{ and: [...] }`, `{ or: [...] }`, `{ not: {...} }`. Errors are thrown as `kyoube.Error` with
-`code` (`forbidden`, `invalid`, `not_found`, `conflict`, `limit`, `disabled`, `budget_exceeded`, `too_large`, `provider_rejected`, `provider_unavailable`, `timeout`). Every row has `id`, `created_at`, `updated_at`.
+`code` (`forbidden`, `invalid`, `not_found`, `conflict`, `limit`, `disabled`, `budget_exceeded`, `too_large`, `provider_rejected`, `provider_unavailable`, `timeout`; connection calls use `forbidden`, `invalid`, `disabled`, `too_large`, `timeout`, `provider_unavailable` and `limit`). Every row has `id`, `created_at`, `updated_at`.
 
 `viewer.name` is always `""` in v1 — the host gives the worker ids, not display names — so greet the
 viewer with `viewer.id` or with nothing at all, and never print `viewer.name` expecting a person's name.
@@ -122,6 +124,111 @@ anything about a person's employment, credit, housing, health, education or lega
 `"advisory": true`, so that every answer is a `review`. See [decisions.md](decisions.md#in-kyoube-apps)
 for what leaves the server and what is logged.
 
+## Connections
+
+An app has no network, but it can call an outside service through a **connection**: a named base URL
+and a stored key that a company admin set up (see [connections.md](connections.md)). The host makes
+the call under the viewer's identity, adds the key on the server, and hands the response back. The key
+never reaches the frame. Declare each connection in the manifest with the least access the app needs:
+
+```json
+"connections": [ { "name": "stripe", "access": "read" }, { "name": "crm", "access": "read-write" } ]
+```
+
+`access` is `read` (default, GET only) or `read-write`. At most 10 per app. A declaration narrows what
+the connection allows and never widens it: declaring `read-write` on a connection that only allows
+`read` fails at publish with `invalid`. A call on an undeclared connection is `forbidden`.
+
+```ts
+kyoube.connections.call(name, { method?, path?, query?, headers?, body? })
+  // → { status, headers, body }      body is a string; parse JSON yourself
+```
+
+- `method` defaults to `GET`. `path` is relative to the connection's base URL (`customers`, not
+  `/customers`) and `query` is an object of strings. The request rules, the header allow-lists and the
+  response rules are in [connections.md](connections.md#the-request); in short, an absolute URL, `..`,
+  `//` and a leading `/` are refused with `invalid`, the app may set only `accept`, `content-type`,
+  `if-match`, `if-none-match`, `idempotency-key` and `x-request-id`, a body is at most 1 MiB, and a
+  response is text of at most 2 MiB (`too_large` beyond that; binary is not supported).
+- Every status is returned as is, so a 404 or 500 from the service is a normal answer: check
+  `res.status`. Redirects are not followed. A 204 has an empty body.
+- A call may take 25 seconds, then it fails with `timeout`.
+- `kyoube.ready()` returns `connections: [{ name, access, available }]`. `available` is false when the
+  connection is missing or its secret does not resolve; hide or explain the feature then.
+- Errors are `kyoube.Error`: `forbidden` (not declared, or the declaration, the connection or the
+  viewer's level does not allow the method), `invalid`, `disabled` (the connection is missing or its
+  secret does not resolve; the host shows one toast per connection per mount), `too_large`, `timeout`,
+  `provider_unavailable` (the service could not be reached) and `limit`.
+- Who may call: the viewer must be able to open the app. A GET needs data level `read`; any other
+  method needs `write`, a `read-write` declaration and a `read-write` connection.
+- Calls count in the frame's 60 per 10 seconds, with their own ceiling of **30 per 10 seconds**.
+  Fetch once and keep the result; do not call per row.
+
+A version that adds a connection or widens one needs a person to publish it. The publish dialog shows
+each connection's host and base path, auth style, methods and the app's declared access, and marks
+what is new; the REST body carries `connectionsConfirmed: true`, and without it the publish fails
+with `invalid`. An agent cannot publish or roll back to such a version. Removing or narrowing
+connections needs no confirmation, and every declared connection must exist in the company's settings
+at publish.
+
+### Example: a read-only API in a table
+
+This app lists customers from a connection named `crm` (declared `read`, base URL
+`https://api.example.com/v1/`), checks `available`, handles every outcome, and keeps the result.
+
+```html
+<!doctype html>
+<html><head><meta charset="utf-8"><title>CRM customers</title>
+<style>body{font:14px system-ui;margin:16px}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #ddd;padding:6px;text-align:left}.scroll{overflow-x:auto}button{min-height:44px}#note{margin:12px 0}@media(prefers-color-scheme:dark){body{background:#111;color:#eee}td,th{border-color:#333}}</style>
+</head><body>
+<h1>CRM customers</h1>
+<button id="reload">Reload</button>
+<p id="note" role="status"></p>
+<div class="scroll"><table><thead><tr><th>Name</th><th>Email</th><th>Plan</th></tr></thead><tbody id="rows"></tbody></table></div>
+<script>
+const note = document.getElementById("note");
+const rowsEl = document.getElementById("rows");
+function esc(s) { return String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+function say(text) { note.textContent = text; }
+
+const MESSAGES = {
+  forbidden: "You do not have access to the CRM from this app.",
+  disabled: "The CRM is not set up. Ask a company admin.",
+  too_large: "The CRM sent more than this app can show. Narrow the request.",
+  timeout: "The CRM took too long to answer. Try again.",
+  provider_unavailable: "The CRM could not be reached. Try again later.",
+  limit: "Too many requests. Wait a few seconds.",
+};
+
+async function load() {
+  say("Loading...");
+  rowsEl.innerHTML = "";
+  try {
+    const res = await kyoube.connections.call("crm", { path: "customers", query: { limit: "50" } });
+    if (res.status === 429) return say("The CRM is busy. Try again in " + (res.headers["retry-after"] || "a few") + " seconds.");
+    if (res.status !== 200) return say("The CRM answered " + res.status + ".");
+    let list;
+    try { list = JSON.parse(res.body).customers; } catch { return say("The CRM sent something this app cannot read."); }
+    if (!Array.isArray(list)) return say("The CRM sent something this app cannot read.");
+    rowsEl.innerHTML = list.map(c => `<tr><td>${esc(c.name)}</td><td>${esc(c.email)}</td><td>${esc(c.plan)}</td></tr>`).join("");
+    say(list.length + " customers");
+  } catch (err) {
+    say(MESSAGES[err.code] || err.message);
+  }
+}
+
+document.getElementById("reload").addEventListener("click", load);
+kyoube.ready().then((ctx) => {
+  const crm = ctx.connections.find(c => c.name === "crm");
+  if (!crm || !crm.available) return say(MESSAGES.disabled);
+  return load();
+});
+</script>
+</body></html>
+```
+
+The manifest for it is `{ "name": "CRM customers", "slug": "crm-customers", "tables": [], "connections": [ { "name": "crm", "access": "read" } ] }`.
+
 ## Rules for the source
 
 - Start with `<!doctype html>`; put CSS in `<style>` and JS in `<script>` — no `src=`, `href=` to the network, no `fetch`.
@@ -140,7 +247,8 @@ for what leaves the server and what is logged.
   `code: "limit"` (`limit: too many requests`), while a toast over the smaller ceiling is silently
   dropped. Keep hitting either ceiling for three windows running and the app is stopped with a
   notice. Batch instead of looping: one `query` with a `limit` beats sixty `get`s, and `insert` takes
-  an array of rows.
+  an array of rows. Connection calls have a smaller ceiling of **30 per 10 seconds**, counted inside
+  the 60.
 - No `<link rel="dns-prefetch">` or `<link rel="preconnect">`. They are the one network-shaped thing
   the policy does not govern (see the security model below), so treat them as forbidden rather than
   as a loophole; they cannot fetch anything for you in any case.
@@ -192,7 +300,7 @@ company as `?companyId=…` on `GET` or `"companyId"` in every `POST` body. Ever
 | Read an app | `GET /apps/{slug}?version=latest` (or `current`, or a number) | — |
 | Create (draft v1) | `POST /apps` | `manifest`, `source`, `notes?` |
 | Update (new draft) | `POST /apps/{slug}` | `manifest`, `source`, `notes?` |
-| Publish | `POST /apps/{slug}/publish` | `version?` (default: latest draft) |
+| Publish | `POST /apps/{slug}/publish` | `version?` (default: latest draft), `decisionsConfirmed?`, `connectionsConfirmed?` |
 | Roll back | `POST /apps/{slug}/rollback` | `version` |
 | Archive | `POST /apps/{slug}/archive` | — |
 
@@ -296,5 +404,14 @@ the documented set of pure scalar, aggregate and window builtins (`count`, `lowe
 `jsonb_build_object`, `row_number`, …). Every other name is rejected — no `pg_*` function is on the
 list at all — as is a cast to any `reg*` OID alias type (`'pg_class'::regclass`), so neither the
 catalog nor the filesystem nor a server setting is reachable from an app's queries.
+
+A connection call crosses the same bridge and is the one way an app reaches the outside. The frame still
+has no network: the host forwards the call to the plugin worker under the viewer's identity, the
+worker checks the declaration, the connection's methods and the viewer's level, adds the key, and
+returns the response with its headers filtered. The key is never sent to the frame, and the app
+cannot change the host, the scheme or the base path, or set an auth or cookie header. What it can do
+is send data the viewer can read to a service it declared, which is why a person confirms the
+declared connections at publish. See [connections.md](connections.md) and
+[SECURITY.md](../SECURITY.md#connections).
 
 An app can therefore never do more than the person using it could do on the Data page.

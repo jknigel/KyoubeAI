@@ -120,6 +120,11 @@ never paste more than a handful of rows into an issue comment — point to the t
 To classify, score or check rows with the company's typed-decision model, see the kyoube-decisions
 skill (`POST /decisions/decide` with `rows`).
 
+To bring data in from, or push it to, an outside service the company has connected (a CRM, a payments
+API), see the "Connections" section of the kyoube-apps skill: `GET /connections` lists what exists and
+what you may do with it, and `POST /connections/{name}/call` makes the call. You cannot create a
+connection or its secret; ask a person.
+
 ## AI columns
 
 An AI column is a field the company's typed-decision model fills in from other fields of the same

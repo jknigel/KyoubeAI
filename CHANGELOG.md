@@ -4,6 +4,29 @@ All notable changes to KyoubeAI are recorded here, in terms of what changed for 
 building on it. The format is loosely [Keep a Changelog](https://keepachangelog.com/); versioning is
 [SemVer](https://semver.org/).
 
+## 1.8.0 (unreleased)
+
+### Added
+
+- Connections: a Kyoube App or an agent can call an outside service (a payments API, a CRM, a
+  weather feed) with an API key the company stores once. An admin adds the connection under Settings,
+  Plugins, Kyoube Data & Apps (company selected) with a name, an `https` base URL, an auth style
+  (Bearer token, a custom header or Basic) and a company secret, and chooses `read` (GET only) or
+  `read-write`. The key stays on the server. Apps declare the connections they use in the manifest
+  and call `kyoube.connections.call(name, { method, path, query, headers, body })`; `kyoube.ready()`
+  reports which are `available`. Publishing a version that adds a connection or widens it to
+  `read-write` needs a person (`connectionsConfirmed`); agents cannot publish it. Agents need a
+  grant per connection, set by an owner or admin under Company Settings, Data access, Connections,
+  and use `GET /connections` and `POST /connections/{name}/call` (tools `connections_list` and
+  `connections_call`). Their non-GET calls can be held by the guardrail (`connection_write`). Calls
+  return any status as it is, text up to 2 MiB, at most 30 per 10 seconds per running app, and every
+  call is audited without bodies or query values. Free; no licence needed. See
+  [docs/connections.md](docs/connections.md).
+- The Kyoube Apps and Kyoube Data agent skills teach agents how connections are set up and used, and
+  `docs/apps.md` has a Connections section with a complete example app.
+- A migration adds one empty table (`connection_grants`). Nothing changes until an instance admin
+  adds a connection.
+
 ## 1.7.0 - 2026-10-09
 
 ### Added

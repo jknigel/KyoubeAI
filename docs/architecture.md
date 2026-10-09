@@ -152,6 +152,33 @@ routes) or `handleAppsApiRequest` (`src/apps/api-routes.ts` — the `apps.*` rou
 tried first and returns `null` for a route it does not own, so a data route falls through to the other
 one; every route key is answered by exactly one of the two.
 
+### Connection call → outside service
+
+A call to a configured connection comes from one of three doors and ends in one function. A running
+app sends `connections.call` over the bridge (`apps.connection_call`); an agent or a person posts to
+`POST /api/plugins/kyoube.apps/api/connections/{name}/call` or uses the `connections_call` tool.
+`GET …/connections` and `connections_list` list what exists. The routes are dispatched in `plugin.ts`
+to `handleConnectionsApiRequest` (`src/connections/api-routes.ts`), the tools are in
+`src/connections/tools.ts` and go through `tool-runtime.ts` like the others (two more tools beside the
+`data_*` and `apps_*` ones), and all three reach `ConnectionService.call` (`src/connections/service.ts`):
+
+1. Load the company's connections from the plugin config (the per-company `connections` list, with a
+   `secret-ref` in each item).
+2. Authorise: for an app, the viewer's level, the published manifest's declaration and the
+   connection's methods; for an agent, its grant in `kyoube_meta.connection_grants`; for a person,
+   their data level or owner/admin role.
+3. Build the request (`src/connections/request.ts`, pure): join and contain the path, encode the
+   query, keep only allowed request headers, add the auth header from the secret (resolved with
+   `ctx.secrets.resolve` and cached 60 seconds per company and connection), serialise the body.
+4. For an agent's non-GET call, run the guardrail (`connection_write`); a held call returns `held`.
+5. `ctx.http.fetch`, under a 25 second deadline. The core refuses private addresses, pins the
+   connection to the resolved address and never follows redirects.
+6. Shape the response: filtered headers, text body capped at 2 MiB.
+7. Write one `kyoube_meta.audit` row (`connection_call`) with no bodies or query values.
+
+An app's calls run on the same bridge budget as data calls, with a ceiling of 30 connection calls per
+10 seconds. See [`connections.md`](connections.md).
+
 ### App runtime → data
 
 A published app opens as a sandboxed `<iframe sandbox="allow-scripts allow-forms allow-modals">` with an
@@ -372,6 +399,7 @@ beside the core's. Like the theme, it checks every anchor first. See [`mobile.md
 ## Further reading
 
 - [`apps.md`](apps.md) — app authoring guide: the manifest, `window.kyoube`, the sandbox in full detail.
+- [`connections.md`](connections.md) — connections to outside services: setup, who may call, limits, audit.
 - [`operations.md`](operations.md) — volumes, backups/restore, logs, health, key rotation, resource limits.
 - [`upgrading.md`](upgrading.md) — upgrading KyoubeAI and the core, and rolling back.
 - [`governance.md`](governance.md) — Kyoube's grant levels alongside the core's tool profiles/policies.
