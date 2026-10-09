@@ -285,8 +285,6 @@ and what data level they hold. Group tables are in `kyoube_meta` (`groups`, `gro
 - **Residual: agents are visible.** The core has no per-agent visibility, so people outside a group
   can still see its agents, their tasks and their runs. Groups restrict giving work and chat, not
   seeing.
-- **Residual: group names are visible.** Any company member can see which groups restrict an agent
-  (the agent page's Access tab). Do not put people's names in group names.
 - **Residual: people are shown by id and role.** The core's plugin API gives no display names.
 - **Residual: `data.access` can hint at a colleague's group.** The Data page's `data.access` read
   builds its actor from a client-supplied user id (the existing model, see [Data](#data)), and returns

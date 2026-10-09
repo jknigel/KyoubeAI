@@ -4,7 +4,6 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GroupsSettingsPage } from "../../src/ui/groups/GroupsSettingsPage.js";
-import { AgentAccessTab } from "../../src/ui/groups/AgentAccessTab.js";
 
 type BridgeGlobal = typeof globalThis & { __paperclipPluginBridge__?: { sdkUi?: Record<string, unknown> }; IS_REACT_ACT_ENVIRONMENT?: boolean };
 const context = { companyId: "c1", companyPrefix: "acme", projectId: null, entityId: null, entityType: null, userId: "u1" };
@@ -106,20 +105,5 @@ describe("GroupsSettingsPage", () => {
     await act(async () => buttonNamed("Save").click());
     expect(toasts.at(-1)).toEqual({ title: "Group saved", tone: "success" });
     expect(name()).toBeNull();
-  });
-});
-
-describe("AgentAccessTab", () => {
-  async function render(names: string[]) {
-    (globalThis as BridgeGlobal).__paperclipPluginBridge__ = { sdkUi: { usePluginAction: () => async () => names } };
-    await act(async () => root.render(createElement(AgentAccessTab, { context: { ...context, entityId: "a1", entityType: "agent" } })));
-  }
-  it("names the groups that restrict the agent", async () => {
-    await render(["Sales"]);
-    expect(container.textContent).toContain("Restricted to: Sales");
-  });
-  it("says everyone can give an unrestricted agent work", async () => {
-    await render([]);
-    expect(container.textContent).toContain("Everyone in the company can give this agent work.");
   });
 });

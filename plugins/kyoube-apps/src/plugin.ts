@@ -350,7 +350,6 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
           apps: appList.filter((app) => app.status !== "archived").map((app) => ({ id: app.id, name: app.name, icon: app.icon })),
         };
       });
-      action("groups.agent", (c, a, p) => groupService.agentGroups(c, a, str(p, "agentId")));
       // The Data access page's people table: each active member's effective level and where it comes from.
       action("groups.people_levels", async (c, a) => {
         await dataService.assertAdmin(c, a);

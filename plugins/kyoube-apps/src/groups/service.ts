@@ -100,12 +100,6 @@ export class GroupService {
     await this.store.setSync(companyId, report);
   }
 
-  /** The names of the groups restricting one agent, for its Access tab. Any company member may read it. */
-  async agentGroups(companyId: string, actor: DataActor, agentId: string): Promise<string[]> {
-    if (actor.kind !== "user" || !actor.id || !(await this.deps.resolveUserRole(companyId, actor.id, false))) throw new DataError("forbidden", "only company members can see an agent's access");
-    return (await this.store.list(companyId)).filter((group) => group.agents.includes(agentId)).map((group) => group.name);
-  }
-
   /** The store's FK only proves an app exists, not that it is this company's. */
   private async assertOwnApps(companyId: string, appIds: string[]): Promise<void> {
     if (appIds.length === 0) return;
