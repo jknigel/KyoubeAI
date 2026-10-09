@@ -1,7 +1,7 @@
 import type { PaperclipPluginManifestV1, PluginApiRouteDeclaration } from "@paperclipai/plugin-sdk";
 
 export const PLUGIN_ID = "kyoube.agent-rules";
-export const PLUGIN_VERSION = "0.2.0";
+export const PLUGIN_VERSION = "0.3.0";
 
 function boardRoute(routeKey: string, path: string): PluginApiRouteDeclaration {
   return {
@@ -16,7 +16,8 @@ function boardRoute(routeKey: string, path: string): PluginApiRouteDeclaration {
 
 /**
  * Board-only. `kyoube agent-rules` calls reconcile for every company on each
- * pass, and revert on `kyoube agent-rules off`. Each request runs inside a
+ * pass, and revert on `kyoube agent-rules off`; groups.apply carries each
+ * company's agent access from kyoube.apps' user groups. Each request runs inside a
  * host-issued invocation scoped to the body's company, which the
  * authorization and state host calls need; the worker's own start-up code has
  * no such scope.
@@ -24,6 +25,7 @@ function boardRoute(routeKey: string, path: string): PluginApiRouteDeclaration {
 export const API_ROUTES: PluginApiRouteDeclaration[] = [
   boardRoute("guard.reconcile", "/reconcile"),
   boardRoute("guard.revert", "/revert"),
+  boardRoute("groups.apply", "/groups/apply"),
 ];
 
 // `minimumHostVersion` is deliberately absent, for the reason recorded in the
@@ -34,12 +36,13 @@ const manifest: PaperclipPluginManifestV1 = {
   apiVersion: 1,
   version: PLUGIN_VERSION,
   displayName: "Kyoube Agent Rules",
-  description: "Keeps work from moving up to a manager agent without a person's decision: manager agents are protected, and each manager may assign only within its own team.",
+  description: "Keeps work from moving up to a manager agent without a person's decision: manager agents are protected, and each manager may assign only within its own team; and keeps group agents assignable only by their groups' members.",
   author: "KyoubeAI",
   categories: ["automation"],
   capabilities: [
     "api.routes.register",
     "agents.read",
+    "access.members.read",
     "authorization.policies.read",
     "authorization.policies.write",
     "authorization.grants.read",

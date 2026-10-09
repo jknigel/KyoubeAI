@@ -81,9 +81,10 @@ function isUnscoped(grant: Grant): boolean {
 /**
  * One company: protect its managers, give each its own-team grant, take the
  * broad assign grant from every agent, and give the top agent the change
- * grants core gives its root CEO.
+ * grants core gives its root CEO. An agent in `keepProtected` (one a user group
+ * restricts) is never unprotected, even once it manages no one.
  */
-export async function reconcileGuard(port: GuardPort, companyId: string): Promise<GuardReport> {
+export async function reconcileGuard(port: GuardPort, companyId: string, keepProtected: ReadonlySet<string> = new Set()): Promise<GuardReport> {
   const agents = await port.listAgents(companyId);
   const managers = managerIds(agents);
   const top = topAgentId(agents);
@@ -123,7 +124,7 @@ export async function reconcileGuard(port: GuardPort, companyId: string): Promis
           await port.setPolicy(companyId, agent.id, withProtection(policy));
           wrote = true;
         }
-      } else if (!isManager && record.protected.includes(agent.id)) {
+      } else if (!isManager && record.protected.includes(agent.id) && !keepProtected.has(agent.id)) {
         if (isProtected(policy)) {
           await port.setPolicy(companyId, agent.id, withoutProtection(policy));
           wrote = true;
@@ -205,8 +206,12 @@ export async function selfTest(port: GuardPort, companyId: string, agents: Agent
   }
 }
 
-/** Undoes what the record says this guardrail changed in one company, and nothing else. */
-export async function revertGuard(port: GuardPort, companyId: string): Promise<RevertReport> {
+/**
+ * Undoes what the record says this guardrail changed in one company, and nothing else.
+ * An agent in `keepProtected` (one a user group still restricts) stays protected, but
+ * leaves the guard's record all the same.
+ */
+export async function revertGuard(port: GuardPort, companyId: string, keepProtected: ReadonlySet<string> = new Set()): Promise<RevertReport> {
   const record = await port.readRecord(companyId);
   const agents = new Map((await port.listAgents(companyId)).map((row) => [row.id, row]));
   const report: RevertReport = { reverted: [], failures: [] };
@@ -220,7 +225,7 @@ export async function revertGuard(port: GuardPort, companyId: string): Promise<R
       continue;
     }
     try {
-      if (record.protected.includes(id)) {
+      if (record.protected.includes(id) && !keepProtected.has(id)) {
         const policy = await port.getPolicy(companyId, id);
         if (isProtected(policy)) await port.setPolicy(companyId, id, withoutProtection(policy));
       }

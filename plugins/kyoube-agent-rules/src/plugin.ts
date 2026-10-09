@@ -1,4 +1,5 @@
 import { definePlugin, type PaperclipPlugin, type PluginContext } from "@paperclipai/plugin-sdk";
+import { applyGroups, parseAccess, parseGroupsRecord, type GroupsPort } from "./groups.js";
 import { EMPTY_RECORD, reconcileGuard, revertGuard, type GuardPort, type GuardRecord } from "./guard.js";
 import { PLUGIN_ID } from "./manifest.js";
 import type { Grant } from "./policy.js";
@@ -7,6 +8,8 @@ type HostGrant = Parameters<PluginContext["authorization"]["grants"]["set"]>[0][
 
 /** Plugin state key of the per-company record of what the guardrail changed. */
 const RECORD_KEY = "guard-record";
+/** Plugin state key of the per-company record of what user groups changed (src/groups.ts). */
+const GROUPS_RECORD_KEY = "groups-record";
 
 function ids(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((id): id is string => typeof id === "string") : [];
@@ -76,9 +79,45 @@ export function portFromContext(ctx: PluginContext): GuardPort {
   };
 }
 
+/** The user-groups view of the host: the guard's agent and policy calls, plus people and their grants. */
+export function groupsPortFromContext(ctx: PluginContext): GroupsPort {
+  const scope = (companyId: string) => ({ scopeKind: "company" as const, scopeId: companyId, stateKey: GROUPS_RECORD_KEY });
+  const guard = portFromContext(ctx);
+  return {
+    listAgents: guard.listAgents,
+    getPolicy: guard.getPolicy,
+    setPolicy: guard.setPolicy,
+    async listMembers(companyId) {
+      const rows = await ctx.access.members.list({ companyId });
+      return rows
+        .filter((row) => row.principalType === "user" && row.status === "active")
+        .map((row) => ({ userId: row.principalId, role: row.membershipRole ? row.membershipRole.toLowerCase() : null }));
+    },
+    async listUserGrants(companyId, userId) {
+      const rows = await ctx.authorization.grants.list({ companyId, principalType: "user", principalId: userId });
+      return rows.map((grant) => ({ permissionKey: grant.permissionKey, scope: grant.scope ?? null }));
+    },
+    async setUserGrants(companyId, userId, grants) {
+      await ctx.authorization.grants.set({
+        companyId,
+        principalType: "user",
+        principalId: userId,
+        grants: grants.map((grant) => ({ permissionKey: grant.permissionKey as HostGrant["permissionKey"], scope: grant.scope })),
+      });
+    },
+    async readGroupsRecord(companyId) {
+      return parseGroupsRecord(await ctx.state.get(scope(companyId)));
+    },
+    async writeGroupsRecord(companyId, record) {
+      await ctx.state.set(scope(companyId), record);
+    },
+  };
+}
+
 export interface AgentRulesPluginDeps {
-  /** Tests swap the host adapter for a fake; production adapts `ctx`. */
+  /** Tests swap the host adapters for fakes; production adapts `ctx`. */
   port?: (ctx: PluginContext) => GuardPort;
+  groupsPort?: (ctx: PluginContext) => GroupsPort;
 }
 
 export function createAgentRulesPlugin(deps: AgentRulesPluginDeps = {}): PaperclipPlugin {
@@ -86,6 +125,7 @@ export function createAgentRulesPlugin(deps: AgentRulesPluginDeps = {}): Papercl
   // instance's closure, never in a module-level singleton two instances in
   // one process would share.
   let port: GuardPort | null = null;
+  let groupsPort: GroupsPort | null = null;
   let logError: ((message: string, meta?: Record<string, unknown>) => void) | null = null;
   // Serialized per company, so a reconcile and a revert never interleave their reads and writes of the record.
   const lastCall = new Map<string, Promise<unknown>>();
@@ -99,20 +139,29 @@ export function createAgentRulesPlugin(deps: AgentRulesPluginDeps = {}): Papercl
   return definePlugin({
     async setup(ctx: PluginContext) {
       port = (deps.port ?? portFromContext)(ctx);
+      groupsPort = (deps.groupsPort ?? groupsPortFromContext)(ctx);
       logError = (message, meta) => ctx.logger.error(message, meta);
       ctx.logger.info(`${PLUGIN_ID} worker ready`);
     },
 
     async onApiRequest(input) {
       const guard = port;
-      if (!guard) return { status: 503, body: { error: "plugin not ready" } };
+      const groups = groupsPort;
+      if (!guard || !groups) return { status: 503, body: { error: "plugin not ready" } };
       // Declared `auth: "board"`, which the host enforces before the request
       // reaches this worker; checked again so a mis-declared route could never
       // let an agent loosen its own guardrail.
       if (input.actor.actorType === "agent") return { status: 403, body: { error: "forbidden: board access required", code: "forbidden" } };
       try {
-        if (input.routeKey === "guard.reconcile") return { status: 200, body: await serialized(input.companyId, () => reconcileGuard(guard, input.companyId)) };
-        if (input.routeKey === "guard.revert") return { status: 200, body: await serialized(input.companyId, () => revertGuard(guard, input.companyId)) };
+        // Agents user groups restrict: the manager rule never unprotects them.
+        const keep = async () => new Set((await groups.readGroupsRecord(input.companyId)).required);
+        if (input.routeKey === "guard.reconcile") return { status: 200, body: await serialized(input.companyId, async () => reconcileGuard(guard, input.companyId, await keep())) };
+        if (input.routeKey === "guard.revert") return { status: 200, body: await serialized(input.companyId, async () => revertGuard(guard, input.companyId, await keep())) };
+        if (input.routeKey === "groups.apply") {
+          const access = parseAccess((input.body as { agents?: unknown } | undefined)?.agents);
+          if (!access) return { status: 400, body: { error: "agents must be a list of { agentId, allowedUserIds }", code: "invalid" } };
+          return { status: 200, body: await serialized(input.companyId, () => applyGroups(groups, input.companyId, access)) };
+        }
       } catch (error) {
         const text = error instanceof Error ? error.message : String(error);
         logError?.(`${input.routeKey} failed`, { companyId: input.companyId, error: text });
