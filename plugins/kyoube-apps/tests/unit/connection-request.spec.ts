@@ -154,6 +154,9 @@ describe("buildUrl", () => {
     ["v1.2/x", "https://api.example.com/v1/v1.2/x"],
     ["a;jsessionid=1", "https://api.example.com/v1/a;jsessionid=1"],
     ["a.b./c", "https://api.example.com/v1/a.b./c"],
+    ["caf%C3%A9;v=1", "https://api.example.com/v1/caf%C3%A9;v=1"],
+    ["a..b", "https://api.example.com/v1/a..b"],
+    ["%2541", "https://api.example.com/v1/%2541"],
   ])("allows path %j", (path, expected) => {
     expect(buildUrl(base, path, {})).toBe(expected);
   });
@@ -213,6 +216,17 @@ describe("buildUrl", () => {
     ["invalid UTF-8 (lone byte)", "caf%E9"],
     ["invalid UTF-8 (0xff)", "x%ff"],
     ["more than three encodings", "%25252525252e"],
+    ["a full-width percent forming a dot", "%EF%BC%852e%EF%BC%852e/x"],
+    ["a small percent forming a dot", "%EF%B9%AA2e%EF%B9%AA2e/x"],
+    ["a full-width percent, doubly encoded", "%EF%BC%85252e%EF%BC%85252e"],
+    ["a full-width percent forming a slash", "..%EF%BC%852f"],
+    ["a full-width percent forming a backslash", "a%EF%BC%855cb"],
+    ["a full-width percent forming a NUL", "x%EF%BC%8500"],
+    ["a full-width numeral forming an escape", "%EF%BC%85%EF%BC%92e/x"],
+    ["a yen sign", "a%C2%A5b"],
+    ["a won sign", "a%E2%82%A9b"],
+    ["a literal percent after decoding", "100%25"],
+    ["a literal percent in the middle", "50%25off"],
     ["a dot-dot in the middle", "a/../b"],
     ["a dot-dot at the end", "a/.."],
     ["a dot-dot escaping", "../v2/x"],
@@ -264,6 +278,10 @@ describe("buildUrl", () => {
       expect(url.pathname.startsWith("/v1/")).toBe(true);
       expect(url.username + url.password + url.hash).toBe("");
     }
+  });
+
+  it("explains a literal percent after decoding", () => {
+    expect(failure(() => buildUrl(base, "100%25", {})).message).toContain("literal %");
   });
 
   it("gives invalid UTF-8 its own message", () => {
