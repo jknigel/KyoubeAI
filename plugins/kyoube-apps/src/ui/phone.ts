@@ -16,6 +16,7 @@ const CSS = String.raw`
   [data-kyoube-page="data-access"] button, [data-kyoube-page="data-access"] select, [data-kyoube-page="data-access"] input:not([type="checkbox"]) { min-height: 44px; }
   [data-kyoube-page="groups"] fieldset label, [data-kyoube-page="data-access"] label { min-height: 44px; }
   [data-kyoube-page="groups"] fieldset { flex-basis: 100%; }
+  [data-kyoube-confirm] { min-height: 44px; align-items: center; }
   .kyoube-wide-only { display: none !important; }
   .kyoube-phone-only { display: inline-flex !important; }
   [data-kyoube-runner] { padding: 0 !important; gap: 0 !important; }

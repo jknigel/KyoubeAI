@@ -71,7 +71,7 @@ export function PublishDisclosure(props: { preview: PublishPreviewData; appName:
           {preview.connections?.changed && (
             <>
               <p className="text-foreground/70">This version adds or widens connections, so it needs a person to publish it. Agents cannot.</p>
-              <label className="flex items-start gap-2">
+              <label className="flex items-start gap-2" data-kyoube-confirm="">
                 <input type="checkbox" checked={props.connectionsConfirmed === true} onChange={(event) => props.onConnectionsConfirmedChange?.(event.target.checked)} />
                 <span>This app may call these services with the company's credentials</span>
               </label>
@@ -83,7 +83,7 @@ export function PublishDisclosure(props: { preview: PublishPreviewData; appName:
       {preview.changed && (
         <>
           <p className="text-foreground/70">This version adds or changes decision sets, so it needs a person to publish it. Agents cannot.</p>
-          <label className="flex items-start gap-2">
+          <label className="flex items-start gap-2" data-kyoube-confirm="">
             <input type="checkbox" checked={props.confirmed} onChange={(event) => props.onConfirmedChange(event.target.checked)} />
             <span>No decision set here decides anything about a person's employment, credit, housing, health, education or legal status. A set that does is marked advisory.</span>
           </label>

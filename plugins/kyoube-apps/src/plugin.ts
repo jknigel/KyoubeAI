@@ -496,13 +496,15 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
       };
       action("connections.status", async (c, a) => {
         await assertConnectionsAdmin(c, a);
-        const [status, declared] = await Promise.all([requireConnections().status(c), declaredConnections(c, a)]);
+        // The apps lookup needs read access to company data; without it the section still shows connections and grants.
+        const [status, declared] = await Promise.all([requireConnections().status(c), declaredConnections(c, a).catch(() => [])]);
         const configured = new Set(status.connections.map((row) => row.name));
         const usedBy = (name: string) => declared.filter((row) => row.connections.some((entry) => entry.name === name)).map((row) => ({ slug: row.slug, name: row.name, access: row.connections.find((entry) => entry.name === name)!.access }));
         const missing = [...new Set(declared.flatMap((row) => row.connections.map((entry) => entry.name)))].filter((name) => !configured.has(name)).sort().map((name) => ({ name, apps: usedBy(name) }));
         return { connections: status.connections.map((row) => ({ ...row, apps: usedBy(row.name) })), problems: status.problems, missing };
       });
       action("connections.grants", async (c, a) => {
+        await assertConnectionsAdmin(c, a);
         const [grants, agents] = await Promise.all([requireConnections().listGrants(c, a), ctx.agents.list({ companyId: c })]);
         return { grants, agents: agents.filter((agent) => agent.status !== "terminated").map((agent) => ({ id: agent.id, name: agent.name })) };
       });
