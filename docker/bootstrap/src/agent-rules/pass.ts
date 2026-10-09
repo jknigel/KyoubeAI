@@ -98,16 +98,41 @@ async function editAgents(api: RulesApi, companyId: string, entry: CompanyReport
   }
 }
 
+/** kyoube.apps's sync-report route refuses an `error` longer than this. */
+export const SYNC_ERROR_MAX = 2000;
+
+/** The error as the sync report can carry it: cut to fit the route's cap, marked with an ellipsis. */
+export function syncReportError(error: string | null): string | null {
+  return error !== null && error.length > SYNC_ERROR_MAX ? `${error.slice(0, SYNC_ERROR_MAX - 10)}…` : error;
+}
+
+/**
+ * Whether the core answered for kyoube.apps the way it does before that plugin is installed (404
+ * `Plugin not found`) or while its worker starts (503), as `pluginReady` in api.ts reads them.
+ */
+function appsPluginMissing(error: unknown): boolean {
+  return error instanceof CoreApiError && (error.status === 503 || (error.status === 404 && error.message === "Plugin not found"));
+}
+
 /**
  * Groups (docs/groups.md): read who may assign which agent from kyoube.apps, have kyoube.agent-rules
  * apply it, and tell kyoube.apps how it went. A failed read skips the step: an unreadable list must
- * never be applied as "no groups", which would lift every restriction.
+ * never be applied as "no groups", which would lift every restriction. While kyoube.apps is not
+ * installed or not started, the step is skipped quietly: there are no groups to read yet.
  */
 async function groupsStep(deps: PassDeps, companyId: string, entry: CompanyReport): Promise<void> {
   const syncedAt = deps.now().toISOString();
   let error: string | null = null;
   try {
-    const access = await deps.api.getAgentAccess(companyId);
+    let access: Awaited<ReturnType<PassDeps["api"]["getAgentAccess"]>>;
+    try {
+      access = await deps.api.getAgentAccess(companyId);
+    } catch (caught) {
+      // kyoube.apps not installed yet, or its worker not started: no groups to read, so nothing to
+      // apply, nothing to report and no failure. The next pass reads them.
+      if (appsPluginMissing(caught)) return;
+      throw caught;
+    }
     const groups = await deps.api.applyGroups(companyId, access);
     entry.groups = groups;
     entry.writes += groups.protected.length + groups.unprotected.length + groups.people.length;
@@ -121,7 +146,7 @@ async function groupsStep(deps: PassDeps, companyId: string, entry: CompanyRepor
     if (isOwnerAdminRefusal(caught)) return;
   }
   try {
-    await deps.api.reportGroupSync(companyId, { syncedAt, error });
+    await deps.api.reportGroupSync(companyId, { syncedAt, error: syncReportError(error) });
   } catch (caught) {
     entry.failures.push({ step: "groups", error: `could not report the sync: ${describeError(caught, entry.name)}` });
   }
