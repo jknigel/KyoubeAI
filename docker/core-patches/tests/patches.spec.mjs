@@ -617,6 +617,8 @@ async function writeFullCore(root) {
   await writeFile(path.join(root, "server/dist/services/local-ai-credentials.js"), CLAUDE_VERIFY_2026_916_1);
   await mkdir(path.join(root, "server", "dist", "auth"), { recursive: true });
   await writeFile(path.join(root, "server/dist/auth/better-auth.js"), BETTER_AUTH_2026_916_1);
+  await mkdir(path.join(root, "server", "dist", "routes"), { recursive: true });
+  await writeFile(path.join(root, "server/dist/routes/issues.js"), CHAT_OPEN_2026_1005_0 + CHAT_MESSAGE_2026_1005_0);
   await mkdir(path.join(root, "packages", "adapters", "hermes", "src", "server"), { recursive: true });
   await writeFile(path.join(root, "packages/adapters/hermes/src/server/execute.ts"), HERMES_QUIET_2026_916_1);
 }
@@ -911,3 +913,73 @@ describe("the core the patches are written for", () => {
     expect(stderr).toContain(`built on core beta; these patches are written for core ${CORE_VERSION}`);
   });
 });
+
+const chatOpenPatch = patch("groups-chat-open-assign-check");
+const chatMessagePatch = patch("groups-chat-message-assign-check");
+
+function declaredStandingGroups(entry) {
+  expect(entry).toBeDefined();
+  expect(entry.standing).toMatch(/user groups/i);
+  expect(entry.upstream).toBeUndefined();
+  expect(entry.upstreamFix).toBeUndefined();
+  expect(entry.expect).toBe(1);
+  expect(entry.pattern.flags).toContain("g");
+  expect(entry.files).toEqual(["server/dist/routes/issues.js"]);
+}
+
+describe("groups-chat-open-assign-check", () => {
+  it("is declared as a standing user-groups patch", () => declaredStandingGroups(chatOpenPatch));
+  it("checks assignment before a chat with a protected agent is created, once", () => {
+    const { count, text } = applyToText(CHAT_OPEN_2026_1005_0, chatOpenPatch);
+    expect(count).toBe(1);
+    expect(text).toContain("kyoube-groups-chat");
+    expect(text.indexOf("const agent = resolved.agent;")).toBeLessThan(text.indexOf("assertCanAssignTasks(req, companyId, { assigneeAgentId: agent.id })"));
+    expect(text.indexOf("assertCanAssignTasks(req, companyId, { assigneeAgentId: agent.id })")).toBeLessThan(text.indexOf("svc.create(companyId, {"));
+    expect(text).toContain('agent.permissions?.authorizationPolicy?.assignmentPolicy?.mode === "protected"');
+    expect(applyToText(text, chatOpenPatch).count).toBe(0);
+  });
+});
+
+describe("groups-chat-message-assign-check", () => {
+  it("is declared as a standing user-groups patch", () => declaredStandingGroups(chatMessagePatch));
+  it("checks assignment before a message to a protected agent's chat, once", () => {
+    const { count, text } = applyToText(CHAT_MESSAGE_2026_1005_0, chatMessagePatch);
+    expect(count).toBe(1);
+    expect(text).toContain("kyoube-groups-chat");
+    expect(text).toContain("assertCanAssignTasks(req, issue.companyId, { assigneeAgentId: issue.conversationAgentId })");
+    expect(applyToText(text, chatMessagePatch).count).toBe(0);
+  });
+});
+
+// Excerpts of core 2026.1005.0's server/dist/routes/issues.js, copied verbatim:
+// the Agent Chat open route and the start of the issue-comment route.
+const CHAT_OPEN_2026_1005_0 =
+  "                throw notFound(\"Agent not found\");\n" +
+  "            const agent = resolved.agent;\n" +
+  "            const existing = await svc.getConversation(companyId, agent.id, req.actor.userId);\n" +
+  "            if (existing && !(await assertIssueReadAllowed(req, res, existing)))\n" +
+  "                return;\n" +
+  "            if (existing || method === \"get\") {\n" +
+  "                res.json(existing);\n" +
+  "                return;\n" +
+  "            }\n" +
+  "            const issue = await svc.create(companyId, {\n" +
+  "                title: `Chat with ${agent.name}`, assigneeAgentId: agent.id,\n" +
+  "                conversationAgentId: agent.id, conversationUserId: req.actor.userId,\n" +
+  "                conversationState: \"waiting\", status: \"in_review\", createdByUserId: req.actor.userId,\n" +
+  "            });\n";
+
+const CHAT_MESSAGE_2026_1005_0 =
+  "    router.post(\"/issues/:id/comments\", validate(addIssueCommentSchema), async (req, res) => {\n" +
+  "        const id = req.params.id;\n" +
+  "        const issue = await getAccessibleResource(req, res, svc.getById(id), \"Issue not found\");\n" +
+  "        if (!issue)\n" +
+  "            return;\n" +
+  "        if (issue.conversationAgentId && req.actor.type === \"board\") {\n" +
+  "            if (!(await instanceSettings.getExperimental()).enableAgentChat)\n" +
+  "                throw notFound(\"Agent Chat is disabled\");\n" +
+  "            if (!req.actor.userId)\n" +
+  "                throw forbidden(\"Board user access required\");\n" +
+  "            if (req.actor.userId !== issue.conversationUserId)\n" +
+  "                throw forbidden(\"Only the conversation owner can send messages or start a new session\");\n" +
+  "            if (!req.body.clientRequestId)\n";
