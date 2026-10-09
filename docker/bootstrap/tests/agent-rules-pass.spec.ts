@@ -3,7 +3,7 @@ import type { AgentRef, GuardReport, GuardRevertReport, InstructionsBundle, Rule
 import { GROUP_ROUTES, GUARD_PLUGIN_ROUTES } from "../src/agent-rules/api.js";
 import { RULES_BLOCK } from "../src/agent-rules/block.js";
 import type { Governance } from "../src/agent-rules/governance.js";
-import { applyPass, groupsPass, revertPass } from "../src/agent-rules/pass.js";
+import { applyPass, groupsPass, revertPass, syncReportError } from "../src/agent-rules/pass.js";
 import { failureLines } from "../src/agent-rules/report.js";
 import { EMPTY_STATE } from "../src/agent-rules/state.js";
 import { CoreApiError } from "../src/core-api.js";
@@ -312,6 +312,46 @@ describe("group step", () => {
     const { report } = await applyPass({ api, now: () => NOW }, EMPTY_STATE);
     expect(report.companies[0]!.failures).toContainEqual({ step: "groups", agent: "u2", error: "grants: nope" });
     expect(api.syncReports[0]!.error).toBe("1 failure(s); see kyoube doctor");
+  });
+});
+
+describe("group step: sync report and a missing kyoube.apps (R17)", () => {
+  it("cuts a long error to fit the sync-report route's 2000-character cap", async () => {
+    const api = new FakeApi();
+    const long = "x".repeat(5000);
+    api.getAgentAccess = async () => { throw new Error(long); };
+    const { report } = await applyPass({ api, now: () => NOW }, EMPTY_STATE);
+    const sent = api.syncReports[0]!.error!;
+    expect(sent).toHaveLength(1991);
+    expect(sent).toBe(`${"x".repeat(1990)}…`);
+    // The pass report keeps the whole message for kyoube doctor.
+    expect(report.companies[0]!.failures).toContainEqual({ step: "groups", error: long });
+    expect(syncReportError("short")).toBe("short");
+    expect(syncReportError("y".repeat(2000))).toBe("y".repeat(2000));
+    expect(syncReportError(null)).toBeNull();
+  });
+
+  for (const [what, error] of [
+    ["not installed (404 Plugin not found)", new CoreApiError(404, { error: "Plugin not found" }, "Plugin not found", `GET ${GROUP_ROUTES.access}`)],
+    ["not ready (503)", new CoreApiError(503, { error: "plugin not ready" }, "plugin not ready", `GET ${GROUP_ROUTES.access}`)],
+  ] as const) {
+    it(`skips the group step quietly when kyoube.apps is ${what}`, async () => {
+      const api = new FakeApi();
+      api.getAgentAccess = async () => { throw error; };
+      const { report } = await applyPass({ api, now: () => NOW }, EMPTY_STATE);
+      expect(api.calls.some((call) => call.startsWith("groups "))).toBe(false);
+      expect(api.syncReports).toEqual([]);
+      expect(report.companies[0]!.failures).toEqual([]);
+      expect(report.companies[0]!.groups).toBeNull();
+    });
+  }
+
+  it("still reports any other read failure, such as a 404 for a moved route", async () => {
+    const api = new FakeApi();
+    api.getAgentAccess = async () => { throw new CoreApiError(404, { error: "Not found" }, "Not found", `GET ${GROUP_ROUTES.access}`); };
+    const { report } = await applyPass({ api, now: () => NOW }, EMPTY_STATE);
+    expect(report.companies[0]!.failures).toContainEqual({ step: "groups", error: expect.stringContaining("the core no longer accepts") });
+    expect(api.syncReports).toHaveLength(1);
   });
 });
 
