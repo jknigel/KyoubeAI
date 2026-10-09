@@ -1,11 +1,21 @@
 /**
- * Phone layouts for the app runner and the Data page, injected once like the
+ * Phone layouts for the app runner, the Data page and the Groups and Data access settings pages
+ * (wide tables scroll in their own box, long ids break, controls are 44px tall), injected once like the
  * Studio styles: the host's compiled Tailwind has no classes for these, and a
  * class it lacks is dropped without a word (see apps/frame-height.ts).
  */
 const CSS = String.raw`
 .kyoube-phone-only { display: none !important; }
+[data-kyoube-scroll] { max-width: 100%; overflow-x: auto; }
+[data-kyoube-break] { overflow-wrap: anywhere; word-break: break-all; }
+[data-kyoube-page="groups"], [data-kyoube-page="data-access"] { min-width: 0; }
+[data-kyoube-page="groups"] fieldset { min-width: 0; }
 @media (max-width: 639px) {
+  [data-kyoube-page="groups"], [data-kyoube-page="data-access"] { padding-bottom: 96px !important; }
+  [data-kyoube-page="groups"] button, [data-kyoube-page="groups"] select, [data-kyoube-page="groups"] input:not([type="checkbox"]),
+  [data-kyoube-page="data-access"] button, [data-kyoube-page="data-access"] select, [data-kyoube-page="data-access"] input:not([type="checkbox"]) { min-height: 44px; }
+  [data-kyoube-page="groups"] fieldset label, [data-kyoube-page="data-access"] label { min-height: 44px; }
+  [data-kyoube-page="groups"] fieldset { flex-basis: 100%; }
   .kyoube-wide-only { display: none !important; }
   .kyoube-phone-only { display: inline-flex !important; }
   [data-kyoube-runner] { padding: 0 !important; gap: 0 !important; }
