@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Pool } from "pg";
-import { describe, expect, it } from "vitest";
-import { ConnectionService, type CallVia, type ConnectionServiceDeps } from "../../src/connections/service.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { CALL_DEADLINE_MS, ConnectionService, type CallVia, type ConnectionServiceDeps } from "../../src/connections/service.js";
 import { DataError } from "../../src/data/errors.js";
 import type { AccessLevel, DataActor } from "../../src/data/permissions.js";
 import { actionFingerprint, type GuardedAction } from "../../src/decisions/guardrail.js";
@@ -32,7 +32,7 @@ const ROLES: Record<string, string> = { viewer: "viewer", member: "member", owne
 
 interface Query { sql: string; params: unknown[] }
 
-function fakePool(grants: Record<string, string>) {
+function fakePool(grants: Record<string, string>, auditFails: () => boolean = () => false) {
   const queries: Query[] = [];
   const audits: Array<{ operation: string; actorKind: string; actorId: string | null; runId: string | null; details: Record<string, unknown> }> = [];
   const respond = (sql: string, params: unknown[] = []) => {
@@ -50,6 +50,7 @@ function fakePool(grants: Record<string, string>) {
       };
     }
     if (sql.startsWith("INSERT INTO kyoube_meta.audit")) {
+      if (auditFails()) throw new Error("audit insert refused");
       audits.push({ operation: params[4] as string, actorKind: params[1] as string, actorId: params[2] as string | null, runId: params[3] as string | null, details: params[6] as Record<string, unknown> });
     }
     return { rows: [] };
@@ -67,13 +68,15 @@ interface Options {
   resolve?: (binding: unknown, companyId: string, configPath: string) => Promise<string>;
   respond?: (url: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<Response>;
   guard?: boolean;
+  auditFails?: () => boolean;
 }
 
 function setup(opts: Options = {}) {
   const clock = { t: 1_000_000 };
   let config = opts.config ?? { connections: [CRM, RO] };
   const grants = opts.grants ?? { "agent-1/crm": "read-write", "agent-1/ro": "read-write", "agent-ro/crm": "read" };
-  const { pool, queries, audits } = fakePool(grants);
+  const { pool, queries, audits } = fakePool(grants, opts.auditFails);
+  const logs: Array<{ message: string; meta: Record<string, unknown> }> = [];
   const resolves: Array<{ binding: unknown; configPath: string }> = [];
   const resolve = opts.resolve ?? (async () => SECRET);
   const secrets = new SecretCache({
@@ -92,12 +95,13 @@ function setup(opts: Options = {}) {
     levelFor: async (_companyId, actor) => LEVELS[actor.id ?? ""] ?? "none",
     resolveUserRole: async (_companyId, userId) => ROLES[userId] ?? null,
     onActivity: async (event) => { activity.push(event); },
+    log: (message, meta) => { logs.push({ message, meta }); },
     now: () => clock.t,
   };
   if (opts.guard !== false) deps.guardAgentAction = async (action) => { guardCalls.push(action); };
   const service = new ConnectionService(deps);
   return {
-    service, deps, clock, queries, audits, resolves, fetches, guardCalls, activity,
+    service, deps, clock, queries, audits, logs, resolves, fetches, guardCalls, activity,
     setConfig: (next: Record<string, unknown>) => { config = next; },
   };
 }
@@ -302,6 +306,19 @@ describe("ConnectionService.call: the response", () => {
     expect(await t.service.call(C, VIEWER, "crm", GET, APP_READ)).toEqual({ status: 304, headers: {}, body: "" });
   });
 
+  it.each(["Invalid response status code 200", "Response constructor: Invalid response status code 101", "Invalid response status code 2040"])(
+    "keeps any other refused status (%s) as provider_unavailable (R11c)",
+    async (message) => {
+      const t = setup({ respond: async () => { throw new RangeError(message); } });
+      expect((await refusal(t.service.call(C, MEMBER, "crm", GET, DIRECT))).code).toBe("provider_unavailable");
+    },
+  );
+
+  it("maps a 205 to an empty answer", async () => {
+    const t = setup({ respond: async () => { throw new TypeError("Response constructor: Invalid response status code 205"); } });
+    expect(await t.service.call(C, MEMBER, "crm", { method: "PUT", path: "contacts/1" }, DIRECT)).toEqual({ status: 205, headers: {}, body: "" });
+  });
+
   it.each([
     'Worker→host call "http.fetch" timed out after 30000ms',
     "The operation was aborted",
@@ -410,9 +427,55 @@ describe("ConnectionService.call: the guardrail", () => {
     expect(t.audits.at(-1)!.details).toMatchObject({ outcome: "held", status: null });
   });
 
+  it("reads the secret before asking, so a confirmation is never spent on a disabled call (R11b)", async () => {
+    const t = setup({ resolve: async () => { throw new Error("gone"); } });
+    expect((await refusal(t.service.call(C, AGENT, "crm", POST, DIRECT))).code).toBe("disabled");
+    expect(t.guardCalls).toHaveLength(0);
+  });
+
   it("goes ahead without a guardrail wired", async () => {
     const t = setup({ guard: false });
     expect((await t.service.call(C, AGENT, "crm", POST, DIRECT)).status).toBe(200);
+  });
+});
+
+describe("ConnectionService.call: the 25 s deadline (R10)", () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it("is 25 s", () => { expect(CALL_DEADLINE_MS).toBe(25_000); });
+
+  it("gives timeout at 25 s for a fetch that never answers, and audits it", async () => {
+    vi.useFakeTimers();
+    const t = setup({ respond: () => new Promise<Response>(() => {}) });
+    let settled: DataError | null = null;
+    void t.service.call(C, MEMBER, "crm", GET, DIRECT).catch((error: DataError) => { settled = error; });
+    await vi.advanceTimersByTimeAsync(CALL_DEADLINE_MS - 1);
+    expect(settled).toBeNull();
+    t.clock.t += CALL_DEADLINE_MS;
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBeInstanceOf(DataError);
+    expect(settled!.code).toBe("timeout");
+    expect(settled!.message).toBe("timeout: the connection 'crm' did not answer in time (a call may take at most 25 s)");
+    expect(t.audits.at(-1)!.details).toMatchObject({ status: null, outcome: "timeout", ms: CALL_DEADLINE_MS });
+  });
+
+  it("gives the fetch only what the guardrail left of the 25 s", async () => {
+    vi.useFakeTimers();
+    const t = setup({ respond: () => new Promise<Response>(() => {}) });
+    const service = new ConnectionService({ ...t.deps, guardAgentAction: async () => { t.clock.t += 10_000; } });
+    let settled: DataError | null = null;
+    void service.call(C, AGENT, "crm", POST, DIRECT).catch((error: DataError) => { settled = error; });
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(settled).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled!.code).toBe("timeout");
+  });
+
+  it("does not call out once the guardrail used the whole 25 s", async () => {
+    const t = setup();
+    const service = new ConnectionService({ ...t.deps, guardAgentAction: async () => { t.clock.t += CALL_DEADLINE_MS; } });
+    expect((await refusal(service.call(C, AGENT, "crm", POST, DIRECT))).code).toBe("timeout");
+    expect(t.fetches).toHaveLength(0);
   });
 });
 
@@ -456,10 +519,32 @@ describe("ConnectionService.call: audit and activity", () => {
     expect(t.activity).toEqual([{ companyId: C, actor: AGENT, summary: "connection crm: POST contacts → 200", connection: "crm" }]);
   });
 
-  it("does not fail a completed call when the activity log fails", async () => {
+  it("does not fail a completed call when the activity log fails, and tells the operator", async () => {
     const t = setup();
     const service = new ConnectionService({ ...t.deps, onActivity: async () => { throw new Error("down"); } });
     expect((await service.call(C, AGENT, "crm", GET, DIRECT)).status).toBe(200);
+    expect(t.logs).toEqual([{ message: "connection activity log failed", meta: expect.objectContaining({ connection: "crm", method: "GET", path: "contacts", status: 200 }) }]);
+  });
+
+  it("returns a completed write when its audit row fails, and logs it without contents (R9)", async () => {
+    const t = setup({ auditFails: () => true });
+    const result = await t.service.call(C, MEMBER, "crm", { method: "POST", path: "contacts", query: { email: "ada@example.com" }, body: { note: "BODYVALUE" } }, DIRECT);
+    expect(result.status).toBe(200);
+    expect(t.logs).toEqual([{ message: "connection call audit failed", meta: expect.objectContaining({ companyId: C, connection: "crm", method: "POST", path: "contacts", status: 200 }) }]);
+    const text = JSON.stringify(t.logs);
+    for (const leak of ["ada@example.com", "BODYVALUE", SECRET]) expect(text).not.toContain(leak);
+  });
+
+  it("fails a GET closed when its audit row fails (R9)", async () => {
+    const t = setup({ auditFails: () => true });
+    await expect(t.service.call(C, MEMBER, "crm", GET, DIRECT)).rejects.toThrow("audit insert refused");
+    expect(t.fetches).toHaveLength(1);
+  });
+
+  it("still throws the refusal when its audit row fails, and logs the audit failure", async () => {
+    const t = setup({ auditFails: () => true });
+    expect((await refusal(t.service.call(C, AGENT_NONE, "crm", GET, DIRECT))).code).toBe("forbidden");
+    expect(t.logs).toEqual([{ message: "connection call audit failed", meta: expect.objectContaining({ connection: "crm", outcome: "forbidden" }) }]);
   });
 });
 

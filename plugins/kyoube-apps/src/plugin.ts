@@ -302,6 +302,8 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
             ctx.logger.warn("connections activity log failed", { companyId: event.companyId, error: String(error) });
           }
         },
+        // Audit and activity failures the call survives (ruling R9): ids only, never contents.
+        log: (message, meta) => ctx.logger.warn(message, meta),
       });
       // AI columns (docs/decisions.md). DataService gets them late, through attach(), because
       // DecisionService depends on DataService.

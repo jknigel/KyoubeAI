@@ -65,6 +65,12 @@ describe("plugin wiring for connections", () => {
     expect(data.calls.find((call) => call.method === "levelFor")?.args).toEqual([COMPANY, { kind: "user", id: "u1" }]);
   });
 
+  it("sends the service's operator log to ctx.logger.warn", async () => {
+    const { harness, deps } = await setup();
+    deps().log!("connection call audit failed", { connection: "crm", method: "POST", path: "contacts", status: 201 });
+    expect(harness.logs.at(-1)).toMatchObject({ level: "warn", message: "connection call audit failed", meta: { connection: "crm", method: "POST", path: "contacts", status: 201 } });
+  });
+
   it("writes an agent's call summary to the activity log, and never throws when that fails", async () => {
     const { harness, deps } = await setup();
     await deps().onActivity!({ companyId: COMPANY, actor: { kind: "agent", id: "a1", runId: "r1" }, summary: "connection crm: GET contacts → 200", connection: "crm" });

@@ -36,6 +36,8 @@ export interface ConnectionServiceDeps {
   resolveUserRole(companyId: string, userId: string, fresh: boolean): Promise<string | null>;
   guardAgentAction?: GuardAgentAction;
   onActivity?(event: ConnectionActivity): Promise<void>;
+  /** Operator log for failures that must not fail the call (an audit row or activity line not written). Ids only, never contents. */
+  log?(message: string, meta: Record<string, unknown>): void;
   now?(): number;
 }
 
@@ -56,6 +58,14 @@ export interface ConnectionStatus {
 export interface ConnectionResponse { status: number; headers: Record<string, string>; body: string }
 
 const MAX_AGENT_ID_CHARS = 200;
+/**
+ * Ruling R10: the whole call, guardrail included, finishes inside this. The core's host→worker RPC
+ * gives up at 30 s, the same as its fetch abort, so without a shorter deadline of our own a slow
+ * service would surface as the host's timeout while the worker carried on.
+ */
+export const CALL_DEADLINE_MS = 25_000;
+
+class Deadline extends Error {}
 const forbidden = (message: string): DataError => new DataError("forbidden", message);
 
 function sha256(text: string): string {
@@ -66,6 +76,18 @@ function sha256(text: string): string {
 function viaText(via: CallVia, actor: DataActor): string {
   if (via.kind === "app") return `app@${via.slug}@${via.version}`;
   return actor.kind === "agent" ? "agent" : "person";
+}
+
+function timedOut(name: string): DataError {
+  return new DataError("timeout", `the connection '${name}' did not answer in time (a call may take at most ${CALL_DEADLINE_MS / 1000} s)`);
+}
+
+/** The fetch and its body against the time left; the loser is left to settle on its own. */
+function within<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Deadline()), ms);
+    promise.then((value) => { clearTimeout(timer); resolve(value); }, (error) => { clearTimeout(timer); reject(error); });
+  });
 }
 
 /**
@@ -81,11 +103,12 @@ function viaText(via: CallVia, actor: DataActor): string {
  */
 function mapFetchFailure(error: unknown, name: string): { status: number } | DataError {
   const message = error instanceof Error ? error.message : String(error);
-  const nullBody = /Invalid response status code (\d{3})/.exec(message);
+  // Only the statuses that carry no body: anything else the SDK refuses is not an answer we understand.
+  const nullBody = /Invalid response status code (204|205|304)\b/.exec(message);
   if (nullBody) return { status: Number(nullBody[1]) };
   const errorName = error instanceof Error ? error.name : "";
   if (errorName === "AbortError" || errorName === "TimeoutError" || /timed out|ETIMEDOUT|operation was aborted/i.test(message)) {
-    return new DataError("timeout", `the connection '${name}' did not answer within 30 s`);
+    return timedOut(name);
   }
   return new DataError("provider_unavailable", `the connection '${name}' could not be reached; try again later`);
 }
@@ -102,6 +125,10 @@ export class ConnectionService {
 
   private now(): number {
     return this.deps.now?.() ?? Date.now();
+  }
+
+  private log(message: string, meta: Record<string, unknown>): void {
+    try { this.deps.log?.(message, meta); } catch { /* the operator log is best effort */ }
   }
 
   private async connections(companyId: string): Promise<{ connections: Connection[]; problems: ConnectionProblem[] }> {
@@ -191,6 +218,7 @@ export class ConnectionService {
   // ---- calls ----------------------------------------------------------------------------------
 
   async call(companyId: string, actor: DataActor, name: string, raw: unknown, via: CallVia, guard?: GuardContext): Promise<ConnectionResponse> {
+    const deadline = this.now() + CALL_DEADLINE_MS;
     schemaNameFor(companyId);
     const call = parseCallInput(raw);
     if (typeof name !== "string" || !CONNECTION_NAME_RE.test(name)) throw new DataError("invalid", "the connection name must be lower-case letters, digits, - and _, starting with a letter");
@@ -212,6 +240,10 @@ export class ConnectionService {
     try {
       await this.authorise(companyId, actor, connection, call, via);
       const url = buildUrl(connection, call.path, call.query);
+      // Ruling R11b: the secret before the guardrail, so a person's confirmation is never spent on a
+      // call that then fails as not set up.
+      const secret = await this.secretForCall(companyId, connection);
+      const headers = buildHeaders(connection, call, secret);
       if (actor.kind === "agent" && call.method !== "GET" && this.deps.guardAgentAction) {
         // Only now: the path on the card has been validated, and the caller may make this call.
         await this.deps.guardAgentAction({
@@ -225,19 +257,25 @@ export class ConnectionService {
           params: { connection: name, method: call.method, path: call.path, queryHash: sha256(JSON.stringify(canonical(call.query))), bodyHash: sha256(call.body ?? "") },
         });
       }
-      const secret = await this.secretForCall(companyId, connection);
-      const headers = buildHeaders(connection, call, secret);
       const started = this.now();
       let bodyText: string;
       let responseHeaders: Headers | Record<string, string>;
       try {
-        const res = await this.deps.fetch(url, call.body === null ? { method: call.method, headers } : { method: call.method, headers, body: call.body });
+        const left = deadline - this.now();
+        // Nothing leaves the worker once the time is spent (the guardrail may have used it all).
+        if (left <= 0) throw new Deadline();
+        const answer = within((async () => {
+          const res = await this.deps.fetch(url, call.body === null ? { method: call.method, headers } : { method: call.method, headers, body: call.body });
+          return { status: res.status, headers: res.headers, text: await res.text() };
+        })(), left);
+        const res = await answer;
         status = res.status;
         responseHeaders = res.headers;
-        bodyText = await res.text();
+        bodyText = res.text;
         ms = this.now() - started;
       } catch (error) {
         ms = this.now() - started;
+        if (error instanceof Deadline) throw timedOut(name);
         const mapped = mapFetchFailure(error, name);
         if (mapped instanceof DataError) throw mapped;
         status = mapped.status;
@@ -248,15 +286,25 @@ export class ConnectionService {
       response = shapeResponse({ status, headers: responseHeaders, bodyText });
     } catch (error) {
       const outcome = error instanceof DataError ? error.code : "error";
-      await this.audit(companyId, actor, { ...details, status, ms, bytes, via: viaLabel, outcome }).catch(() => {});
+      await this.audit(companyId, actor, { ...details, status, ms, bytes, via: viaLabel, outcome }).catch((auditError: unknown) => {
+        this.log("connection call audit failed", { companyId, ...details, status, outcome, error: String(auditError) });
+      });
       throw error;
     }
 
-    // The response is released only once its audit row is written.
-    await this.audit(companyId, actor, { ...details, status: response.status, ms, bytes, via: viaLabel });
+    try {
+      await this.audit(companyId, actor, { ...details, status: response.status, ms, bytes, via: viaLabel });
+    } catch (error) {
+      // Ruling R9: a GET's answer is released only once its audit row is written. A write has already
+      // happened at the other end, so failing it would only invite the caller to send it again.
+      if (call.method === "GET") throw error;
+      this.log("connection call audit failed", { companyId, ...details, status: response.status, error: String(error) });
+    }
     if (actor.kind === "agent" && this.deps.onActivity) {
       // App calls are too frequent for the activity log; people's calls are in the audit.
-      await this.deps.onActivity({ companyId, actor, summary: `connection ${name}: ${call.method} ${path} → ${response.status}`, connection: name }).catch(() => {});
+      await this.deps.onActivity({ companyId, actor, summary: `connection ${name}: ${call.method} ${path} → ${response.status}`, connection: name }).catch((error: unknown) => {
+        this.log("connection activity log failed", { companyId, ...details, status: response.status, error: String(error) });
+      });
     }
     return response;
   }
@@ -333,7 +381,9 @@ export class ConnectionService {
       () => ({ companyId, actor, operation: "set_connection_grant", details: { agentId, connection, access } }),
     );
     if (this.deps.onActivity) {
-      await this.deps.onActivity({ companyId, actor, summary: `set agent ${agentId} access to connection ${connection} to ${access}`, connection }).catch(() => {});
+      await this.deps.onActivity({ companyId, actor, summary: `set agent ${agentId} access to connection ${connection} to ${access}`, connection }).catch((error: unknown) => {
+        this.log("connection activity log failed", { companyId, connection, error: String(error) });
+      });
     }
   }
 }
