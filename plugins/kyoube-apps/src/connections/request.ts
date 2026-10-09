@@ -112,7 +112,8 @@ const BAD_PERCENT_RE = /%(?![0-9a-f]{2})/i;
 const MAX_DECODE_ROUNDS = 3;
 // Slash and backslash lookalikes that NFKC does not fold (division slash, fraction slash, big solidus,
 // set minus, ...), the full-width forms in case a decoder folds them, and the yen and won signs that
-// Windows best-fit code pages map to a backslash.
+// Windows best-fit code pages map to a backslash. Tested on the NFKC-folded form too: the full-width
+// yen and won signs fold to these, and vulgar fractions (½, ⅓) fold to a fraction slash.
 const LOOKALIKE_SLASH_RE = /[\u2044\u2215\u29f8\u2216\u29f5\u29f9\uff0f\uff3c\u00a5\u20a9]/;
 const SENSITIVE_RE = /[%./\\\0]/g;
 
@@ -129,7 +130,7 @@ function segmentProblem(segment: string): string | null {
   for (let round = 0; ; round++) {
     const folded = current.normalize("NFKC");
     if (countSensitive(folded) > countSensitive(current)) return "path segments may not contain characters that a server could fold into %, ., / or a backslash";
-    if (/[/\\\0]/.test(current) || /[/\\\0]/.test(folded) || LOOKALIKE_SLASH_RE.test(current)) return "path segments may not decode to a slash, backslash or NUL";
+    if (/[/\\\0]/.test(current) || /[/\\\0]/.test(folded) || LOOKALIKE_SLASH_RE.test(current) || LOOKALIKE_SLASH_RE.test(folded)) return "path segments may not decode to a slash, backslash or NUL";
     if (/^[\s.]*$/.test(folded.split(";", 1)[0] ?? "")) return "path may not contain . or .. segments, or segments a server could read as one";
     if (/%(?![0-9a-f]{2})/i.test(folded)) return "a path segment can't contain a literal % after decoding; it would be read as another escape";
     let decoded: string;
