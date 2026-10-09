@@ -6,7 +6,7 @@ import { readBoardKey, resolveBoardApiKey, resolveBoardKeyPath } from "../key-st
 import { createCoreClient, type CompanySkill, type CompanySummary } from "../core-api.js";
 import { describeHarness, harnessesForAdapterTypes, missingHarnesses, probeHarnesses, systemProbe, type HarnessSpec, type HarnessStatus } from "../harnesses.js";
 import { describeMissing, KYOUBE_SKILLS, missingKyoubeSkills } from "../skills.js";
-import { EMPTY_STATE, readState, resolveStatePath, type AgentRulesState } from "../agent-rules/state.js";
+import { readState, resolveStatePath, type AgentRulesState } from "../agent-rules/state.js";
 import { failureLines } from "../agent-rules/report.js";
 import { agentRulesEnabled } from "./agent-rules.js";
 import { AUTH_MODULE_PATH, ENFORCE_MODULE_PATH, HOOK_MARKER, licensePaths, licenseStatus, readTrimmed, readUserSnapshot, TRUSTED_KEYS, type LicenseStatus } from "@kyoube/license";
@@ -173,9 +173,9 @@ export function agentRulesChecks(env: NodeJS.ProcessEnv, state: AgentRulesState,
   if (!agentRulesEnabled(env)) {
     // Switched off without `kyoube agent-rules off`: the last pass's changes are all still in place.
     if (state.lastPass?.mode === "apply") {
-      return [{ name: "agent rules", ok: false, detail: "off (KYOUBE_AGENT_RULES=off), but the rules are still applied: run kyoube agent-rules off" }];
+      return [{ name: "agent rules", ok: false, detail: "off (KYOUBE_AGENT_RULES=off), but the rules are still applied: run kyoube agent-rules off" }, ...groupSyncChecks(state, now)];
     }
-    return [{ name: "agent rules", ok: true, detail: "off (KYOUBE_AGENT_RULES=off)" }];
+    return [{ name: "agent rules", ok: true, detail: "off (KYOUBE_AGENT_RULES=off); the loop still syncs user groups" }, ...groupSyncChecks(state, now)];
   }
   const pass = state.lastPass;
   if (!pass) {
@@ -198,14 +198,49 @@ export function agentRulesChecks(env: NodeJS.ProcessEnv, state: AgentRulesState,
   return [{ name: "agent rules", ok: true, detail: `in force in ${companies} ${companies === 1 ? "company" : "companies"} (self-test passed in ${passed}) as of ${pass.at}` }, skipped];
 }
 
+/**
+ * With the rules off, the loop runs only the user-groups step (ruling R15), recorded as
+ * `lastGroupsPass`. With the rules on, group failures are part of the `agent rules` line instead.
+ */
+function groupSyncChecks(state: AgentRulesState, now: number): Check[] {
+  const pass = state.lastGroupsPass;
+  if (!pass || !Array.isArray(pass.companies)) {
+    return [{ name: "user groups", ok: false, detail: "no group sync yet — kyoube agent-rules --watch syncs user groups even with the rules off; run kyoube agent-rules --once to see what stops it" }];
+  }
+  const checks: Check[] = [];
+  const failures = failureLines(pass).map((line) => line.replace(/^kyoube: user groups: /, ""));
+  if (!(now - Date.parse(pass.at) <= AGENT_RULES_STALE_MS)) {
+    checks.push({ name: "user groups", ok: false, detail: `last group sync at ${pass.at}, more than 5 minutes ago — is kyoube agent-rules --watch running?` });
+  } else if (failures.length > 0) {
+    checks.push({ name: "user groups", ok: false, detail: `${failures[0]}${failures.length > 1 ? ` (and ${failures.length - 1} more)` : ""}` });
+  } else {
+    const companies = pass.companies.length;
+    checks.push({ name: "user groups", ok: true, detail: `synced in ${companies} ${companies === 1 ? "company" : "companies"} as of ${pass.at}` });
+  }
+  const skipped = pass.companies.flatMap((company) => company.skipped.map((item) => `${company.name} / ${item.agent}: ${item.reason}`));
+  if (skipped.length > 0) checks.push({ name: "user groups skipped", ok: true, detail: skipped.join("; ") });
+  return checks;
+}
+
 export async function agentRulesDoctorChecks(
   env: NodeJS.ProcessEnv,
   statePath: string,
   now: number,
   read: (file: string) => Promise<AgentRulesState> = (file) => readState(file, () => {}),
 ): Promise<Check[]> {
-  // Off, the file is read on a best-effort basis: an unreadable one gives the plain "off" line.
-  if (!agentRulesEnabled(env)) return agentRulesChecks(env, await read(statePath).catch(() => EMPTY_STATE), now);
+  // Off, an unreadable file still gives the plain "off" line; the group sync it would record is
+  // reported as unreadable rather than missing.
+  if (!agentRulesEnabled(env)) {
+    try {
+      return agentRulesChecks(env, await read(statePath), now);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return [
+        { name: "agent rules", ok: true, detail: "off (KYOUBE_AGENT_RULES=off); the loop still syncs user groups" },
+        { name: "user groups", ok: false, detail: `cannot read ${statePath}: ${message}` },
+      ];
+    }
+  }
   try {
     return agentRulesChecks(env, await read(statePath), now);
   } catch (error) {

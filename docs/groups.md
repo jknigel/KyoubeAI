@@ -131,6 +131,8 @@ Chat needs one standing core patch, `groups-chat-open-assign-check` and
 assignment check to the chat routes, for protected agents only. The build fails if a core release
 moves the code it anchors on.
 
+Groups do not depend on the agent working rules. With `KYOUBE_AGENT_RULES=off` the loop keeps
+running and syncs only user groups each minute, so adding or deleting a group still takes effect.
 `kyoube agent-rules off` does not remove group enforcement. Delete the groups to lift it.
 
 ## Troubleshooting
@@ -141,7 +143,8 @@ moves the code it anchors on.
   company and reports it. It never applies an unreadable list as "no groups", which would lift every
   restriction. The current restrictions stay as they were.
 - `docker compose exec app kyoube doctor` shows group failures and skipped agents with the agent
-  rules lines, and warns when the last pass is more than 5 minutes old.
+  rules lines, and warns when the last pass is more than 5 minutes old. With `KYOUBE_AGENT_RULES=off`
+  they appear on their own `user groups` and `user groups skipped` lines.
 - `docker compose exec app kyoube agent-rules --once` runs a pass now and prints every message.
 - The loop uses the board API key, and the group routes answer only a company owner or admin. If the
   key's user is not an owner or admin of a company, that company's agent restrictions never sync, and

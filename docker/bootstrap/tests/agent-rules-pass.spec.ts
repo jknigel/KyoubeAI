@@ -3,7 +3,7 @@ import type { AgentRef, GuardReport, GuardRevertReport, InstructionsBundle, Rule
 import { GROUP_ROUTES, GUARD_PLUGIN_ROUTES } from "../src/agent-rules/api.js";
 import { RULES_BLOCK } from "../src/agent-rules/block.js";
 import type { Governance } from "../src/agent-rules/governance.js";
-import { applyPass, revertPass } from "../src/agent-rules/pass.js";
+import { applyPass, groupsPass, revertPass } from "../src/agent-rules/pass.js";
 import { failureLines } from "../src/agent-rules/report.js";
 import { EMPTY_STATE } from "../src/agent-rules/state.js";
 import { CoreApiError } from "../src/core-api.js";
@@ -312,5 +312,20 @@ describe("group step", () => {
     const { report } = await applyPass({ api, now: () => NOW }, EMPTY_STATE);
     expect(report.companies[0]!.failures).toContainEqual({ step: "groups", agent: "u2", error: "grants: nope" });
     expect(api.syncReports[0]!.error).toBe("1 failure(s); see kyoube doctor");
+  });
+});
+
+describe("groupsPass (KYOUBE_AGENT_RULES=off, ruling R15)", () => {
+  it("runs only the group step in every company and records it apart from the last rules pass", async () => {
+    const api = new FakeApi();
+    api.access.c1 = [{ agentId: "a1", allowedUserIds: [] }];
+    const before = { ...EMPTY_STATE, lastPass: { at: "2026-10-01T09:00:00.000Z", mode: "apply" as const, companies: [], failures: [] } };
+    const { report, state } = await groupsPass({ api, now: () => NOW }, before);
+    expect(api.calls).toEqual(["groups c1 1"]);
+    expect(api.files.a1).toBe("You are an agent.\n");
+    expect(report).toMatchObject({ mode: "groups", companies: [{ name: "Acme", governance: "already", guard: null, rulesUpdated: [] }] });
+    expect(api.syncReports).toEqual([{ companyId: "c1", syncedAt: NOW.toISOString(), error: null }]);
+    expect(state.lastPass).toEqual(before.lastPass);
+    expect(state.lastGroupsPass).toBe(report);
   });
 });

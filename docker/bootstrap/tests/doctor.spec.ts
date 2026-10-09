@@ -214,8 +214,29 @@ describe("agentRulesChecks", () => {
   });
   const state = (lastPass: PassReport | null): AgentRulesState => ({ ...EMPTY_STATE, lastPass });
 
-  it("is ok and quiet when switched off", () => {
-    expect(agentRulesChecks({ KYOUBE_AGENT_RULES: "off" }, state(null), NOW)).toEqual([{ name: "agent rules", ok: true, detail: "off (KYOUBE_AGENT_RULES=off)" }]);
+  it("is ok when switched off, and says the loop still syncs user groups (R15)", () => {
+    expect(agentRulesChecks({ KYOUBE_AGENT_RULES: "off" }, state(null), NOW)).toEqual([{ name: "agent rules", ok: true, detail: "off (KYOUBE_AGENT_RULES=off); the loop still syncs user groups" }, { name: "user groups", ok: false, detail: expect.stringContaining("no group sync yet") }]);
+  });
+
+  it("with the rules off, reports the last group-only sync: ok, stale, failed, and its skipped agents", () => {
+    const groupsPass = (overrides: Partial<PassReport> = {}): PassReport => ({
+      at: "2026-10-01T09:59:00.000Z", mode: "groups", failures: [],
+      companies: [{ companyId: "c1", name: "Acme", governance: "already", guard: null, rulesUpdated: [], writes: 0, failures: [], skipped: [] }],
+      ...overrides,
+    });
+    const off = { KYOUBE_AGENT_RULES: "off" };
+    const withGroups = (lastGroupsPass: PassReport): AgentRulesState => ({ ...EMPTY_STATE, lastGroupsPass });
+    expect(agentRulesChecks(off, withGroups(groupsPass()), NOW)).toEqual([{ name: "agent rules", ok: true, detail: "off (KYOUBE_AGENT_RULES=off); the loop still syncs user groups" }, { name: "user groups", ok: true, detail: "synced in 1 company as of 2026-10-01T09:59:00.000Z" }]);
+    expect(agentRulesChecks(off, withGroups(groupsPass({ at: "2026-10-01T09:50:00.000Z" })), NOW)[1]).toMatchObject({ name: "user groups", ok: false, detail: expect.stringContaining("more than 5 minutes ago") });
+    const failing = groupsPass();
+    failing.companies[0]!.failures = [{ step: "groups", error: "the board key's user must be an owner or admin of \"Acme\"" }];
+    failing.companies[0]!.skipped = [{ agent: "Bot", reason: "its authorization policy has keys KyoubeAI does not change" }];
+    expect(agentRulesChecks(off, withGroups(failing), NOW).slice(1)).toEqual([
+      { name: "user groups", ok: false, detail: "Acme: groups failed: the board key's user must be an owner or admin of \"Acme\"" },
+      { name: "user groups skipped", ok: true, detail: "Acme / Bot: its authorization policy has keys KyoubeAI does not change" },
+    ]);
+    // With the rules on, a group-only pass left from an earlier "off" is not shown.
+    expect(agentRulesChecks({}, { ...withGroups(failing), lastPass: pass() }, NOW).map((check) => check.name)).toEqual(["agent rules", "agent rules skipped"]);
   });
 
   it("fails before the first pass", () => {
@@ -257,22 +278,22 @@ describe("agentRulesDoctorChecks", () => {
     expect(result[0]!.detail).toContain("EACCES");
   });
 
-  it("with KYOUBE_AGENT_RULES: off and a read that throws, returns the ok off line", async () => {
+  it("with KYOUBE_AGENT_RULES: off and a read that throws, returns the ok off line and an unreadable group sync", async () => {
     const read = async () => { throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" }); };
     const result = await agentRulesDoctorChecks({ KYOUBE_AGENT_RULES: "off" }, statePath, NOW, read);
-    expect(result).toEqual([{ name: "agent rules", ok: true, detail: "off (KYOUBE_AGENT_RULES=off)" }]);
+    expect(result).toEqual([{ name: "agent rules", ok: true, detail: "off (KYOUBE_AGENT_RULES=off); the loop still syncs user groups" }, { name: "user groups", ok: false, detail: "cannot read /some/state/path.json: EACCES: permission denied" }]);
   });
 
   it("with KYOUBE_AGENT_RULES: off while the last pass applied the rules, fails and says how to take them out", async () => {
     const read = async () => ({ ...EMPTY_STATE, lastPass: lastPass("apply") });
     const result = await agentRulesDoctorChecks({ KYOUBE_AGENT_RULES: "off" }, statePath, NOW, read);
-    expect(result).toEqual([{ name: "agent rules", ok: false, detail: "off (KYOUBE_AGENT_RULES=off), but the rules are still applied: run kyoube agent-rules off" }]);
+    expect(result).toEqual([{ name: "agent rules", ok: false, detail: "off (KYOUBE_AGENT_RULES=off), but the rules are still applied: run kyoube agent-rules off" }, { name: "user groups", ok: false, detail: expect.stringContaining("no group sync yet") }]);
   });
 
   it("with KYOUBE_AGENT_RULES: off after kyoube agent-rules off, returns the ok off line", async () => {
-    const read = async () => ({ ...EMPTY_STATE, lastPass: lastPass("revert") });
+    const read = async () => ({ ...EMPTY_STATE, lastPass: lastPass("revert"), lastGroupsPass: lastPass("groups") });
     const result = await agentRulesDoctorChecks({ KYOUBE_AGENT_RULES: "off" }, statePath, NOW, read);
-    expect(result).toEqual([{ name: "agent rules", ok: true, detail: "off (KYOUBE_AGENT_RULES=off)" }]);
+    expect(result).toEqual([{ name: "agent rules", ok: true, detail: "off (KYOUBE_AGENT_RULES=off); the loop still syncs user groups" }, { name: "user groups", ok: true, detail: "synced in 0 companies as of 2026-10-01T09:59:00.000Z" }]);
   });
 
   it("with a read that resolves a state whose lastPass is {}, returns one FAIL line instead of throwing", async () => {

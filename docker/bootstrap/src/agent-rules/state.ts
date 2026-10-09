@@ -13,6 +13,11 @@ export interface AgentRulesState {
   version: 1;
   governancePrevious: Record<string, GovernancePrevious>;
   lastPass: PassReport | null;
+  /**
+   * The last group-only pass, run while KYOUBE_AGENT_RULES=off (ruling R15). Kept apart from
+   * `lastPass`, which must go on saying whether the rules are still applied.
+   */
+  lastGroupsPass?: PassReport | null;
 }
 
 export const EMPTY_STATE: AgentRulesState = { version: 1, governancePrevious: {}, lastPass: null };
@@ -35,6 +40,7 @@ export async function readState(file: string, warn: (line: string) => void = (li
       version: 1,
       governancePrevious: parsed.governancePrevious && typeof parsed.governancePrevious === "object" ? parsed.governancePrevious : {},
       lastPass: parsed.lastPass && typeof parsed.lastPass === "object" ? parsed.lastPass : null,
+      ...(parsed.lastGroupsPass && typeof parsed.lastGroupsPass === "object" ? { lastGroupsPass: parsed.lastGroupsPass } : {}),
     };
   } catch (error) {
     // `--watch` reads this every minute: a hand-broken file must not become a
