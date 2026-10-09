@@ -167,8 +167,8 @@ kyoube.connections.call(name, { method?, path?, query?, headers?, body? })
 
 A version that adds a connection or widens one needs a person to publish it. The publish dialog shows
 each connection's host and base path, auth style, methods and the app's declared access, and marks
-what is new; the REST body carries `connectionsConfirmed: true`, and without it the publish fails
-with `invalid`. An agent cannot publish or roll back to such a version. Removing or narrowing
+only the connections the version adds or widens; the REST body carries `connectionsConfirmed: true`,
+and without it the publish fails with `invalid`. An agent cannot publish or roll back to such a version. Removing or narrowing
 connections needs no confirmation, and every declared connection must exist in the company's settings
 at publish.
 

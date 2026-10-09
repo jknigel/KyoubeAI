@@ -145,15 +145,17 @@ reachable at a public HTTPS address; an internal API on a private network cannot
 
 A version that adds a connection or widens one from `read` to `read-write` has to be published by a
 person. The publish dialog lists each declared connection with its host and base path, its auth
-style, the connection's methods and the app's declared access, and marks only the connections the version adds or widens. The
-person confirms that the app may call these services with the company's credentials, and the REST
-body carries `connectionsConfirmed: true`. Without it, that publish fails with `invalid`.
+style, the connection's methods and the app's declared access, and marks only the connections the
+version adds or widens. The person confirms that the app may call these services with the company's
+credentials, and the REST body carries `connectionsConfirmed: true`. Without it, that publish fails
+with `invalid`.
 
 Agents cannot publish, or roll back to, a version that adds or widens a connection. They save the
 draft and ask a person. Removing or narrowing connections needs no confirmation, and every connection
 a version declares has to exist in the company's settings at publish time or the publish fails
 naming the missing ones. If a connection's base URL later changes to another host, apps keep
-working, and the next publish of any app that uses it shows the new host for confirmation.
+working. The publish dialog shows the new host; a confirmation is asked only when the version adds
+or widens a connection.
 
 ## What is logged
 
