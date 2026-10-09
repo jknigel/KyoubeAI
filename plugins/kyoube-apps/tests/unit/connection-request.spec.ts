@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { DataError } from "../../src/data/errors.js";
 import type { Connection } from "../../src/connections/config.js";
 import {
-  MAX_REQUEST_BODY_BYTES, MAX_RESPONSE_BODY_BYTES, buildHeaders, buildUrl, parseCallInput, pathWithoutQuery, shapeResponse,
+  MAX_REQUEST_BODY_BYTES, MAX_RESPONSE_BODY_BYTES, buildHeaders, buildUrl, parseCallInput, pathWithoutQuery, secretHasControlChar, shapeResponse,
 } from "../../src/connections/request.js";
 
 function conn(over: Partial<Connection> = {}): Connection {
@@ -351,6 +351,12 @@ describe("buildHeaders", () => {
     }
     // Basic encodes the secret, so control characters in it are harmless there.
     expect(buildHeaders(conn({ auth: "basic" }), call(), "a\nb").authorization).toMatch(/^Basic /);
+  });
+  it("tells the service which secrets can never be sent (bearer and header with a control character)", () => {
+    expect(secretHasControlChar(conn({ auth: "bearer" }), "key\n")).toBe(true);
+    expect(secretHasControlChar(conn({ auth: "header", headerName: "x-api-key" }), "k\x7fey")).toBe(true);
+    expect(secretHasControlChar(conn({ auth: "bearer" }), "key")).toBe(false);
+    expect(secretHasControlChar(conn({ auth: "basic" }), "user:pa\nss")).toBe(false);
   });
   it("refuses a secret with any control character for bearer and header auth, without echoing it", () => {
     for (const auth of ["bearer", "header"] as const) {

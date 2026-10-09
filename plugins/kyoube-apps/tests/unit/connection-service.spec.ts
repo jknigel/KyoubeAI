@@ -284,6 +284,34 @@ describe("ConnectionService.call: the secret", () => {
     expect((await t.service.list(C, MEMBER)).map((c) => c.available)).toEqual([false, false]);
   });
 
+  it.each([["a trailing newline", `${SECRET}\n`], ["a carriage return", `${SECRET}\r`], ["a tab", `sk\tlive`], ["a NUL", `sk\0live`]])(
+    "treats a bearer or header secret with %s as not usable, without blaming the caller",
+    async (_label, value) => {
+      const t = setup({ resolve: async () => value });
+      for (const name of ["crm", "ro"]) {
+        const error = await refusal(t.service.call(C, MEMBER, name, GET, DIRECT));
+        expect(error.code).toBe("disabled");
+        expect(error.message).toContain("the secret contains a line break or other control character");
+        expect(error.message).not.toContain(SECRET);
+      }
+      expect(t.fetches).toHaveLength(0);
+      expect((await t.service.list(C, MEMBER)).map((c) => c.available)).toEqual([false, false]);
+      expect((await t.service.status(C)).connections.map((c) => c.problem)).toEqual([
+        "the secret contains a line break or other control character",
+        "the secret contains a line break or other control character",
+      ]);
+      // A cached value: no further lookups for it.
+      expect(t.resolves).toHaveLength(2);
+    },
+  );
+
+  it("still sends a basic-auth secret with a newline, which is base64-encoded", async () => {
+    const BASIC = { name: "basic", baseUrl: "https://api.basic.example/", auth: "basic", secret: REF, methods: "read" };
+    const t = setup({ config: { connections: [BASIC] }, resolve: async () => "user:pa\nss" });
+    expect((await t.service.call(C, MEMBER, "basic", GET, DIRECT)).status).toBe(200);
+    expect((await t.service.status(C)).connections[0]?.problem).toBeNull();
+  });
+
   it("is resolved once per config path, and again when the config moves the connection", async () => {
     const t = setup();
     await t.service.call(C, MEMBER, "crm", GET, DIRECT);

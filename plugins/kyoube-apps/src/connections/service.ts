@@ -10,7 +10,7 @@ import { isManagerRole } from "../groups/levels.js";
 import { SECRET_CACHE_MS, type SecretCache } from "../secrets/cache.js";
 import { CONNECTION_NAME_RE, parseConnections, type Connection, type ConnectionAuth, type ConnectionMethods, type ConnectionProblem } from "./config.js";
 import { getConnectionGrant, listConnectionGrants, setConnectionGrant, type ConnectionAccess, type ConnectionGrant } from "./grants.js";
-import { buildHeaders, buildUrl, parseCallInput, pathWithoutQuery, shapeResponse, type ParsedCall } from "./request.js";
+import { buildHeaders, buildUrl, parseCallInput, pathWithoutQuery, secretHasControlChar, shapeResponse, type ParsedCall } from "./request.js";
 
 /**
  * Every call to an external API goes through here (spec §4): an app's viewer, an agent with a grant,
@@ -121,6 +121,12 @@ function mapFetchFailure(error: unknown, name: string): { status: number } | Dat
  */
 export const SECRET_CALL_RETRY_MS = 15_000;
 
+/**
+ * A bearer or header secret with a control character resolves fine but can never be sent, so it is
+ * reported as the connection's problem rather than as a refused call that blames the caller.
+ */
+const CONTROL_CHAR_PROBLEM = "the secret contains a line break or other control character";
+
 /** One failed lookup, per company and connection: until when availability checks and calls back off. */
 interface SecretFailure { availableUntil: number; callUntil: number; rateLimited: boolean }
 
@@ -209,8 +215,8 @@ export class ConnectionService {
     const failure = this.failures.get(this.availabilityKey(companyId, connection.name));
     if (failure && failure.availableUntil > this.now()) return ConnectionService.problemText(failure.rateLimited);
     try {
-      await this.lookupSecret(companyId, connection);
-      return null;
+      const value = await this.lookupSecret(companyId, connection);
+      return secretHasControlChar(connection, value) ? CONTROL_CHAR_PROBLEM : null;
     } catch (error) {
       return ConnectionService.problemText(error instanceof SecretUnavailable && error.rateLimited);
     }
@@ -400,11 +406,17 @@ export class ConnectionService {
   private async secretForCall(companyId: string, connection: Connection): Promise<string> {
     const failure = this.failures.get(this.availabilityKey(companyId, connection.name));
     if (failure && failure.callUntil > this.now()) throw this.secretError(connection, failure.rateLimited);
+    let value: string;
     try {
-      return await this.lookupSecret(companyId, connection);
+      value = await this.lookupSecret(companyId, connection);
     } catch (error) {
       throw this.secretError(connection, error instanceof SecretUnavailable && error.rateLimited);
     }
+    // The value is cached, so this costs no lookup; it is not the caller's input that is wrong.
+    if (secretHasControlChar(connection, value)) {
+      throw new DataError("disabled", `the connection '${connection.name}' can't be used: ${CONTROL_CHAR_PROBLEM}; ask a company admin to fix the secret`);
+    }
+    return value;
   }
 
   /** The core's message is never repeated: it is not the caller's to read. */
