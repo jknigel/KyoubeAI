@@ -24,6 +24,12 @@ building on it. The format is loosely [Keep a Changelog](https://keepachangelog.
   `groups-chat-open-assign-check` and `groups-chat-message-assign-check`). Opening a chat with a
   protected agent, and sending a message in one, needs the right to assign it. Viewers can no longer
   chat with protected manager agents, which they could never assign to.
+- The agent rules routes (`kyoube.agent-rules` reconcile, revert and groups apply) and the
+  `kyoube.apps` group sync routes now answer only a company owner or admin; before, any signed-in
+  person passed. The board API key's user must be an owner or admin of each company for agent rules
+  and group sync to run there; `kyoube doctor` names any company where it is not.
+- With `KYOUBE_AGENT_RULES=off`, `kyoube agent-rules --watch` keeps running and syncs only user groups
+  each minute, instead of exiting; `kyoube doctor` shows the sync on its own `user groups` line.
 
 ## 1.6.0 - 2026-10-08
 
