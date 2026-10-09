@@ -59,7 +59,8 @@ If the list cannot be read, the group step is skipped for that company and repor
 applied as "no groups". An agent whose authorization policy has keys KyoubeAI does not change cannot
 be protected; it shows under `agent rules skipped` and the restriction is not in force for it.
 
-`kyoube agent-rules off` does not remove group enforcement: delete the groups for that.
+`kyoube agent-rules off` does not remove group enforcement: delete the groups for that. The group
+step runs even with `KYOUBE_AGENT_RULES=off` (see [Turn it off](#turn-it-off)).
 
 **Chat.** A standing core patch makes opening a chat with a protected agent, and sending a message
 in one, require the right to assign it. This applies to the managers above too: viewers can no
@@ -130,6 +131,12 @@ before their own `kyoube doctor`, so they normally never show this.
 
 It leaves the Handoffs sections, and does not put back the two "ask QA / ask your boss" sentences it
 removed from the core's default text.
+
+User groups are not part of the rules. With `KYOUBE_AGENT_RULES=off` the loop keeps running, but each
+pass only syncs user groups: no company setting, no manager protection, no rules blocks. Its summary
+starts `agent rules are off (KYOUBE_AGENT_RULES=off); user groups only`, and `kyoube doctor` shows
+`agent rules` as off plus a `user groups` line for the last sync. `kyoube agent-rules off` never
+touches group restrictions; delete the groups to lift them ([groups.md](groups.md)).
 
 ## After a core update
 

@@ -23,7 +23,8 @@ export interface CompanyReport {
 
 export interface PassReport {
   at: string;
-  mode: "apply" | "revert";
+  /** "groups": the group step alone, which is what a pass does while the rules are off (ruling R15). */
+  mode: "apply" | "revert" | "groups";
   companies: CompanyReport[];
   /** Failures before any company was reached, such as listing the companies. */
   failures: Failure[];
@@ -32,10 +33,11 @@ export interface PassReport {
 const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
 
 export function failureLines(report: PassReport): string[] {
-  const lines = report.failures.map((failure) => `kyoube: agent rules: ${failure.step} failed: ${failure.error}`);
+  const prefix = report.mode === "groups" ? "kyoube: user groups:" : "kyoube: agent rules:";
+  const lines = report.failures.map((failure) => `${prefix} ${failure.step} failed: ${failure.error}`);
   for (const company of report.companies) {
     for (const failure of company.failures) {
-      lines.push(`kyoube: agent rules: ${company.name}${failure.agent ? ` / ${failure.agent}` : ""}: ${failure.step} failed: ${failure.error}`);
+      lines.push(`${prefix} ${company.name}${failure.agent ? ` / ${failure.agent}` : ""}: ${failure.step} failed: ${failure.error}`);
     }
   }
   return lines;
@@ -48,6 +50,7 @@ export function summarize(report: PassReport): string {
   const failures = plural(failureLines(report).length, "failure", "failures");
   if (report.mode === "revert") return `kyoube: agent rules removed: ${companies}, ${changes}, ${failures}`;
   const skipped = report.companies.reduce((sum, company) => sum + company.skipped.length, 0);
+  if (report.mode === "groups") return `kyoube: agent rules are off (KYOUBE_AGENT_RULES=off); user groups only: ${companies}, ${changes}, ${skipped} skipped, ${failures}`;
   const tests = report.companies.map((company) => company.guard?.selfTest.status);
   const selfTest = tests.includes("fail") ? "fail" : tests.includes("pass") ? "pass" : "not applicable";
   return `kyoube: agent rules: ${companies}, ${changes}, ${skipped} skipped, ${failures}; self-test ${selfTest}`;

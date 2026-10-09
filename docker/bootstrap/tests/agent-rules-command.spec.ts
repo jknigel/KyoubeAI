@@ -64,11 +64,43 @@ describe("runAgentRules", () => {
     expect(lines[0]).toContain("usage: kyoube agent-rules");
   });
 
-  it("does nothing when switched off", async () => {
-    const { deps, lines, fake } = await setup();
-    expect(await runAgentRules([], { watch: true }, { ...ENV, KYOUBE_AGENT_RULES: "off" }, deps)).toBe(0);
-    expect(fake.calls).toEqual([]);
-    expect(lines).toEqual(["kyoube: agent rules are off (KYOUBE_AGENT_RULES=off); nothing to do"]);
+  // Ruling R15: groups are their own feature; with the rules off a pass runs the group step alone.
+  const groupCalls = (calls: string[]): Partial<RulesApi> => ({
+    getAgentAccess: async () => { calls.push("access"); return [{ agentId: "a1", allowedUserIds: [] }]; },
+    applyGroups: async () => { calls.push("apply"); return { protected: ["a1"], unprotected: [], people: [], skipped: [], failures: [] }; },
+    reportGroupSync: async () => { calls.push("report"); },
+  });
+
+  it("with the rules off, --watch runs only the group step each pass and says so", async () => {
+    const calls: string[] = [];
+    const { deps, lines, sleeps, fake, home } = await setup(api(groupCalls(calls)));
+    const statePath = path.join(home, ".kyoube", "agent-rules.json");
+    // The rules were applied before the switch went off: lastPass must keep saying so for doctor.
+    await writeState(statePath, { ...EMPTY_STATE, governancePrevious: { c1: { request_confirmation: null } }, lastPass: { at: "2026-10-01T09:00:00.000Z", mode: "apply", companies: [], failures: [] } });
+    expect(await runAgentRules([], { watch: true }, { ...ENV, KYOUBE_AGENT_RULES: "off" }, { ...deps, maxPasses: 2 })).toBe(0);
+    expect(fake.calls).toEqual([]); // no governance, guard or rules block
+    expect(calls).toEqual(["access", "apply", "report", "access", "apply", "report"]);
+    expect(sleeps).toEqual([PASS_INTERVAL_MS]);
+    expect(lines).toEqual(["kyoube: agent rules are off (KYOUBE_AGENT_RULES=off); user groups only: 1 company, 1 change, 0 skipped, 0 failures"]);
+    const saved = JSON.parse(await readFile(statePath, "utf8"));
+    expect(saved.lastPass).toMatchObject({ mode: "apply", at: "2026-10-01T09:00:00.000Z" });
+    expect(saved.governancePrevious).toEqual({ c1: { request_confirmation: null } });
+    expect(saved.lastGroupsPass).toMatchObject({ mode: "groups", companies: [{ name: "Acme", groups: { protected: ["a1"] } }] });
+  });
+
+  it("with the rules off, --once exits 1 and prints a group failure", async () => {
+    const { deps, lines } = await setup(api({ getAgentAccess: async () => { throw new Error("boom"); } }));
+    expect(await runAgentRules([], { once: true }, { ...ENV, KYOUBE_AGENT_RULES: "off" }, deps)).toBe(1);
+    expect(lines).toContain("kyoube: user groups: Acme: groups failed: boom");
+  });
+
+  it("off never touches groups, with the rules on or off", async () => {
+    for (const env of [ENV, { ...ENV, KYOUBE_AGENT_RULES: "off" }]) {
+      const calls: string[] = [];
+      const { deps } = await setup(api(groupCalls(calls)));
+      expect(await runAgentRules(["off"], {}, env, deps)).toBe(0);
+      expect(calls).toEqual([]);
+    }
   });
 
   it("--once runs one pass, saves the state file and logs the summary", async () => {

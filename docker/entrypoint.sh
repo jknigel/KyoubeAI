@@ -72,8 +72,9 @@ fi
 
 # Keeps the agent working rules in force (docs/agent-rules.md): one pass a
 # minute for the life of the container, as node, whatever
-# KYOUBE_BOOTSTRAP_DISABLED is set to (that stops only the plugin watcher). It
-# does nothing when KYOUBE_AGENT_RULES=off, and waits for a board key.
+# KYOUBE_BOOTSTRAP_DISABLED is set to (that stops only the plugin watcher). With
+# KYOUBE_AGENT_RULES=off it syncs only user groups (docs/groups.md). It waits
+# for a board key.
 # Double-forked for the same reason as the watcher above.
 ( run_as_node "$NODE" "$BOOTSTRAP" agent-rules --watch & )
 

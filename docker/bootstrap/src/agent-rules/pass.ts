@@ -127,6 +127,21 @@ async function groupsStep(deps: PassDeps, companyId: string, entry: CompanyRepor
   }
 }
 
+/**
+ * A pass while KYOUBE_AGENT_RULES=off (ruling R15): the group step alone, in every company. Groups
+ * are their own feature, so deleting a group still lifts its restrictions with the rules off. No
+ * governance, guard or rules block; recorded as `lastGroupsPass`, leaving `lastPass` as it was.
+ */
+export async function groupsPass(deps: PassDeps, state: AgentRulesState): Promise<{ report: PassReport; state: AgentRulesState }> {
+  const report: PassReport = { at: deps.now().toISOString(), mode: "groups", companies: [], failures: [] };
+  for (const company of (await listCompanies(deps, report)) ?? []) {
+    const entry = companyReport(company);
+    await groupsStep(deps, company.id, entry);
+    report.companies.push(entry);
+  }
+  return { report, state: { ...state, lastGroupsPass: report } };
+}
+
 /** One pass: in every company, G1, then G2 through the plugin, then the rules block. Each step and each agent fails on its own. */
 export async function applyPass(deps: PassDeps, state: AgentRulesState): Promise<{ report: PassReport; state: AgentRulesState }> {
   const report: PassReport = { at: deps.now().toISOString(), mode: "apply", companies: [], failures: [] };

@@ -2,7 +2,7 @@ import { readConfig, resolveConfigPath, type KyoubeConfig } from "../config.js";
 import { createCoreClient, type CoreClientOptions } from "../core-api.js";
 import { resolveBoardApiKey, resolveBoardKeyPath } from "../key-store.js";
 import { createRulesApi, type RulesApi } from "../agent-rules/api.js";
-import { applyPass, revertPass } from "../agent-rules/pass.js";
+import { applyPass, groupsPass, revertPass } from "../agent-rules/pass.js";
 import { failureLines, summarize } from "../agent-rules/report.js";
 import { assertStateWritable, mergeGovernancePrevious, readState, resolveStatePath, writeState } from "../agent-rules/state.js";
 import { NO_KEY_EXIT_CODE } from "./ensure-plugins.js";
@@ -62,7 +62,9 @@ async function waitForPlugin(api: RulesApi, sleep: (ms: number) => Promise<void>
  * Keeps the agent working rules (docs/agent-rules.md) in force: `--once` runs
  * one pass, `--watch` one pass a minute for the life of the container (the
  * entrypoint starts it), and `off` takes everything back out. In `--watch` an
- * unchanged summary or failure is logged once, not every minute.
+ * unchanged summary or failure is logged once, not every minute. With
+ * KYOUBE_AGENT_RULES=off, `--once` and `--watch` run only the user-groups step
+ * (docs/groups.md).
  */
 export async function runAgentRules(
   positionals: string[],
@@ -76,10 +78,9 @@ export async function runAgentRules(
     deps.log(USAGE);
     return 1;
   }
-  if (mode !== "off" && !agentRulesEnabled(env)) {
-    deps.log("kyoube: agent rules are off (KYOUBE_AGENT_RULES=off); nothing to do");
-    return 0;
-  }
+  // With the rules off, `--once` and `--watch` still run the group step, and only that (ruling
+  // R15): groups are their own feature. `off` reverts the rules and never touches groups.
+  const groupsOnly = mode !== "off" && !agentRulesEnabled(env);
 
   const config = await deps.readConfig(resolveConfigPath(env));
   const statePath = resolveStatePath(config.home);
@@ -108,7 +109,7 @@ export async function runAgentRules(
         // rather than a rewrite of the file, which could undo a save another pass made since the read.
         await assertStateWritable(statePath);
         await waitForPlugin(api, deps.sleep);
-        const result = mode === "off" ? await revertPass(passDeps, state) : await applyPass(passDeps, state);
+        const result = mode === "off" ? await revertPass(passDeps, state) : groupsOnly ? await groupsPass(passDeps, state) : await applyPass(passDeps, state);
         let writeErrorLine = "";
         const couldNotSave = (error: unknown) => {
           writeErrorLine = `kyoube: agent rules: could not save ${statePath}: ${error instanceof Error ? error.message : String(error)}`;
@@ -120,7 +121,10 @@ export async function runAgentRules(
           // deletions stick. A malformed file was already reported by the read above.
           try {
             const fresh = await readState(statePath, () => {});
-            next = { ...result.state, governancePrevious: mergeGovernancePrevious(fresh.governancePrevious, result.state.governancePrevious) };
+            // A group-only pass changed nothing else, so it keeps the file as it now is and adds its report.
+            next = groupsOnly
+              ? { ...fresh, lastGroupsPass: result.state.lastGroupsPass ?? null }
+              : { ...result.state, governancePrevious: mergeGovernancePrevious(fresh.governancePrevious, result.state.governancePrevious) };
           } catch (readError) {
             couldNotSave(readError);
           }
