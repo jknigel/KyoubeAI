@@ -257,17 +257,22 @@ and what data level they hold. Group tables are in `kyoube_meta` (`groups`, `gro
   If the agent-access list cannot be read or is malformed, the company's group step is skipped and
   reported, never applied as "no groups".
   While the watcher is not running, agent restrictions stop updating; `kyoube doctor` warns.
-- **Sync routes: owners and admins only.** A plugin route declared `auth: "board"` is not limited to
-  instance admins: the core's board check only asks whether the caller is a signed-in person rather
-  than an agent, so every company member passes it. "Board-only" therefore means "no agents". The
-  routes that read or change who may use which agent check more: `kyoube.apps`
-  `GET /groups/agent-access` and `POST /groups/sync-report`, and `kyoube.agent-rules`
-  `POST /groups/apply`, `POST /reconcile` and `POST /revert` answer 403 unless the caller's company
-  role, read fresh from the core's members list on every request, is owner or admin. The check runs
-  before any work, so a refused request reads, writes and records nothing. The watcher calls them with
-  the board API key, so the key's user must be an owner or admin of every company the agent rules and
-  group sync should run in; where it is not, that company's guard and group steps fail and
-  `kyoube doctor` names the company.
+- **Sync routes: the kyoube CLI, or owners and admins.** A plugin route declared `auth: "board"` is
+  not limited to instance admins: the core's board check only asks whether the caller is a signed-in
+  person rather than an agent, so every company member passes it. "Board-only" therefore means "no
+  agents". The routes that read or change who may use which agent check more: `kyoube.apps`
+  `POST /groups/agent-access` and `POST /groups/sync-report`, and `kyoube.agent-rules`
+  `POST /groups/apply`, `POST /reconcile` and `POST /revert` answer 403 unless the request body's
+  `rulesToken` matches the **rules token**, or the caller's company role, read fresh from the core's
+  members list, is owner or admin. The check runs before any work, so a refused request reads, writes
+  and records nothing. The rules token is 32 random bytes in `kyoube/rules-token` on the home volume
+  (mode 600, owned by `node`), created by `kyoube agent-rules` on its first run. Only the container's
+  own processes can read it, so a request carrying it came from the kyoube CLI; the plugins compare it
+  in constant time and read the file on every request, so a missing or unreadable file refuses that
+  path. It travels only in POST bodies, never in a URL, and is never logged. The board key's user
+  therefore does not have to be an owner or admin, or even a member, of each company. **Residual:**
+  code running inside the container (an agent's harness, the Terminal) can read the token, as it can
+  the board key. Delete the file to rotate it; the next pass creates a new one.
 - **Chat.** The core's Agent Chat routes skip the assignment check. A standing core patch
   (`groups-chat-open-assign-check`, `groups-chat-message-assign-check`) adds it, for protected agents,
   when a chat is opened and when a message is sent. Other chat actions in an open chat (answering an
@@ -533,8 +538,8 @@ that source and re-check it after a large upstream bump.
 ## Secrets and rotation
 
 Secrets live in `.env` (`BETTER_AUTH_SECRET`, `POSTGRES_PASSWORD`, `KYOUBE_DB_PASSWORD`, provider API
-keys) and on the `kyoubeai-home` volume (the board API key at `kyoube/board-key.json`, and every agent
-harness's own login under `.claude`, `.codex`, `.pi`, `.hermes` and wherever a harness you install keeps
+keys) and on the `kyoubeai-home` volume (the board API key at `kyoube/board-key.json`, the agent rules
+token at `kyoube/rules-token`, and every agent harness's own login under `.claude`, `.codex`, `.pi`, `.hermes` and wherever a harness you install keeps
 its own, plus what installers leave in `.local`, `.kyoube` and `.cache`). **A backup contains all of it except
 the download caches** — `scripts/backup.sh` dumps both databases and archives the home volume without
 `.cache` and `.npm` — so store and transmit a backup directory with the same care as `.env` itself.

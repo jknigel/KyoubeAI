@@ -37,18 +37,20 @@ and writes only what differs:
   only a plugin set an agent's scoped grant.
 - It records each pass in `/kyoubeai/.kyoube/agent-rules.json`, which `kyoube doctor` reads.
 
-The board key's user must be an **owner or admin of each company**. The plugin routes the loop calls
-(`/reconcile`, `/revert`, and the group routes below) refuse anyone else, because every signed-in
-person passes the core's own "board" check. In a company where the key's user is an operator, a viewer
-or not a member, the guard and group steps fail with `kyoube doctor` naming the company: add that user
-to the company as an owner or admin. Companies created by another admin are the usual case.
+The plugin routes the loop calls (`/reconcile`, `/revert`, and the group routes below) refuse
+anyone but the loop itself or a company owner or admin, because every signed-in person passes the
+core's own "board" check. The loop proves itself with the **rules token**: a random secret in
+`/kyoubeai/kyoube/rules-token` (mode 600), which `kyoube agent-rules` creates on its first run and
+sends in the body of each call. Only the container's own processes can read the file, so the board
+key's user does not have to be a member of each company. Code running inside the container can read
+the token, as it can the board key. To rotate it, delete the file; the next pass creates a new one.
 
 ## Group restrictions
 
 When a company has user groups (`docs/groups.md`), the same loop also applies which people may give
 work to which agents. After the guard step, each pass:
 
-- reads the list of restricted agents from `kyoube.apps` (`GET /groups/agent-access`) and posts it
+- reads the list of restricted agents from `kyoube.apps` (`POST /groups/agent-access`) and posts it
   to `kyoube.agent-rules` (`POST /groups/apply`), then reports the result back (`POST
   /groups/sync-report`) for the Groups page;
 - protects every listed agent, and scopes operators' and group viewers' `tasks:assign` grants. A
