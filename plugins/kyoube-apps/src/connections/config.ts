@@ -64,7 +64,8 @@ function parseOne(item: unknown, index: number, seen: Set<string>): Connection |
   try { url = new URL(rawUrl); } catch { return "the base URL is not a URL"; }
   if (url.protocol !== "https:") return "the base URL must start with https://";
   if (url.username || url.password || url.search || url.hash) return "the base URL must not carry credentials, a query or a fragment";
-  const baseUrl = url.toString().endsWith("/") ? url.toString() : `${url.toString()}/`;
+  const joined = url.origin + url.pathname; // drops a bare "?" or "#"
+  const baseUrl = joined.endsWith("/") ? joined : `${joined}/`;
 
   const auth = row.auth;
   if (typeof auth !== "string" || !AUTHS.includes(auth)) return "auth must be bearer, header or basic";
