@@ -70,6 +70,9 @@ An app in a group is listed and opened only by members of one of its groups. Eve
 see it in the gallery. Following a direct link shows "You don't have access to this app. Ask a company
 admin." This applies to opening, running, saving data from and deciding in the app.
 
+Restricting an app hides and refuses the app only. Its tables stay reachable on the Data page and
+through any other app that declares them, at the person's own data level.
+
 Apps take effect on the next request. An archived app keeps its groups, so restoring it restores its
 restrictions.
 
