@@ -27,14 +27,16 @@ describe("connections in the manifest", () => {
 
 describe("connectionsChanged", () => {
   const m = (c?: unknown) => (c ? withConns(c) : validateAppManifest(base));
-  it("is true when connections are added or access changes", () => {
+  it("is true when a connection is added or widened", () => {
     expect(connectionsChanged(null, m([{ name: "stripe" }]))).toBe(true);
     expect(connectionsChanged(m(), m([{ name: "stripe" }]))).toBe(true);
-    expect(connectionsChanged(m([{ name: "stripe" }]), m([{ name: "stripe", access: "read-write" }]))).toBe(true);
     expect(connectionsChanged(m([{ name: "stripe" }]), m([{ name: "stripe" }, { name: "crm" }]))).toBe(true);
+    expect(connectionsChanged(m([{ name: "stripe" }]), m([{ name: "stripe", access: "read-write" }]))).toBe(true);
   });
-  it("is false when unchanged, reordered, or all removed", () => {
+  it("is false when unchanged, reordered, removed or narrowed", () => {
     expect(connectionsChanged(m([{ name: "a" }, { name: "b" }]), m([{ name: "b" }, { name: "a" }]))).toBe(false);
+    expect(connectionsChanged(m([{ name: "a" }, { name: "b" }]), m([{ name: "a" }]))).toBe(false);
+    expect(connectionsChanged(m([{ name: "a", access: "read-write" }]), m([{ name: "a" }]))).toBe(false);
     expect(connectionsChanged(m([{ name: "a" }]), m())).toBe(false);
     expect(connectionsChanged(null, m())).toBe(false);
   });

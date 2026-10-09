@@ -58,9 +58,23 @@ describe("publishing connections", () => {
     // Removing every connection only narrows.
     await apps.update(C, AGENT, "c-pub", manifest("c-pub"), SOURCE);
     expect((await apps.publish(C, AGENT, "c-pub")).currentVersion).toBe(3);
-    // Rolling back to the version that had them is a change again.
+    // Rolling back to the version that had them adds one back: a change again.
     await expect(apps.rollback(C, AGENT, "c-pub", 2)).rejects.toMatchObject({ code: "forbidden" });
     expect((await apps.rollback(C, OWNER, "c-pub", 2, { connectionsConfirmed: true })).currentVersion).toBe(2);
+  });
+
+  it("keeps an agent out of added connections even when confirmed, and lets it remove one", async () => {
+    await apps.create(C, AGENT, manifest("c-agent", [{ name: "stripe" }, { name: "crm" }]), SOURCE);
+    await expect(apps.publish(C, AGENT, "c-agent", undefined, { connectionsConfirmed: true })).rejects.toMatchObject({ code: "forbidden" });
+    await apps.publish(C, OWNER, "c-agent", undefined, { connectionsConfirmed: true });
+    await apps.update(C, AGENT, "c-agent", manifest("c-agent", [{ name: "stripe" }]), SOURCE);
+    expect((await apps.publish(C, AGENT, "c-agent")).currentVersion).toBe(2);
+  });
+
+  it("asks for each confirmation separately when decision sets and connections both change", async () => {
+    const decisions = { triage: { table: "tickets", fields: ["subject"], questions: { urgent: { type: "check", statement: "Reply today." } } } };
+    await apps.create(C, OWNER, { ...manifest("c-both", [{ name: "stripe" }]), decisions }, SOURCE);
+    await expect(apps.publish(C, OWNER, "c-both", undefined, { decisionsConfirmed: true })).rejects.toMatchObject({ code: "invalid", message: expect.stringContaining("connections") });
   });
 
   it("refuses a connection that is not set up, or access wider than the connection allows", async () => {

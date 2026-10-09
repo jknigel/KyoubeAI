@@ -129,13 +129,16 @@ export function decisionSetsChanged(current: AppManifest | null, target: AppMani
 }
 
 /**
- * Whether publishing `target` over `current` adds or changes the connections an app calls. Sorted by
- * name so a reorder is not a change; a version with none never counts (removing only narrows).
+ * Whether publishing `target` over `current` adds a connection the current version lacks, or widens
+ * one from `read` to `read-write`. Removing or narrowing a connection never counts, and neither does
+ * a reorder: those only shrink what the app can reach.
  */
 export function connectionsChanged(current: AppManifest | null, target: AppManifest): boolean {
-  if ((target.connections ?? []).length === 0) return false;
-  const key = (m: AppManifest | null) => JSON.stringify([...(m?.connections ?? [])].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)).map((c) => [c.name, c.access]));
-  return key(current) !== key(target);
+  const before = new Map((current?.connections ?? []).map((c) => [c.name, c.access]));
+  return (target.connections ?? []).some((c) => {
+    const was = before.get(c.name);
+    return was === undefined || (was === "read" && c.access === "read-write");
+  });
 }
 
 export function assertAppSource(source: unknown): string {
