@@ -15,7 +15,8 @@ function fakeFetch(responder: (req: Seen) => { status: number; body?: unknown })
   return { impl, seen };
 }
 
-const api = (impl: typeof fetch) => createRulesApi({ apiBase: "http://app:3100", apiKey: "k", fetchImpl: impl });
+const TOKEN = "f0".repeat(32);
+const api = (impl: typeof fetch) => createRulesApi({ apiBase: "http://app:3100", apiKey: "k", fetchImpl: impl }, TOKEN);
 
 describe("createRulesApi", () => {
   it("reads and writes the company's resolver governance", async () => {
@@ -66,7 +67,7 @@ describe("createRulesApi", () => {
   it("calls the guard plugin's board-only routes and reads the report defensively", async () => {
     const { impl, seen } = fakeFetch(() => ({ status: 200, body: { managers: ["m"], updated: ["m", 7], selfTest: { status: "weird" } } }));
     const report = await api(impl).reconcileGuard("c1");
-    expect(seen[0]).toEqual({ url: `http://app:3100${GUARD_PLUGIN_ROUTES.reconcile}`, method: "POST", body: { companyId: "c1" } });
+    expect(seen[0]).toEqual({ url: `http://app:3100${GUARD_PLUGIN_ROUTES.reconcile}`, method: "POST", body: { companyId: "c1", rulesToken: TOKEN } });
     expect(report).toEqual({ managers: ["m"], updated: ["m"], skipped: [], failures: [], selfTest: { status: "not_applicable", detail: "" } });
   });
 
@@ -93,6 +94,30 @@ describe("createRulesApi", () => {
   it("reports the plugin not ready while it is not installed yet", async () => {
     const { impl } = fakeFetch(() => ({ status: 404, body: { error: "Plugin not found" } }));
     expect(await api(impl).pluginReady()).toBe(false);
+  });
+
+  it("sends the rules token in the body of all five plugin route calls, and never in a URL", async () => {
+    const { impl, seen } = fakeFetch((req) => ({ status: 200, body: req.url.includes("agent-access") ? { agents: [] } : {} }));
+    const client = api(impl);
+    await client.reconcileGuard("c1");
+    await client.revertGuard("c1");
+    await client.getAgentAccess("c1");
+    await client.applyGroups("c1", []);
+    await client.reportGroupSync("c1", { syncedAt: "t", error: null });
+    expect(seen.map((req) => [req.method, req.url.replace("http://app:3100", ""), (req.body as { rulesToken?: string }).rulesToken])).toEqual([
+      ["POST", GUARD_PLUGIN_ROUTES.reconcile, TOKEN],
+      ["POST", GUARD_PLUGIN_ROUTES.revert, TOKEN],
+      ["POST", GROUP_ROUTES.access, TOKEN],
+      ["POST", GROUP_ROUTES.apply, TOKEN],
+      ["POST", GROUP_ROUTES.report, TOKEN],
+    ]);
+    expect(seen.some((req) => req.url.includes(TOKEN))).toBe(false);
+  });
+
+  it("reads a 403 on the probe as ready: an auth refusal means the worker answers", async () => {
+    const { impl, seen } = fakeFetch(() => ({ status: 403, body: { error: "forbidden" } }));
+    expect(await api(impl).pluginReady()).toBe(true);
+    expect(seen[0]?.body).toBeUndefined();
   });
 
   it("leaves any other 404 for the pass to report", async () => {
@@ -133,9 +158,10 @@ describe("createRulesApi", () => {
       protected: ["a1"], unprotected: [], people: ["u1"], skipped: [{ id: "a9", reason: "r" }], failures: [{ id: "u2", step: "grants", error: "e" }],
     });
     await client.reportGroupSync("c1", { syncedAt: "t", error: null });
-    expect(seen[0]).toEqual({ url: `http://app:3100${GROUP_ROUTES.access}?companyId=c1`, method: "GET", body: undefined });
-    expect(seen[1]).toEqual({ url: `http://app:3100${GROUP_ROUTES.apply}`, method: "POST", body: { companyId: "c1", agents: [{ agentId: "a1", allowedUserIds: ["u1"] }] } });
-    expect(seen[2]).toEqual({ url: `http://app:3100${GROUP_ROUTES.report}`, method: "POST", body: { companyId: "c1", syncedAt: "t", error: null } });
+    // The token rides in the body of a POST, never in a URL (ruling R18).
+    expect(seen[0]).toEqual({ url: `http://app:3100${GROUP_ROUTES.access}`, method: "POST", body: { companyId: "c1", rulesToken: TOKEN } });
+    expect(seen[1]).toEqual({ url: `http://app:3100${GROUP_ROUTES.apply}`, method: "POST", body: { companyId: "c1", agents: [{ agentId: "a1", allowedUserIds: ["u1"] }], rulesToken: TOKEN } });
+    expect(seen[2]).toEqual({ url: `http://app:3100${GROUP_ROUTES.report}`, method: "POST", body: { companyId: "c1", syncedAt: "t", error: null, rulesToken: TOKEN } });
   });
 
   it("accepts a genuinely empty agent-access list", async () => {

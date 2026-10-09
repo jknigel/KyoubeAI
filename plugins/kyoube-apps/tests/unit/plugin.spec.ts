@@ -7,6 +7,9 @@ import type { DataService, DataServiceDeps, MutationEvent } from "../../src/data
 import manifest from "../../src/manifest.js";
 import { actorFromAction, createAppsPlugin } from "../../src/plugin.js";
 import { createStubService } from "../stub-service.js";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 const COMPANY = "11111111-1111-4111-8111-111111111111";
 const OTHER_COMPANY = "22222222-2222-4222-8222-222222222222";
@@ -23,7 +26,7 @@ function appsApiRequest(overrides: Partial<PluginApiRequestInput> = {}): PluginA
   return apiRequest({ routeKey: "apps.list", path: "/apps", ...overrides });
 }
 
-async function setup() {
+async function setup(opts: { rulesTokenPath?: string } = {}) {
   const harness = createTestHarness({ manifest });
   harness.seed({
     accessMembers: [{ id: "m1", companyId: COMPANY, principalType: "user", principalId: "admin-1", status: "active", membershipRole: "admin", grants: [], createdAt: "2026-01-01", updatedAt: "2026-01-01" }],
@@ -42,6 +45,7 @@ async function setup() {
     migrationsDir: "/nowhere",
     createPool: () => fakePool as never,
     migrate: async () => [],
+    rulesTokenPath: opts.rulesTokenPath,
     createService: (deps) => {
       serviceDeps = deps;
       return stub.service;
@@ -566,5 +570,21 @@ describe("kyoube.apps plugin wiring", () => {
     const harness = await setupPurge(async () => ({ droppedTables: [], droppedColumns: [] }));
     await expect(harness.runJob("fill-ai-columns")).resolves.toBeUndefined();
     expect(harness.logs.filter((entry) => entry.message === "filled AI columns")).toHaveLength(0);
+  });
+});
+
+describe("kyoube.apps group routes and the rules token (ruling R18)", () => {
+  it("reads the token from the configured file: the right token admits a board user who is not a member", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "kyoube-apps-plugin-token-"));
+    const file = path.join(dir, "rules-token");
+    writeFileSync(file, "ef".repeat(32), { mode: 0o600 });
+    const { plugin } = await setup({ rulesTokenPath: file });
+    const sync = (rulesToken: string) => apiRequest({
+      routeKey: "groups.sync_report", method: "POST", path: "/groups/sync-report",
+      body: { companyId: COMPANY, syncedAt: "2026-10-09T10:00:00.000Z", error: null, rulesToken },
+      actor: { actorType: "user", actorId: "stranger", userId: "stranger" },
+    });
+    expect(await plugin.definition.onApiRequest!(sync("ef".repeat(31)))).toMatchObject({ status: 403, body: { code: "forbidden" } });
+    expect(await plugin.definition.onApiRequest!(sync("ef".repeat(32)))).not.toMatchObject({ status: 403 });
   });
 });

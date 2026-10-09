@@ -7,11 +7,12 @@ import type { GroupService } from "./service.js";
 
 /**
  * `kyoube agent-rules --watch` reads agent access and reports each sync (docs/groups.md). Declared
- * `auth: "board"`, which the host grants every signed-in person, so the handler also requires a
- * company owner or admin, read fresh from the core (ruling R13).
+ * `auth: "board"`, which the host grants every signed-in person, so the handler also requires the
+ * kyoube CLI's rules token in the body (ruling R18) or a company owner or admin, read fresh from the
+ * core (ruling R13). Both are POST, so the token never sits in a URL.
  */
 export const GROUP_API_ROUTES: PluginApiRouteDeclaration[] = [
-  route("groups.agent_access", "GET", "/groups/agent-access", "board"),
+  route("groups.agent_access", "POST", "/groups/agent-access", "board"),
   route("groups.sync_report", "POST", "/groups/sync-report", "board"),
 ];
 
@@ -21,9 +22,12 @@ export interface GroupRouteHosts {
   listAgentIds(companyId: string): Promise<Set<string>>;
   /** The caller's company role, read fresh from the core (never the 30 s cache). */
   resolveRoleFresh(companyId: string, userId: string): Promise<string | null>;
+  /** Whether the body's `rulesToken` is the kyoube CLI's token (src/groups/rules-token.ts). */
+  rulesTokenMatches(presented: unknown): Promise<boolean>;
 }
 
-const FORBIDDEN = { error: "forbidden: company owner or admin required", code: "forbidden" } as const;
+export const FORBIDDEN_MESSAGE = "forbidden: the kyoube CLI's rules token or a company owner or admin is required";
+const FORBIDDEN = { error: FORBIDDEN_MESSAGE, code: "forbidden" } as const;
 
 interface MembersListing {
   list(input: { companyId: string; includeArchived?: boolean }): Promise<Array<{ principalType: string; principalId: string; status: string }>>;
@@ -52,11 +56,14 @@ export async function handleGroupsApiRequest(
   // never let an agent read who may assign which agent.
   if (input.actor.actorType === "agent") return { status: 403, body: { error: "forbidden: board access required", code: "forbidden" } };
   try {
-    // "board" admits every signed-in person. Only an owner or admin, by a fresh role read, may read
-    // the membership map or record a sync (ruling R13); checked before any work.
-    const userId = input.actor.userId ?? input.actor.actorId;
-    if (input.actor.actorType !== "user" || !userId || !isManagerRole(await hosts.resolveRoleFresh(input.companyId, userId))) {
-      return { status: 403, body: { ...FORBIDDEN } };
+    // "board" admits every signed-in person. Only the kyoube CLI, by its rules token (ruling R18), or
+    // an owner or admin, by a fresh role read (ruling R13), may read the membership map or record a
+    // sync; checked before any work.
+    if (!(await hosts.rulesTokenMatches((input.body as { rulesToken?: unknown } | null | undefined)?.rulesToken))) {
+      const userId = input.actor.userId ?? input.actor.actorId;
+      if (input.actor.actorType !== "user" || !userId || !isManagerRole(await hosts.resolveRoleFresh(input.companyId, userId))) {
+        return { status: 403, body: { ...FORBIDDEN } };
+      }
     }
     if (input.routeKey === "groups.agent_access") {
       const [userIds, agentIds] = await Promise.all([hosts.listUserIds(input.companyId), hosts.listAgentIds(input.companyId)]);

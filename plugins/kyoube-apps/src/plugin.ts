@@ -8,6 +8,7 @@ import { AppService, parseDecideInput, parseRuntimeMethod, type AppServiceDeps }
 import { registerAppTools } from "./apps/tools.js";
 import { handleDecisionsApiRequest } from "./decisions/api-routes.js";
 import { handleGroupsApiRequest, keptMemberIds } from "./groups/api-routes.js";
+import { rulesTokenMatches, RULES_TOKEN_PATH } from "./groups/rules-token.js";
 import { AiColumnService } from "./decisions/columns.js";
 import { API_KEY_CONFIG_PATH, ProviderResolver, validateDecisionsConfig } from "./decisions/config.js";
 import { guardFrom, guardOption } from "./decisions/guardrail.js";
@@ -39,6 +40,8 @@ export interface AppsPluginDeps {
   createDecisionService?: (deps: DecisionServiceDeps) => DecisionService;
   /** Whether this instance may manage groups; tests pass a fake, production reads the licence files. */
   licence?: LicenceGate;
+  /** Where the kyoube CLI's rules token lives (ruling R18); tests point it at a temporary file. */
+  rulesTokenPath?: string;
 }
 
 type Params = Record<string, unknown>;
@@ -486,6 +489,7 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
           listUserIds: (c) => keptMemberIds(members, c),
           listAgentIds: async (c) => new Set((await agentsHost.list({ companyId: c })).filter((a) => a.status !== "terminated").map((a) => a.id)),
           resolveRoleFresh: (c, u) => roleHost.resolveFresh(c, u),
+          rulesTokenMatches: (presented) => rulesTokenMatches(deps.rulesTokenPath ?? RULES_TOKEN_PATH, presented),
         }, onError);
         if (handled) return handled;
       }

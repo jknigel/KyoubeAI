@@ -2,6 +2,7 @@ import { definePlugin, type PaperclipPlugin, type PluginContext } from "@papercl
 import { applyGroups, parseAccess, parseGroupsRecord, type GroupsPort } from "./groups.js";
 import { EMPTY_RECORD, reconcileGuard, revertGuard, type GuardPort, type GuardRecord } from "./guard.js";
 import { PLUGIN_ID } from "./manifest.js";
+import { rulesTokenMatches, RULES_TOKEN_PATH } from "./rules-token.js";
 import type { Grant } from "./policy.js";
 
 type HostGrant = Parameters<PluginContext["authorization"]["grants"]["set"]>[0]["grants"][number];
@@ -135,9 +136,14 @@ export interface AgentRulesPluginDeps {
   /** Tests swap the host adapters for fakes; production adapts `ctx`. */
   port?: (ctx: PluginContext) => GuardPort;
   groupsPort?: (ctx: PluginContext) => GroupsPort;
+  /** Where the kyoube CLI's rules token lives; tests point it at a temporary file. */
+  rulesTokenPath?: string;
 }
 
+export const FORBIDDEN_MESSAGE = "forbidden: the kyoube CLI's rules token or a company owner or admin is required";
+
 export function createAgentRulesPlugin(deps: AgentRulesPluginDeps = {}): PaperclipPlugin {
+  const tokenPath = deps.rulesTokenPath ?? RULES_TOKEN_PATH;
   // `onApiRequest` runs outside `setup`, so the port and logger live in this
   // instance's closure, never in a module-level singleton two instances in
   // one process would share.
@@ -174,11 +180,14 @@ export function createAgentRulesPlugin(deps: AgentRulesPluginDeps = {}): Papercl
       const readRole = roleOf;
       if (!readRole) return { status: 503, body: { error: "plugin not ready" } };
       try {
-        // "board" admits every signed-in person: only a company owner or admin, by a fresh read of
-        // the core's members list, may change agent policies and grants (ruling R13). Before any work.
-        const userId = input.actor.userId ?? input.actor.actorId;
-        if (input.actor.actorType !== "user" || !userId || !isManager(await readRole(input.companyId, userId))) {
-          return { status: 403, body: { error: "forbidden: company owner or admin required", code: "forbidden" } };
+        // "board" admits every signed-in person. Before any work, the caller must be the kyoube CLI,
+        // proven by the rules token in the body (ruling R18), or a company owner or admin, by a fresh
+        // read of the core's members list (ruling R13).
+        if (!(await rulesTokenMatches(tokenPath, (input.body as { rulesToken?: unknown } | undefined)?.rulesToken))) {
+          const userId = input.actor.userId ?? input.actor.actorId;
+          if (input.actor.actorType !== "user" || !userId || !isManager(await readRole(input.companyId, userId))) {
+            return { status: 403, body: { error: FORBIDDEN_MESSAGE, code: "forbidden" } };
+          }
         }
         // Agents user groups restrict: the manager rule never unprotects them.
         const keep = async () => new Set((await groups.readGroupsRecord(input.companyId)).required);

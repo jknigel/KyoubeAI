@@ -1,6 +1,6 @@
 import { readConfig, resolveConfigPath, type KyoubeConfig } from "../config.js";
 import { createCoreClient, type CoreClientOptions } from "../core-api.js";
-import { resolveBoardApiKey, resolveBoardKeyPath } from "../key-store.js";
+import { ensureRulesToken, resolveBoardApiKey, resolveBoardKeyPath, resolveRulesTokenPath } from "../key-store.js";
 import { createRulesApi, type RulesApi } from "../agent-rules/api.js";
 import { applyPass, groupsPass, revertPass } from "../agent-rules/pass.js";
 import { failureLines, summarize } from "../agent-rules/report.js";
@@ -23,7 +23,8 @@ export function agentRulesEnabled(env: NodeJS.ProcessEnv): boolean {
 
 export interface RunAgentRulesDeps {
   readConfig: (filePath: string) => Promise<KyoubeConfig>;
-  createApi: (opts: CoreClientOptions) => RulesApi;
+  /** `rulesToken` goes in the body of every plugin route call (ruling R18). */
+  createApi: (opts: CoreClientOptions, rulesToken: string) => RulesApi;
   waitForHealth: (apiBase: string) => Promise<void>;
   sleep: (ms: number) => Promise<void>;
   log: (line: string) => void;
@@ -85,6 +86,7 @@ export async function runAgentRules(
   const config = await deps.readConfig(resolveConfigPath(env));
   const statePath = resolveStatePath(config.home);
   const keyPath = resolveBoardKeyPath(config);
+  const rulesTokenPath = resolveRulesTokenPath(config);
   const explicitKey = typeof flags["api-key"] === "string" ? flags["api-key"] : undefined;
   let lastSummary = "";
   let lastFailures = "";
@@ -102,7 +104,9 @@ export async function runAgentRules(
         if (lastSummary !== "no-key") deps.log("kyoube: agent rules wait for a board API key (kyoube setup)");
         lastSummary = "no-key";
       } else {
-        const api = deps.createApi({ apiBase: config.paperclipApiUrl, apiKey });
+        // Created on the first run (mode 600, as node), then reused; the plugins read the same file.
+        const rulesToken = await ensureRulesToken(rulesTokenPath);
+        const api = deps.createApi({ apiBase: config.paperclipApiUrl, apiKey }, rulesToken);
         const passDeps = { api, now: deps.now };
         const state = await readState(statePath, deps.log);
         // Pre-flight: unwritable state aborts the pass before any remote write happens. A probe

@@ -13,13 +13,13 @@ export interface PassDeps {
 /**
  * A failure as `kyoube doctor` should show it. A 404, 405 or 422 on a route
  * this feature depends on is the sign that a core update moved something,
- * so the message names that route. A 403 from a KyoubeAI plugin route means the board key's user
- * is not an owner or admin of that company (ruling R13), so the message names the company.
+ * so the message names that route. A 403 from a KyoubeAI plugin route means the plugin did not
+ * accept the CLI's rules token (ruling R18), so the message names the company and the file.
  */
 export function describeError(error: unknown, company?: string): string {
   if (error instanceof CoreApiError && error.route) {
-    if (isOwnerAdminRefusal(error)) {
-      return `the board key's user must be an owner or admin of ${company ? `"${company}"` : "this company"} for agent rules and group sync to run there; add that user as an owner or admin of the company (${error.route} → 403): ${error.message}`;
+    if (isRulesTokenRefusal(error)) {
+      return `the plugin refused the kyoube CLI in ${company ? `"${company}"` : "this company"} (${error.route} → 403): ${error.message}; check that the rules token file (kyoube/rules-token on the home volume) exists and the node user can read it`;
     }
     if (error.status === 404 && error.route.includes("/api/plugins/kyoube.agent-rules/")) {
       return `the kyoube.agent-rules plugin is not installed or not ready (${error.route} → 404): ${error.message}`;
@@ -30,8 +30,8 @@ export function describeError(error: unknown, company?: string): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** The guard and group routes of both plugins refuse 403 unless the caller is the company's owner or admin. */
-function isOwnerAdminRefusal(error: unknown): boolean {
+/** The guard and group routes of both plugins refuse 403 without the rules token or an owner or admin caller. */
+function isRulesTokenRefusal(error: unknown): boolean {
   return error instanceof CoreApiError && error.status === 403 && /\/api\/plugins\/kyoube\.(agent-rules|apps)\//.test(error.route);
 }
 
@@ -142,8 +142,8 @@ async function groupsStep(deps: PassDeps, companyId: string, entry: CompanyRepor
   } catch (caught) {
     error = describeError(caught, entry.name);
     entry.failures.push({ step: "groups", error });
-    // Refused for want of an owner or admin: the sync report would be refused the same way.
-    if (isOwnerAdminRefusal(caught)) return;
+    // Refused: the sync report would be refused the same way.
+    if (isRulesTokenRefusal(caught)) return;
   }
   try {
     await deps.api.reportGroupSync(companyId, { syncedAt, error: syncReportError(error) });

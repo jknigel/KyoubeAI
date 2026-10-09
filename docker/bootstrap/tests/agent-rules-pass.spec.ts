@@ -10,7 +10,7 @@ import { CoreApiError } from "../src/core-api.js";
 
 const NOW = new Date("2026-10-01T10:00:00Z");
 const MANAGED: InstructionsBundle = { mode: "managed", entryFile: "AGENTS.md", hasEntryFile: true, editable: true, legacyPromptTemplateActive: false };
-const FORBIDDEN = "forbidden: company owner or admin required";
+const FORBIDDEN = "forbidden: the kyoube CLI's rules token or a company owner or admin is required";
 const QUIET_GUARD: GuardReport = { managers: [], updated: [], skipped: [], failures: [], selfTest: { status: "not_applicable", detail: "" } };
 
 class FakeApi implements RulesApi {
@@ -54,7 +54,7 @@ class FakeApi implements RulesApi {
   groupsReport = { protected: [] as string[], unprotected: [] as string[], people: [] as string[], skipped: [] as Array<{ id: string; reason: string }>, failures: [] as Array<{ id: string; step: string; error: string }> };
   syncReports: Array<{ companyId: string; syncedAt: string; error: string | null }> = [];
   async getAgentAccess(companyId: string) {
-    if (this.failing.has("access403")) throw new CoreApiError(403, { error: FORBIDDEN }, FORBIDDEN, `GET ${GROUP_ROUTES.access}?companyId=${companyId}`);
+    if (this.failing.has("access403")) throw new CoreApiError(403, { error: FORBIDDEN }, FORBIDDEN, `POST ${GROUP_ROUTES.access}`);
     this.check(`access:${companyId}`);
     return structuredClone(this.access[companyId] ?? []); }
   async applyGroups(companyId: string, agents: Array<{ agentId: string; allowedUserIds: string[] }>) { this.check(`applyGroups:${companyId}`); this.calls.push(`groups ${companyId} ${agents.length}`); return structuredClone(this.groupsReport); }
@@ -285,25 +285,25 @@ describe("group step", () => {
     expect(api.syncReports[0]!.error).toMatch(/unreadable agent-access list/);
   });
 
-  it("names the company and the owner-or-admin requirement when the board key's user is refused", async () => {
+  it("names the company and the rules token file when a plugin refuses the CLI", async () => {
     const api = new FakeApi();
     api.failing.add("guard403");
     api.failing.add("access403");
     const { report } = await applyPass({ api, now: () => NOW }, EMPTY_STATE);
     const failures = report.companies[0]!.failures;
-    expect(failures).toContainEqual({ step: "guard", error: expect.stringMatching(/^the board key's user must be an owner or admin of "Acme" for agent rules and group sync to run there; .*\(POST \/api\/plugins\/kyoube\.agent-rules\/api\/reconcile → 403\)/) });
-    expect(failures).toContainEqual({ step: "groups", error: expect.stringMatching(/^the board key's user must be an owner or admin of "Acme" .*\(GET \/api\/plugins\/kyoube\.apps\/api\/groups\/agent-access\?companyId=c1 → 403\)/) });
+    expect(failures).toContainEqual({ step: "guard", error: expect.stringMatching(/^the plugin refused the kyoube CLI in "Acme" \(POST \/api\/plugins\/kyoube\.agent-rules\/api\/reconcile → 403\): .*; check that the rules token file \(kyoube\/rules-token on the home volume\) exists and the node user can read it$/) });
+    expect(failures).toContainEqual({ step: "groups", error: expect.stringMatching(/^the plugin refused the kyoube CLI in "Acme" \(POST \/api\/plugins\/kyoube\.apps\/api\/groups\/agent-access → 403\)/) });
     // Nothing applied, and no sync report the same refusal would only bounce.
     expect(api.calls.some((call) => call.startsWith("groups "))).toBe(false);
     expect(api.syncReports).toEqual([]);
-    expect(failureLines(report)[0]).toMatch(/^kyoube: agent rules: Acme: guard failed: the board key's user must be an owner or admin of "Acme"/);
+    expect(failureLines(report)[0]).toMatch(/^kyoube: agent rules: Acme: guard failed: the plugin refused the kyoube CLI in "Acme"/);
   });
 
   it("names the company on a refused revert too", async () => {
     const api = new FakeApi();
     api.failing.add("guard403");
     const { report } = await revertPass({ api, now: () => NOW }, EMPTY_STATE);
-    expect(report.companies[0]!.failures).toContainEqual({ step: "guard", error: expect.stringMatching(/owner or admin of "Acme".*\/revert → 403/) });
+    expect(report.companies[0]!.failures).toContainEqual({ step: "guard", error: expect.stringMatching(/refused the kyoube CLI in "Acme".*\/revert → 403/) });
   });
 
   it("reports group failures from the plugin as pass failures", async () => {
@@ -332,8 +332,8 @@ describe("group step: sync report and a missing kyoube.apps (R17)", () => {
   });
 
   for (const [what, error] of [
-    ["not installed (404 Plugin not found)", new CoreApiError(404, { error: "Plugin not found" }, "Plugin not found", `GET ${GROUP_ROUTES.access}`)],
-    ["not ready (503)", new CoreApiError(503, { error: "plugin not ready" }, "plugin not ready", `GET ${GROUP_ROUTES.access}`)],
+    ["not installed (404 Plugin not found)", new CoreApiError(404, { error: "Plugin not found" }, "Plugin not found", `POST ${GROUP_ROUTES.access}`)],
+    ["not ready (503)", new CoreApiError(503, { error: "plugin not ready" }, "plugin not ready", `POST ${GROUP_ROUTES.access}`)],
   ] as const) {
     it(`skips the group step quietly when kyoube.apps is ${what}`, async () => {
       const api = new FakeApi();
@@ -348,7 +348,7 @@ describe("group step: sync report and a missing kyoube.apps (R17)", () => {
 
   it("still reports any other read failure, such as a 404 for a moved route", async () => {
     const api = new FakeApi();
-    api.getAgentAccess = async () => { throw new CoreApiError(404, { error: "Not found" }, "Not found", `GET ${GROUP_ROUTES.access}`); };
+    api.getAgentAccess = async () => { throw new CoreApiError(404, { error: "Not found" }, "Not found", `POST ${GROUP_ROUTES.access}`); };
     const { report } = await applyPass({ api, now: () => NOW }, EMPTY_STATE);
     expect(report.companies[0]!.failures).toContainEqual({ step: "groups", error: expect.stringContaining("the core no longer accepts") });
     expect(api.syncReports).toHaveLength(1);

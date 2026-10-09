@@ -129,7 +129,11 @@ export function parseRevertReport(raw: unknown): GuardRevertReport {
   return { reverted: strings(body.reverted), failures: failures(body.failures) };
 }
 
-export function createRulesApi(opts: CoreClientOptions): RulesApi {
+/**
+ * `rulesToken` is the kyoube CLI's rules token (key-store.ts, ruling R18). It goes in the body of
+ * every call to the agent-rules and group routes, never in a URL, and is never logged.
+ */
+export function createRulesApi(opts: CoreClientOptions, rulesToken: string): RulesApi {
   const core = createCoreClient(opts);
   const request = createJsonRequest(opts);
   const id = encodeURIComponent;
@@ -176,14 +180,14 @@ export function createRulesApi(opts: CoreClientOptions): RulesApi {
       await request<unknown>(`/api/agents/${id(agentId)}/instructions-bundle/file`, { method: "PUT", body: { path, content, baseRevisionId } });
     },
     async reconcileGuard(companyId) {
-      return parseGuardReport(await request<unknown>(GUARD_PLUGIN_ROUTES.reconcile, { method: "POST", body: { companyId } }));
+      return parseGuardReport(await request<unknown>(GUARD_PLUGIN_ROUTES.reconcile, { method: "POST", body: { companyId, rulesToken } }));
     },
     async revertGuard(companyId) {
-      return parseRevertReport(await request<unknown>(GUARD_PLUGIN_ROUTES.revert, { method: "POST", body: { companyId } }));
+      return parseRevertReport(await request<unknown>(GUARD_PLUGIN_ROUTES.revert, { method: "POST", body: { companyId, rulesToken } }));
     },
     async getAgentAccess(companyId) {
       // Strict on purpose: an unreadable list applied as "no groups" would lift every restriction.
-      const raw: unknown = await request<unknown>(`${GROUP_ROUTES.access}?companyId=${id(companyId)}`);
+      const raw: unknown = await request<unknown>(GROUP_ROUTES.access, { method: "POST", body: { companyId, rulesToken } });
       const unreadable = (why: string) => new Error(`kyoube.apps returned an unreadable agent-access list: ${why}`);
       const agents = record(raw).agents;
       if (!Array.isArray(agents)) throw unreadable("no agents array");
@@ -196,10 +200,10 @@ export function createRulesApi(opts: CoreClientOptions): RulesApi {
       });
     },
     async applyGroups(companyId, agents) {
-      return parseGroupsReport(await request<unknown>(GROUP_ROUTES.apply, { method: "POST", body: { companyId, agents } }));
+      return parseGroupsReport(await request<unknown>(GROUP_ROUTES.apply, { method: "POST", body: { companyId, agents, rulesToken } }));
     },
     async reportGroupSync(companyId, report) {
-      await request<unknown>(GROUP_ROUTES.report, { method: "POST", body: { companyId, ...report } });
+      await request<unknown>(GROUP_ROUTES.report, { method: "POST", body: { companyId, ...report, rulesToken } });
     },
     async pluginReady() {
       // The route takes POST only. The core checks the plugin's status and
