@@ -3,3 +3,5 @@ export { DataPage } from "./DataPage.js";
 export { DataAccessSettingsPage } from "./DataAccessSettingsPage.js";
 export { AppsPage } from "./apps/AppsPage.js";
 export { AppsSidebarEntry } from "./apps/AppsSidebarEntry.js";
+export { GroupsSettingsPage } from "./groups/GroupsSettingsPage.js";
+export { AgentAccessTab } from "./groups/AgentAccessTab.js";

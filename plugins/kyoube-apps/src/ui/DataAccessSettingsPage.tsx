@@ -6,6 +6,7 @@ import { button, input } from "./forms.js";
 import { DecisionsSettings } from "./DecisionsSettings.js";
 
 const LEVELS = ["none", "read", "write", "schema"] as const;
+interface PersonLevel { userId: string; role: string | null; level: string; source: string }
 interface GrantsData { settings: { defaultAgentLevel: string; hardDelete: boolean }; grants: Array<{ agentId: string; level: string; updatedAt: string }>; agents: Array<{ id: string; name: string; status: string }> }
 
 export function DataAccessSettingsPage({ context }: PluginCompanySettingsPageProps) {
@@ -15,17 +16,23 @@ export function DataAccessSettingsPage({ context }: PluginCompanySettingsPagePro
   const setGrant = usePluginAction("data.set_agent_grant");
   const setSettings = usePluginAction("data.set_settings");
   const setupCompany = usePluginAction("data.setup_company");
+  const loadPeople = usePluginAction("groups.people_levels");
+  const [people, setPeople] = useState<PersonLevel[]>([]);
   const [data, setData] = useState<GrantsData | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const reload = () => loadGrants({}).then((result) => setData(result as GrantsData)).catch((err) => setError(errorText(err)));
+  const reload = () => {
+    // The people table is secondary: a failure here must not hide the grants.
+    loadPeople({}).then((result) => setPeople(Array.isArray(result) ? (result as PersonLevel[]) : [])).catch(() => setPeople([]));
+    return loadGrants({}).then((result) => setData(result as GrantsData)).catch((err) => setError(errorText(err)));
+  };
   useEffect(() => { if (companyId) reload().catch(() => {}); }, [companyId]);
   const act = (promise: Promise<unknown>, title: string) => promise.then(() => { toast({ title, tone: "success" }); return reload(); }).catch((err) => toast({ title: errorText(err), tone: "error" }));
 
   return (
     <div className="flex flex-col gap-4 p-4 text-sm">
       <h1 className="text-base font-semibold">Data access</h1>
-      <p className="text-foreground/70">Levels: <code>none</code> &lt; <code>read</code> &lt; <code>write</code> &lt; <code>schema</code>. People get their level from their company role (viewer → read, member/operator → write, owner/admin → schema). Agents get an explicit level or the company default.</p>
+      <p className="text-foreground/70">Levels: <code>none</code> &lt; <code>read</code> &lt; <code>write</code> &lt; <code>schema</code>. People get their level from their company role (viewer → read, operator → write, owner/admin → schema), or from their groups when a group sets a level — the highest group level wins. Owners and admins always have schema. Agents get an explicit level or the company default.</p>
       {error && <div className="text-red-600">{error}</div>}
       {data && (
         <>
@@ -38,6 +45,20 @@ export function DataAccessSettingsPage({ context }: PluginCompanySettingsPagePro
             <label className="flex items-center gap-2"><input type="checkbox" checked={data.settings.hardDelete} onChange={(event) => act(setSettings({ hardDelete: event.target.checked }), "Delete mode updated")} /> Hard-delete dropped tables and fields immediately (default: keep 30 days)</label>
             <button type="button" className={button} onClick={() => act(setupCompany({}), "Kyoube Data skill installed for this company")}>Install the Kyoube Data skill</button>
           </section>
+          <table className="w-full max-w-3xl text-sm">
+            <thead><tr className="bg-accent/40 text-left"><th className="px-2 py-1">Person</th><th className="px-2 py-1">Role</th><th className="px-2 py-1">Data level</th><th className="px-2 py-1">Source</th></tr></thead>
+            <tbody>
+              {people.map((person) => (
+                <tr key={person.userId} className="border-t">
+                  <td className="px-2 py-1">{person.userId}</td>
+                  <td className="px-2 py-1 text-foreground/60">{person.role ?? "none"}</td>
+                  <td className="px-2 py-1">{person.level}</td>
+                  <td className="px-2 py-1 text-foreground/60">{person.source}</td>
+                </tr>
+              ))}
+              {people.length === 0 && <tr><td className="px-2 py-2 text-foreground/60" colSpan={4}>No people to show.</td></tr>}
+            </tbody>
+          </table>
           <table className="w-full max-w-3xl text-sm">
             <thead><tr className="bg-accent/40 text-left"><th className="px-2 py-1">Agent</th><th className="px-2 py-1">Status</th><th className="px-2 py-1">Data level</th></tr></thead>
             <tbody>
