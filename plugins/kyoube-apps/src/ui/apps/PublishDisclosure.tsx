@@ -113,7 +113,7 @@ export function PublishDisclosure(props: { preview: PublishPreviewData; appName:
           )}
         </section>
       )}
-      {!preview.available && <p className="text-foreground/70">Typed decisions for apps are switched off for this company or no provider is set, so these sets will answer <code>disabled</code> until a company admin turns them on under Company Settings → Data access.</p>}
+      {!preview.available && preview.sets.length > 0 && <p className="text-foreground/70">Typed decisions for apps are switched off for this company or no provider is set, so these sets will answer <code>disabled</code> until a company admin turns them on under Company Settings → Data access.</p>}
       {preview.changed && (
         <>
           <p className="text-foreground/70">This version adds or changes decision sets, so it needs a person to publish it. Agents cannot.</p>
