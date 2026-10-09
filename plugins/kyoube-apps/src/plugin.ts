@@ -7,7 +7,7 @@ import { MAX_APP_NOTES } from "./apps/manifest.js";
 import { AppService, parseDecideInput, parseRuntimeMethod, type AppServiceDeps } from "./apps/service.js";
 import { registerAppTools } from "./apps/tools.js";
 import { handleDecisionsApiRequest } from "./decisions/api-routes.js";
-import { handleGroupsApiRequest } from "./groups/api-routes.js";
+import { handleGroupsApiRequest, keptMemberIds } from "./groups/api-routes.js";
 import { AiColumnService } from "./decisions/columns.js";
 import { API_KEY_CONFIG_PATH, ProviderResolver, validateDecisionsConfig } from "./decisions/config.js";
 import { guardFrom, guardOption } from "./decisions/guardrail.js";
@@ -483,7 +483,7 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
       const roleHost = hostRoles;
       if (groupService && members && agentsHost && roleHost) {
         const handled = await handleGroupsApiRequest(groupService, input, {
-          listUserIds: async (c) => new Set((await members.list({ companyId: c })).filter((m) => m.principalType === "user" && m.status === "active").map((m) => m.principalId)),
+          listUserIds: (c) => keptMemberIds(members, c),
           listAgentIds: async (c) => new Set((await agentsHost.list({ companyId: c })).filter((a) => a.status !== "terminated").map((a) => a.id)),
           resolveRoleFresh: (c, u) => roleHost.resolveFresh(c, u),
         }, onError);

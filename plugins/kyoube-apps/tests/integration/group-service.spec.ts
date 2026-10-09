@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ensureCompany, resetCompanyCache } from "../../src/db/company-scope.js";
 import { migrationsDirFrom, runMetaMigrations } from "../../src/db/migrate.js";
+import { keptMemberIds } from "../../src/groups/api-routes.js";
 import { GroupService } from "../../src/groups/service.js";
 import { createTestDatabase } from "./setup.js";
 
@@ -75,6 +76,21 @@ describe("GroupService", () => {
     const after = await groups.agentAccess(C, { userIds: new Set(), agentIds: new Set(["agent-1"]) });
     expect(after).toEqual(before);
     expect(after).toEqual([{ agentId: "agent-1", allowedUserIds: ["op"] }]);
+  });
+
+  it("keeps suspended and pending members' groups through a prune, and drops archived and absent ones (R14)", async () => {
+    const created = await groups.save(C, user("owner"), { name: "Lowered", dataLevel: "read", members: ["op", "sus", "pend", "arch", "gone"], agents: ["agent-1"], apps: [] });
+    const row = (principalId: string, status: string) => ({ principalType: "user", principalId, status });
+    const listing = { list: async (input: { companyId: string; includeArchived?: boolean }) => {
+      expect(input).toEqual({ companyId: C, includeArchived: true });
+      return [row("op", "active"), row("sus", "suspended"), row("pend", "pending"), row("arch", "archived"), { principalType: "agent", principalId: "agent-1", status: "active" }];
+    } };
+    const keep = await keptMemberIds(listing, C);
+    expect(await groups.agentAccess(C, { userIds: keep, agentIds: new Set(["agent-1"]) })).toEqual([{ agentId: "agent-1", allowedUserIds: ["op", "pend", "sus"] }]);
+    // The suspended person's lowered level is still there when they come back.
+    expect(await groups.levelsForUser(C, "sus")).toEqual(["read"]);
+    expect(await groups.levelsForUser(C, "arch")).toEqual([]);
+    await groups.remove(C, user("owner"), created.id);
   });
 
   it("rejects app ids that are not this company's", async () => {

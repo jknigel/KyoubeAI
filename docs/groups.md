@@ -16,6 +16,10 @@ A group has four things:
 
 A person can be in several groups. They get everything any of their groups gives them.
 
+A suspended or pending member keeps their groups, so a lowered data level still applies when they
+are active again. Someone removed from the company (archived) loses their group memberships within
+about a minute.
+
 ## Open by default
 
 An agent or app that is in no group is open to everyone, as it was before groups. Upgrading changes
