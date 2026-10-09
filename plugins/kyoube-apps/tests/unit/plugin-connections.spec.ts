@@ -84,3 +84,29 @@ describe("plugin wiring for connections", () => {
     await expect(deps().onActivity!({ companyId: COMPANY, actor: { kind: "agent", id: "a1" }, summary: "x", connection: "crm" })).resolves.toBeUndefined();
   });
 });
+
+describe("onValidateConfig with decisions and connections together", () => {
+  const DECISIONS = { decisionsProvider: "typesafe", decisionsModel: "jev-1.13.0", decisionsApiKey: REF };
+  const CRM = { name: "crm", baseUrl: "https://api.crm.example/v1/", auth: "bearer", secret: REF, methods: "read" };
+  const BAD = { name: "plain", baseUrl: "http://api.plain.example/", auth: "bearer", secret: REF, methods: "read" };
+
+  it("accepts decisions alone, and decisions with valid connections", async () => {
+    const { plugin } = await setup();
+    expect(await plugin.definition.onValidateConfig!(DECISIONS)).toEqual({ ok: true });
+    expect(await plugin.definition.onValidateConfig!({ ...DECISIONS, connections: [CRM] })).toEqual({ ok: true });
+  });
+
+  it("fails on a bad connection with its error, and keeps the decisions errors alongside", async () => {
+    const { plugin } = await setup();
+    const connectionOnly = await plugin.definition.onValidateConfig!({ ...DECISIONS, connections: [CRM, BAD] });
+    expect(connectionOnly.ok).toBe(false);
+    expect(connectionOnly.errors).toHaveLength(1);
+    expect(connectionOnly.errors![0]).toContain("plain");
+
+    const both = await plugin.definition.onValidateConfig!({ ...DECISIONS, decisionsModel: "jev-latest", connections: [CRM, BAD] });
+    expect(both.ok).toBe(false);
+    expect(both.errors).toHaveLength(2);
+    expect(both.errors![0]).toContain("jev-latest");
+    expect(both.errors![1]).toContain("plain");
+  });
+});
