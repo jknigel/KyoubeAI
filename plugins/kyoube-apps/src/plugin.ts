@@ -146,6 +146,10 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
   let secretCache: SecretCache | null = null;
   // Every external API call (apps, agents, people) goes through this one service; same closure rule.
   let connectionService: ConnectionService | null = null;
+  const requireConnections = (): ConnectionService => {
+    if (!connectionService) throw new DataError("disabled", "connections are not available right now");
+    return connectionService;
+  };
   let logger: PluginLogger | null = null;
   // The skill import the `skills.install` route runs; lives here for the same
   // reason the services do (`onApiRequest` runs outside `setup`).
@@ -272,6 +276,11 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
         pool: dbPool,
         data: dataService,
         decisions: decisionService,
+        // The connection service is built just below; calls only happen after setup finishes.
+        connections: {
+          status: (companyId) => requireConnections().status(companyId),
+          call: (companyId, actor, name, raw, via, guard) => requireConnections().call(companyId, actor, name, raw, via, guard),
+        },
         onMutation: appsActivity.log,
         onMutationError: appsActivity.onError,
         hiddenApps: (companyId, userId) => groupService.hiddenApps(companyId, userId),
@@ -448,8 +457,8 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
       action("apps.get", (c, a, p) => appService.get(c, a, str(p, "slug"), versionRef(p)));
       action("apps.create", (c, a, p) => appService.create(c, a, p.manifest, p.source, optionalNotes(p)));
       action("apps.update", (c, a, p) => appService.update(c, a, str(p, "slug"), p.manifest, p.source, optionalNotes(p)));
-      action("apps.publish", (c, a, p) => appService.publish(c, a, str(p, "slug"), optionalVersionNumber(p), { decisionsConfirmed: p.decisionsConfirmed === true, ...guardOption(p) }));
-      action("apps.rollback", (c, a, p) => appService.rollback(c, a, str(p, "slug"), versionNumber(p), { decisionsConfirmed: p.decisionsConfirmed === true, ...guardOption(p) }));
+      action("apps.publish", (c, a, p) => appService.publish(c, a, str(p, "slug"), optionalVersionNumber(p), { decisionsConfirmed: p.decisionsConfirmed === true, ...(p.connectionsConfirmed === true ? { connectionsConfirmed: true } : {}), ...guardOption(p) }));
+      action("apps.rollback", (c, a, p) => appService.rollback(c, a, str(p, "slug"), versionNumber(p), { decisionsConfirmed: p.decisionsConfirmed === true, ...(p.connectionsConfirmed === true ? { connectionsConfirmed: true } : {}), ...guardOption(p) }));
       action("apps.archive", (c, a, p) => appService.archive(c, a, str(p, "slug"), guardOption(p)));
       // The runner has no viewer name to show yet (the action context carries
       // ids, not display names), so the app sees an empty one.

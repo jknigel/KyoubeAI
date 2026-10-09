@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { DataError } from "../data/errors.js";
 import { assertIdentifier } from "../data/identifiers.js";
+import { CONNECTION_NAME_RE } from "../connections/config.js";
 import { canonical, questionKeySchema, questionsSchema, type Question } from "../decisions/contract.js";
 
 export const APP_SLUG_RE = /^[a-z][a-z0-9-]{1,48}$/;
@@ -11,6 +12,8 @@ export const MAX_APP_NOTES = 2000;
 /** How many decision sets one app may declare, and how many fields one set may send. */
 export const MAX_DECISION_SETS = 10;
 export const MAX_DECISION_FIELDS = 20;
+/** How many external API connections one app may declare. */
+export const MAX_APP_CONNECTIONS = 10;
 
 /**
  * One named set of typed questions an app may ask (docs/decisions.md). It is tied to one table the
@@ -34,6 +37,8 @@ export interface AppManifest {
   surfaces: Array<"page">;
   /** Present only when the manifest declares at least one decision set. */
   decisions?: Record<string, AppDecisionSet>;
+  /** Present only when the manifest declares at least one connection (docs/connections.md). */
+  connections?: Array<{ name: string; access: "read" | "read-write" }>;
 }
 
 /**
@@ -62,6 +67,9 @@ export const APP_MANIFEST_SCHEMA = z.object({
     .refine((sets) => Object.keys(sets).length <= MAX_DECISION_SETS, `at most ${MAX_DECISION_SETS} decision sets`)
     .optional()
     .describe("named sets of typed questions (docs/decisions.md): each names one declared table, the fields it may send, and its questions"),
+  connections: z.array(z.object({ name: z.string().regex(CONNECTION_NAME_RE), access: z.enum(["read", "read-write"]).optional() }).strict())
+    .max(MAX_APP_CONNECTIONS).optional()
+    .describe("external API connections the app calls (docs/connections.md); a person confirms them at publish"),
 }).strict();
 
 export function validateAppManifest(raw: unknown): AppManifest {
@@ -75,10 +83,17 @@ export function validateAppManifest(raw: unknown): AppManifest {
     return { name, access: table.access ?? ("read" as const) };
   });
   const decisions = normaliseDecisionSets(parsed.data.decisions, new Set(tables.map((table) => table.name)));
+  const connSeen = new Set<string>();
+  const connections = (parsed.data.connections ?? []).map((entry) => {
+    if (connSeen.has(entry.name)) throw new DataError("invalid", `duplicate connection "${entry.name}" in app manifest`);
+    connSeen.add(entry.name);
+    return { name: entry.name, access: entry.access ?? ("read" as const) };
+  });
   return {
     name: parsed.data.name, slug: parsed.data.slug, description: parsed.data.description ?? null, icon: parsed.data.icon ?? null,
     tables, surfaces: parsed.data.surfaces?.length ? parsed.data.surfaces : ["page"],
     ...(decisions ? { decisions } : {}),
+    ...(connections.length > 0 ? { connections } : {}),
   };
 }
 
@@ -111,6 +126,16 @@ export function decisionSetsChanged(current: AppManifest | null, target: AppMani
   const next = target.decisions ?? {};
   if (Object.keys(next).length === 0) return false;
   return JSON.stringify(canonical(current?.decisions ?? {})) !== JSON.stringify(canonical(next));
+}
+
+/**
+ * Whether publishing `target` over `current` adds or changes the connections an app calls. Sorted by
+ * name so a reorder is not a change; a version with none never counts (removing only narrows).
+ */
+export function connectionsChanged(current: AppManifest | null, target: AppManifest): boolean {
+  if ((target.connections ?? []).length === 0) return false;
+  const key = (m: AppManifest | null) => JSON.stringify([...(m?.connections ?? [])].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)).map((c) => [c.name, c.access]));
+  return key(current) !== key(target);
 }
 
 export function assertAppSource(source: unknown): string {

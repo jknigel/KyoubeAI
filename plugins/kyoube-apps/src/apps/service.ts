@@ -12,7 +12,8 @@ import { QUESTION_KEY_RE, type DecideResult, type Question } from "../decisions/
 import type { GuardAgentAction, GuardContext, GuardedAction } from "../decisions/guardrail.js";
 import type { DecisionService } from "../decisions/service.js";
 import { getLoggedDecision, recordOutcome, type Outcome } from "../decisions/store.js";
-import { assertAppSource, decisionSetsChanged, validateAppManifest, type AppManifest } from "./manifest.js";
+import type { ConnectionResponse, ConnectionService } from "../connections/service.js";
+import { assertAppSource, connectionsChanged, decisionSetsChanged, validateAppManifest, type AppManifest } from "./manifest.js";
 import { AppStore, type AppRecord, type AppVersion } from "./store.js";
 
 /** What a running app is told about itself, its viewer, and the tables it may touch. */
@@ -23,6 +24,8 @@ export interface AppContext {
   tables: string[];
   /** The decision sets this version declares, and whether the company lets apps use them right now. */
   decisions: { available: boolean; sets: string[] };
+  /** The connections this version declares, and whether each can be called right now. */
+  connections: Array<{ name: string; access: "read" | "read-write"; available: boolean }>;
 }
 
 export type RuntimeMethod = "query" | "get" | "count" | "describe" | "insert" | "update" | "delete";
@@ -47,6 +50,8 @@ export interface AppServiceDeps {
   data: DataService;
   /** Typed decisions (docs/decisions.md). Absent, an app's decision calls answer `disabled`. */
   decisions?: Pick<DecisionService, "decide" | "status">;
+  /** External API connections (docs/connections.md). Absent, an app's connection calls answer `disabled`. */
+  connections?: Pick<ConnectionService, "status" | "call">;
   onMutation?: (event: MutationEvent) => Promise<void>;
   onMutationError?: (error: unknown, event: MutationEvent) => void;
   /** The clock `decideOutcome` measures its 24-hour window with; tests replace it. */
@@ -64,6 +69,8 @@ export interface AppServiceDeps {
 export interface PublishOptions {
   /** The publisher reviewed the version's new or changed decision sets and what they send. */
   decisionsConfirmed?: boolean;
+  /** The publisher reviewed the version's new or changed connections and the services they reach. */
+  connectionsConfirmed?: boolean;
   /** The guardrail's task and confirmation ids; only an agent's call carries them. */
   guard?: GuardContext;
 }
@@ -93,6 +100,11 @@ export interface PublishPreview {
   provider: string | null;
   available: boolean;
   sets: Array<{ key: string; table: string; fields: string[]; advisory: boolean; questions: Array<{ key: string; type: Question["type"]; text: string }> }>;
+  connections: {
+    /** The version adds or changes connections: a person must publish it, with `connectionsConfirmed`. */
+    changed: boolean;
+    list: Array<{ name: string; access: "read" | "read-write"; baseUrl: string | null; auth: string | null; methods: string | null; available: boolean; missing: boolean }>;
+  };
 }
 
 // ---- runtime parameter shapes ------------------------------------------
@@ -169,6 +181,7 @@ export class AppService {
   private readonly store: AppStore;
   private readonly data: DataService;
   private readonly decisions: AppServiceDeps["decisions"];
+  private readonly connections: AppServiceDeps["connections"];
   private readonly onMutation: AppServiceDeps["onMutation"];
   private readonly onMutationError: AppServiceDeps["onMutationError"];
   private readonly now: () => number;
@@ -180,6 +193,7 @@ export class AppService {
     this.data = deps.data;
     this.store = new AppStore(deps.pool);
     this.decisions = deps.decisions;
+    this.connections = deps.connections;
     this.onMutation = deps.onMutation;
     this.onMutationError = deps.onMutationError;
     this.now = deps.now ?? Date.now;
@@ -280,6 +294,12 @@ export class AppService {
       // A context is never refused over this: an app that cannot use its sets right now still runs.
       try { available = (await this.decisions.status(companyId, actor, "apps")).available; } catch { available = false; }
     }
+    const declaredConnections = version.manifest.connections ?? [];
+    let connectionRows: Array<{ name: string; available: boolean }> = [];
+    if (declaredConnections.length > 0 && this.connections) {
+      // As with decisions, a context is never refused over this.
+      try { connectionRows = (await this.connections.status(companyId)).connections; } catch { connectionRows = []; }
+    }
     return {
       context: {
         companyId,
@@ -287,6 +307,7 @@ export class AppService {
         app: { slug: app.slug, name: app.name, version: version.version },
         tables: version.manifest.tables.map((table) => table.name),
         decisions: { available, sets },
+        connections: declaredConnections.map((entry) => ({ name: entry.name, access: entry.access, available: connectionRows.find((row) => row.name === entry.name)?.available === true })),
       },
       source: version.source,
     };
@@ -361,6 +382,19 @@ export class AppService {
   }
 
   /**
+   * One call to an external API from a running app (docs/connections.md). The app must be published
+   * to this viewer and the *current published* version must declare the connection; the declared
+   * access travels with the call, and the connection service never trusts the app's own word for it.
+   */
+  async runtimeConnection(companyId: string, actor: DataActor, slug: string, name: string, raw: unknown): Promise<ConnectionResponse> {
+    const { version } = await this.open(companyId, actor, slug);
+    const declared = (version.manifest.connections ?? []).find((entry) => entry.name === name);
+    if (!declared) throw new DataError("forbidden", `app "${slug}" does not declare connection "${String(name)}"`);
+    if (!this.connections) throw new DataError("disabled", "connections are not available in this installation");
+    return this.connections.call(companyId, actor, name, raw, { kind: "app", slug, version: version.version, declared: declared.access });
+  }
+
+  /**
    * What the viewer chose in an app's review lane. Only for a decision this app made for this
    * viewer in the last 24 hours, once; every other case gets the same `not_found`, so the call
    * cannot be used to probe other people's decisions. Logged as `outcome_via: app`, apart from the
@@ -406,9 +440,21 @@ export class AppService {
         // The dialog still shows what would be sent; it just cannot name the provider.
       }
     }
+    const declared = target.manifest.connections ?? [];
+    let configured: Awaited<ReturnType<NonNullable<AppServiceDeps["connections"]>["status"]>>["connections"] = [];
+    if (declared.length > 0 && this.connections) {
+      try { configured = (await this.connections.status(companyId)).connections; } catch { configured = []; }
+    }
     return {
       version: target.version,
       changed: decisionSetsChanged(current, target.manifest),
+      connections: {
+        changed: connectionsChanged(current, target.manifest),
+        list: declared.map((entry) => {
+          const row = configured.find((candidate) => candidate.name === entry.name);
+          return { name: entry.name, access: entry.access, baseUrl: row?.baseUrl ?? null, auth: row?.auth ?? null, methods: row?.methods ?? null, available: row?.available === true, missing: !row };
+        }),
+      },
       provider,
       available,
       sets: Object.entries(sets).map(([key, set]) => ({
@@ -459,13 +505,24 @@ export class AppService {
     await this.assertDecisionFields(companyId, actor, target.manifest, false);
     // Spec §5: new or changed decision sets change what leaves the server for every viewer, so a
     // person publishes them, after reviewing what they send — never an agent, whatever its grant.
-    const changed = decisionSetsChanged(await this.currentManifest(companyId, slug), target.manifest);
+    const currentManifest = await this.currentManifest(companyId, slug);
+    const changed = decisionSetsChanged(currentManifest, target.manifest);
     if (changed && actor.kind !== "user") {
       throw new DataError("forbidden", "decision sets need a person to publish; save the draft and ask a company admin to publish it from the Apps page");
     }
     if (changed && opts.decisionsConfirmed !== true) {
       throw new DataError("invalid", "this version adds or changes decision sets; review what they send, then publish with decisionsConfirmed: true");
     }
+    // Connections change which outside services every viewer's app can reach with a company secret, so
+    // they are held to the same rule: a person publishes them, after reviewing what they reach.
+    const connectionsChange = connectionsChanged(currentManifest, target.manifest);
+    if (connectionsChange && actor.kind !== "user") {
+      throw new DataError("forbidden", "this version adds or changes connections, which need a person to publish; save the draft and ask a company admin to publish it from the Apps page");
+    }
+    if (connectionsChange && opts.connectionsConfirmed !== true) {
+      throw new DataError("invalid", "this version adds or changes connections; review which services it calls, then publish with connectionsConfirmed: true");
+    }
+    await this.assertDeclaredConnections(companyId, target.manifest);
     // Milestone 4: the guardrail screens an agent's publish or rollback of this exact version. The
     // version's own id is in the fingerprint, so a person's "Allow once" covers the version they were
     // shown: never a newer draft saved in between, nor a same-numbered version of a replacement app
@@ -475,9 +532,26 @@ export class AppService {
       params: { slug, version: target.version, versionId: target.id },
     }), opts.guard);
     const sets = Object.keys(target.manifest.decisions ?? {});
+    const connectionNames = (target.manifest.connections ?? []).map((entry) => entry.name);
     const app = await this.store.setCurrent(companyId, slug, target.version,
-      (published) => this.entry(companyId, actor, operation, published, { version: target.version, ...(sets.length > 0 ? { decisionSets: sets, decisionsConfirmed: changed } : {}) }));
+      (published) => this.entry(companyId, actor, operation, published, {
+        version: target.version,
+        ...(sets.length > 0 ? { decisionSets: sets, decisionsConfirmed: changed } : {}),
+        ...(connectionNames.length > 0 ? { connections: connectionNames, connectionsConfirmed: connectionsChange } : {}),
+      }));
     return { app, version: target.version };
+  }
+
+  /** Every declared connection must be set up, and no declared access may be wider than the connection's methods. */
+  private async assertDeclaredConnections(companyId: string, manifest: AppManifest): Promise<void> {
+    const declared = manifest.connections ?? [];
+    if (declared.length === 0) return;
+    if (!this.connections) throw new DataError("invalid", "this version declares connections, which are not available in this installation");
+    const configured = (await this.connections.status(companyId)).connections;
+    const missing = declared.filter((entry) => !configured.some((row) => row.name === entry.name)).map((entry) => entry.name);
+    if (missing.length > 0) throw new DataError("invalid", `connection(s) ${missing.join(", ")} are not set up; ask a company admin to add them in the plugin settings`);
+    const wide = declared.filter((entry) => entry.access === "read-write" && configured.find((row) => row.name === entry.name)!.methods !== "read-write").map((entry) => entry.name);
+    if (wide.length > 0) throw new DataError("invalid", `connection(s) ${wide.join(", ")} only allow read access, but the app declares read-write`);
   }
 
   /** The manifest viewers run today, or null when the app has never been published. */
