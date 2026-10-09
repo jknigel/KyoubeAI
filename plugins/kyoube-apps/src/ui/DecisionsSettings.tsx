@@ -14,7 +14,7 @@ const USES: Array<{ key: Use; label: string; hint: string }> = [
   { key: "agents", label: "Agents", hint: "Agents ask typed questions over REST and the decisions_* tools." },
   { key: "columns", label: "AI columns", hint: "Data tables can have columns the model fills in." },
   { key: "apps", label: "Kyoube Apps", hint: "Published apps can call kyoube.decide on their declared fields." },
-  { key: "guardrail", label: "Guardrail on risky agent actions", hint: "Dropping tables, bulk deletes and app publishing by agents are checked first; anything doubtful waits for a person." },
+  { key: "guardrail", label: "Guardrail on risky agent actions", hint: "Dropping tables, bulk deletes, app publishing and write requests to connected services by agents are checked first; anything doubtful waits for a person." },
 ];
 
 /** The cap a blurred box asks for: a whole number of 0 or more that differs from the current one, or null for nothing to save (an emptied box included). */
