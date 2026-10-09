@@ -18,6 +18,9 @@ import { registerDecisionTools } from "./decisions/tools.js";
 import { DataError } from "./data/errors.js";
 import { parseLevel, type DataActor } from "./data/permissions.js";
 import { DataService, type DataServiceDeps, type MutationEvent } from "./data/service.js";
+import { GroupService } from "./groups/service.js";
+import { isManagerRole } from "./groups/levels.js";
+import { fileLicenceGate, type LicenceGate } from "./groups/licence.js";
 import { runMetaMigrations } from "./db/migrate.js";
 import { createPool as defaultCreatePool } from "./db/pool.js";
 import type { KyoubeRuntimeConfig } from "./kyoube-config.js";
@@ -33,6 +36,8 @@ export interface AppsPluginDeps {
   createService?: (deps: DataServiceDeps) => DataService;
   createAppService?: (deps: AppServiceDeps) => AppService;
   createDecisionService?: (deps: DecisionServiceDeps) => DecisionService;
+  /** Whether this instance may manage groups; tests pass a fake, production reads the licence files. */
+  licence?: LicenceGate;
 }
 
 type Params = Record<string, unknown>;
@@ -119,6 +124,8 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
   // closure — never in a module-level `currentApps`, which two plugin
   // instances in one process would share.
   let apps: AppService | null = null;
+  // The group service lives here for the same reason (ruling P2-R5).
+  let groups: GroupService | null = null;
   // The decision service and the provider resolver live in this closure for the same reason the
   // other services do (ruling P2-R5); `onConfigChanged` drops the resolver's cached keys.
   let decisions: DecisionService | null = null;
@@ -176,6 +183,14 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
       });
       const dataActivity = summariser("data", "kyoube_table");
       const appsActivity = summariser("apps", "kyoube_app");
+      const groupService = new GroupService({
+        pool: dbPool,
+        resolveUserRole: (companyId, userId, fresh) => (fresh ? roles.resolveFresh(companyId, userId) : roles.resolveRole(companyId, userId)),
+        licence: deps.licence ?? fileLicenceGate(),
+        onMutation: dataActivity.log,
+        onMutationError: dataActivity.onError,
+      });
+      groups = groupService;
       const dataService = (deps.createService ?? ((serviceDeps) => new DataService(serviceDeps)))({
         pool: dbPool,
         // Ruling P4-R13: a schema, grant or settings change asks the host again; everything else
@@ -183,6 +198,7 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
         resolveUserRole: (companyId, userId, fresh) => (fresh ? roles.resolveFresh(companyId, userId) : roles.resolveRole(companyId, userId)),
         onMutation: dataActivity.log,
         onMutationError: dataActivity.onError,
+        groupLevels: (companyId, userId) => groupService.levelsForUser(companyId, userId),
       });
       service = dataService;
       const providerResolver = new ProviderResolver({
@@ -232,6 +248,7 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
         decisions: decisionService,
         onMutation: appsActivity.log,
         onMutationError: appsActivity.onError,
+        hiddenApps: (companyId, userId) => groupService.hiddenApps(companyId, userId),
         guardAgentAction: guardrail.check,
       });
       apps = appService;
@@ -307,6 +324,34 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
       });
       action("data.set_agent_grant", (c, a, p) => dataService.setAgentGrant(c, a, str(p, "agentId"), parseLevel(p.level)));
       action("data.set_settings", (c, a, p) => dataService.setSettings(c, a, { defaultAgentLevel: p.defaultAgentLevel === undefined ? undefined : parseLevel(p.defaultAgentLevel), hardDelete: p.hardDelete as boolean | undefined }));
+      // ---- groups (docs/groups.md) ----
+      action("groups.list", (c, a) => groupService.list(c, a));
+      action("groups.save", (c, a, p) => groupService.save(c, a, p.group));
+      action("groups.delete", (c, a, p) => groupService.remove(c, a, str(p, "id")));
+      // What the pickers offer: company members, agents and live apps. Same gate as the list.
+      // Member rows carry ids and roles only (no name or email), so the pickers show ids.
+      action("groups.options", async (c, a) => {
+        await groupService.list(c, a);
+        const [members, agents, appList] = await Promise.all([ctx.access.members.list({ companyId: c }), ctx.agents.list({ companyId: c }), appService.list(c, a)]);
+        return {
+          members: members.filter((m) => m.principalType === "user" && m.status === "active").map((m) => ({ id: m.principalId, role: m.membershipRole })),
+          agents: agents.filter((agent) => agent.status !== "terminated").map((agent) => ({ id: agent.id, name: agent.name })),
+          apps: appList.filter((app) => app.status !== "archived").map((app) => ({ id: app.id, name: app.name, icon: app.icon })),
+        };
+      });
+      action("groups.agent", (c, a, p) => groupService.agentGroups(c, a, str(p, "agentId")));
+      // The Data access page's people table: each active member's effective level and where it comes from.
+      action("groups.people_levels", async (c, a) => {
+        await dataService.assertAdmin(c, a);
+        const members = (await ctx.access.members.list({ companyId: c })).filter((m) => m.principalType === "user" && m.status === "active");
+        const all = await groupService.list(c, a);
+        return Promise.all(members.map(async (m) => {
+          const level = await dataService.levelFor(c, { kind: "user", id: m.principalId, runId: null });
+          const levelled = all.groups.filter((g) => g.dataLevel && g.members.includes(m.principalId)).map((g) => g.name);
+          const exempt = isManagerRole(m.membershipRole);
+          return { userId: m.principalId, role: m.membershipRole, level, source: !exempt && levelled.length ? `group: ${levelled.join(", ")}` : `role: ${m.membershipRole ?? "none"}` };
+        }));
+      });
       // ---- managed skills ----
       // Both skills are imported into a company's skill library (never enabled
       // on an agent — that stays a per-agent choice on the agent's Skills tab).
