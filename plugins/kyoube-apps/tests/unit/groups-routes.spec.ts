@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { GROUP_API_ROUTES, handleGroupsApiRequest } from "../../src/groups/api-routes.js";
+import { GROUP_API_ROUTES, handleGroupsApiRequest, keptMemberIds } from "../../src/groups/api-routes.js";
 
 const C = "88888888-8888-4888-8888-888888888888";
 const service = {
@@ -42,6 +42,21 @@ describe("groups board routes", () => {
   it("surfaces a host failure as a 500, never an empty set", async () => {
     const failing = { ...hosts, listUserIds: async () => { throw new Error("boom"); } };
     expect((await handleGroupsApiRequest(service as never, input("groups.agent_access", "user"), failing))?.status).toBe(500);
+  });
+});
+
+// Ruling R14: suspended and pending members keep their groups; archived and absent ones are pruned.
+describe("keptMemberIds", () => {
+  it("lists archived members too, and keeps every user who is not archived", async () => {
+    const list = vi.fn(async () => [
+      { principalType: "user", principalId: "active", status: "active" },
+      { principalType: "user", principalId: "suspended", status: "suspended" },
+      { principalType: "user", principalId: "pending", status: "pending" },
+      { principalType: "user", principalId: "archived", status: "archived" },
+      { principalType: "agent", principalId: "agent-1", status: "active" },
+    ]);
+    expect(await keptMemberIds({ list }, C)).toEqual(new Set(["active", "suspended", "pending"]));
+    expect(list).toHaveBeenCalledWith({ companyId: C, includeArchived: true });
   });
 });
 

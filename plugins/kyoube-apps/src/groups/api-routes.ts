@@ -16,6 +16,7 @@ export const GROUP_API_ROUTES: PluginApiRouteDeclaration[] = [
 ];
 
 export interface GroupRouteHosts {
+  /** The people whose group memberships are kept: every member not archived (see keptMemberIds). */
   listUserIds(companyId: string): Promise<Set<string>>;
   listAgentIds(companyId: string): Promise<Set<string>>;
   /** The caller's company role, read fresh from the core (never the 30 s cache). */
@@ -23,6 +24,20 @@ export interface GroupRouteHosts {
 }
 
 const FORBIDDEN = { error: "forbidden: company owner or admin required", code: "forbidden" } as const;
+
+interface MembersListing {
+  list(input: { companyId: string; includeArchived?: boolean }): Promise<Array<{ principalType: string; principalId: string; status: string }>>;
+}
+
+/**
+ * The people whose group memberships survive a prune (ruling R14): every user member who is not
+ * archived. Pending and suspended members keep their groups, so a lowered data level is still in
+ * force when they are active again; archived members and people gone from the company are pruned.
+ */
+export async function keptMemberIds(members: MembersListing, companyId: string): Promise<Set<string>> {
+  const rows = await members.list({ companyId, includeArchived: true });
+  return new Set(rows.filter((m) => m.principalType === "user" && m.status !== "archived").map((m) => m.principalId));
+}
 
 const report = z.object({ syncedAt: z.iso.datetime(), error: z.string().max(2000).nullable() });
 
