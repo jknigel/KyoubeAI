@@ -2,6 +2,7 @@ import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
 import { API_ROUTES } from "./api-routes.js";
 import { APP_API_ROUTES } from "./apps/api-routes.js";
 import { DECISION_API_ROUTES } from "./decisions/api-routes.js";
+import { GROUP_API_ROUTES } from "./groups/api-routes.js";
 import { decisionToolDeclarations } from "./decisions/tools.js";
 import { APPS_PAGE_ROUTE } from "./apps/page-route.js";
 import { appToolDeclarations } from "./apps/tools.js";
@@ -71,7 +72,7 @@ const manifest: PaperclipPluginManifestV1 = {
   entrypoints: { worker: "./dist/worker.js", ui: "./dist/ui" },
   instanceConfigSchema: DECISIONS_CONFIG_SCHEMA,
   tools: [...toolDeclarations(), ...appToolDeclarations(), ...decisionToolDeclarations()],
-  apiRoutes: [...API_ROUTES, ...APP_API_ROUTES, ...DECISION_API_ROUTES],
+  apiRoutes: [...API_ROUTES, ...APP_API_ROUTES, ...DECISION_API_ROUTES, ...GROUP_API_ROUTES],
   jobs: [
     { jobKey: PURGE_JOB_KEY, displayName: "Purge trashed tables and fields", description: "Drops tables/fields soft-deleted more than 30 days ago.", schedule: "0 3 * * *" },
     { jobKey: FILL_JOB_KEY, displayName: "Fill AI columns", description: "Asks the company's typed-decision model about new and changed rows of AI columns (docs/decisions.md).", schedule: "*/5 * * * *" },
