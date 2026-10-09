@@ -50,7 +50,9 @@ whatever an app or agent asks for.
 connection (see [apps.md](apps.md#connections)). A GET needs the viewer's data level `read`. Any other
 method needs `write`, the declaration `read-write`, and the connection's methods `read-write`. A
 declaration can narrow what the connection allows and never widens it. Owners and admins follow the
-same rules inside an app.
+same rules inside an app. On core 2026.1005.0 a member with the core `viewer` role cannot run apps
+at all (the core refuses their every action with "Viewer access is read-only"), so in practice these
+rules apply to members above viewer, at the data level their groups or role give them.
 
 **Agents.** An agent needs a grant per connection, set by an owner or admin under Company Settings,
 then Data access, then Connections: `none` (the default), `read` or `read-write`. A grant never
@@ -163,8 +165,9 @@ Every call writes one audit row: the connection, method, path **without** the qu
 response size, who called, and how (`app@<slug>@<version>` for an app, e.g. `app@dash@3`, and
 `agent` or `person` for a direct call). Request and response bodies, query values, headers and the
 secret are never recorded. Agent calls also add a line to the activity log; app calls do not,
-because they are frequent. A completed write whose audit row cannot be saved still returns its response (the failure is
-logged on the server). A GET whose audit row cannot be saved fails, so a read is never unrecorded.
+because they are frequent. A completed write whose audit row cannot be saved still returns its
+response (the failure is logged on the server). A GET whose audit row cannot be saved fails, so a
+read is never unrecorded.
 
 ## Troubleshooting
 
