@@ -31,7 +31,8 @@ beforeAll(async () => {
       sent.push({ url, init });
       return new Response('{"id":"c_1"}', { status: 201, headers: { "content-type": "application/json", authorization: `Bearer ${SECRET}` } });
     },
-    levelFor: async () => "none",
+    // Agents read company data (listing connections needs it); people here have no level.
+    levelFor: async (_companyId, actor) => (actor.kind === "agent" ? "read" : "none"),
     resolveUserRole: async (_companyId, userId) => (userId === OWNER.id ? "owner" : null),
   });
 });

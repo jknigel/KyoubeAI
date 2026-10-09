@@ -249,10 +249,15 @@ export class ConnectionService {
     })));
   }
 
-  /** The caller's own access per connection: agents by grant, people by level (or role). */
+  /**
+   * The caller's own access per connection: agents by grant, people by level (or role). Listing
+   * needs read access to company data, for agents as for people: the list names the services the
+   * company uses and where.
+   */
   private async accessResolver(companyId: string, actor: DataActor): Promise<(connection: Connection) => ConnectionAccess> {
     if (actor.kind === "agent" && actor.id) {
       const agentId = actor.id;
+      if (!levelAllows(await this.deps.levelFor(companyId, actor), "read")) throw forbidden("listing connections requires read access to company data");
       const grants = new Map((await listConnectionGrants(this.deps.pool, companyId)).filter((g) => g.agentId === agentId).map((g) => [g.connection, g.access]));
       return (connection) => {
         const grant = grants.get(connection.name) ?? "none";
