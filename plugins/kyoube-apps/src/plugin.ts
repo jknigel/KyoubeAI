@@ -12,6 +12,7 @@ import { rulesTokenMatches, RULES_TOKEN_PATH } from "./groups/rules-token.js";
 import { AiColumnService } from "./decisions/columns.js";
 import { SecretCache } from "./secrets/cache.js";
 import { API_KEY_CONFIG_PATH, ProviderResolver, validateDecisionsConfig } from "./decisions/config.js";
+import { validateConnectionsConfig } from "./connections/config.js";
 import { guardFrom, guardOption } from "./decisions/guardrail.js";
 import { Guardrail } from "./decisions/guardrail-service.js";
 import { purgeGuardrailHolds } from "./decisions/holds.js";
@@ -156,7 +157,8 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
     },
 
     async onValidateConfig(config) {
-      return validateDecisionsConfig(config);
+      const errors = [...(validateDecisionsConfig(config).errors ?? []), ...(validateConnectionsConfig(config).errors ?? [])];
+      return errors.length ? { ok: false, errors } : { ok: true };
     },
 
     async setup(ctx: PluginContext) {
