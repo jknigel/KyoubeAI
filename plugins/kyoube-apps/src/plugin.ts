@@ -10,6 +10,7 @@ import { handleDecisionsApiRequest } from "./decisions/api-routes.js";
 import { handleGroupsApiRequest, keptMemberIds } from "./groups/api-routes.js";
 import { rulesTokenMatches, RULES_TOKEN_PATH } from "./groups/rules-token.js";
 import { AiColumnService } from "./decisions/columns.js";
+import { SecretCache } from "./secrets/cache.js";
 import { API_KEY_CONFIG_PATH, ProviderResolver, validateDecisionsConfig } from "./decisions/config.js";
 import { guardFrom, guardOption } from "./decisions/guardrail.js";
 import { Guardrail } from "./decisions/guardrail-service.js";
@@ -138,6 +139,8 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
   // other services do (ruling P2-R5); `onConfigChanged` drops the resolver's cached keys.
   let decisions: DecisionService | null = null;
   let providers: ProviderResolver | null = null;
+  // One secret cache for every secret the plugin reads; never module-level, so each worker setup starts cold.
+  let secretCache: SecretCache | null = null;
   let logger: PluginLogger | null = null;
   // The skill import the `skills.install` route runs; lives here for the same
   // reason the services do (`onApiRequest` runs outside `setup`).
@@ -149,7 +152,7 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
 
     async onConfigChanged(_config, context) {
       // Config is read per call; only the cached key has to go so a rotated key is used at once.
-      providers?.invalidate(context?.companyId ?? null);
+      secretCache?.invalidate(context?.companyId ?? null);
     },
 
     async onValidateConfig(config) {
@@ -212,7 +215,12 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
         groupLevels: (companyId, userId) => groupService.levelsForUser(companyId, userId),
       });
       service = dataService;
+      const cache = new SecretCache({
+        resolve: (ref, companyId, configPath) => ctx.secrets.resolve(ref as never, { companyId, configPath }),
+      });
+      secretCache = cache;
       const providerResolver = new ProviderResolver({
+        cache,
         getConfig: (companyId) => ctx.config.get(companyId),
         resolveSecret: (ref, companyId) => ctx.secrets.resolve(ref as never, { companyId, configPath: API_KEY_CONFIG_PATH }),
       });
@@ -538,6 +546,7 @@ export function createAppsPlugin(deps: AppsPluginDeps): PaperclipPlugin {
         apps = null;
         decisions = null;
         providers = null;
+        secretCache = null;
         logger = null;
         installSkillsForCompany = null;
         hostMembers = null;

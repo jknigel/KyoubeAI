@@ -1,5 +1,6 @@
 import { DataError } from "../data/errors.js";
 import type { ProviderTarget } from "./client.js";
+import { SECRET_CACHE_MS, SecretCache } from "../secrets/cache.js";
 
 export const PROVIDER_PRESETS = {
   typesafe: "https://api.typesafe.ai",
@@ -90,26 +91,27 @@ export function validateDecisionsConfig(raw: Record<string, unknown>): { ok: boo
   }
 }
 
-/** The core allows 30 secret lookups a minute per company; one cached key per company stays far below it. */
-export const SECRET_CACHE_MS = 60_000;
+export { SECRET_CACHE_MS };
 
 export interface ProviderResolverDeps {
   getConfig(companyId: string): Promise<Record<string, unknown>>;
   resolveSecret(ref: unknown, companyId: string): Promise<string>;
   now?(): number;
   ttlMs?: number;
+  /** Shared with the other secret users in the plugin; one is made from `resolveSecret` when absent. */
+  cache?: SecretCache;
 }
 
 export class ProviderResolver {
-  /** Worker memory only: never logged, never written anywhere, dropped on a config change. */
-  private readonly keys = new Map<string, { ref: string; value: string; expires: number }>();
-  /** The lookup under way per company, shared by every caller that finds the cache cold meanwhile. */
-  private readonly inflight = new Map<string, { ref: string; generation: string; promise: Promise<string> }>();
-  /** Bumped by `invalidate`, so a lookup that started before a config change never fills the cache after it. */
-  private readonly generations = new Map<string, number>();
-  private epoch = 0;
+  private readonly cache: SecretCache;
 
-  constructor(private readonly deps: ProviderResolverDeps) {}
+  constructor(private readonly deps: ProviderResolverDeps) {
+    this.cache = deps.cache ?? new SecretCache({
+      resolve: (binding, companyId) => deps.resolveSecret(binding, companyId),
+      now: deps.now,
+      ttlMs: deps.ttlMs,
+    });
+  }
 
   async settings(companyId: string): Promise<ProviderSettings | null> {
     return parseProviderSettings((await this.deps.getConfig(companyId)) ?? {});
@@ -120,55 +122,16 @@ export class ProviderResolver {
     if (!settings) {
       throw new DataError("disabled", "no typed-decisions provider is set for this company; an instance admin sets one in the Kyoube Data & Apps plugin settings");
     }
-    const ref = JSON.stringify(settings.apiKeyRef);
-    const now = this.deps.now?.() ?? Date.now();
-    const cached = this.keys.get(companyId);
-    const apiKey = cached && cached.ref === ref && cached.expires > now ? cached.value : await this.lookup(companyId, ref, settings.apiKeyRef, now);
+    let apiKey: string;
+    try {
+      apiKey = await this.cache.get(companyId, "decisions", settings.apiKeyRef, API_KEY_CONFIG_PATH);
+    } catch (error) {
+      throw new DataError("disabled", "the typed-decisions API key could not be read; check the secret picked in the plugin settings", { cause: error });
+    }
     return { provider: settings.provider, baseUrl: settings.baseUrl, model: settings.model, apiKey };
   }
 
   invalidate(companyId?: string | null): void {
-    if (companyId) {
-      this.generations.set(companyId, (this.generations.get(companyId) ?? 0) + 1);
-      this.keys.delete(companyId);
-      this.inflight.delete(companyId);
-    } else {
-      this.epoch += 1;
-      this.keys.clear();
-      this.inflight.clear();
-    }
-  }
-
-  private generation(companyId: string): string {
-    return `${this.epoch}:${this.generations.get(companyId) ?? 0}`;
-  }
-
-  /**
-   * One secret lookup per company and reference at a time: the core allows 30 a minute, and a burst
-   * of rows or app calls on a cold cache must not spend them all. A failed lookup is not kept.
-   */
-  private lookup(companyId: string, ref: string, binding: unknown, startedAt: number): Promise<string> {
-    const generation = this.generation(companyId);
-    const running = this.inflight.get(companyId);
-    if (running && running.ref === ref && running.generation === generation) return running.promise;
-    let settle!: { resolve(value: string): void; reject(error: unknown): void };
-    const promise = new Promise<string>((resolve, reject) => { settle = { resolve, reject }; });
-    const entry = { ref, generation, promise };
-    // In place before the lookup starts, so even a secret port that throws at once clears it below.
-    this.inflight.set(companyId, entry);
-    void (async () => {
-      try {
-        const value = await this.deps.resolveSecret(binding, companyId);
-        if (this.generation(companyId) === generation) {
-          this.keys.set(companyId, { ref, value, expires: startedAt + (this.deps.ttlMs ?? SECRET_CACHE_MS) });
-        }
-        settle.resolve(value);
-      } catch (error) {
-        settle.reject(new DataError("disabled", "the typed-decisions API key could not be read; check the secret picked in the plugin settings", { cause: error }));
-      } finally {
-        if (this.inflight.get(companyId) === entry) this.inflight.delete(companyId);
-      }
-    })();
-    return promise;
+    this.cache.invalidate(companyId);
   }
 }
