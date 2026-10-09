@@ -233,7 +233,9 @@ and what data level they hold. Group tables are in `kyoube_meta` (`groups`, `gro
   hides and refuses the app only: its tables stay reachable on the Data page and through any other
   app that declares them, at the person's own data level.
 - **Data levels.** `DataService.levelFor` takes the highest level among a person's groups that set
-  one, otherwise the role mapping. A group level is never below `read`: the Data page's UI reads
+  one, otherwise the role mapping. A viewer stays at `read` whatever their groups say: the core
+  refuses every non-GET request from a viewer ("Viewer access is read-only"), so groups can lower an
+  operator but never raise a viewer. A group level is never below `read`: the Data page's UI reads
   build their actor from a client-supplied id (see [Data](#data)) and are safe only because `read` is
   the floor. A group level cannot reveal anything a member could not already read.
 - **Owners and admins** are exempt from all of it and always `schema`.
@@ -278,7 +280,8 @@ and what data level they hold. Group tables are in `kyoube_meta` (`groups`, `gro
   when a chat is opened and when a message is sent. Other chat actions in an open chat (answering an
   interaction card, uploading an attachment) are only checked against the chat's owner by the core.
   Someone who loses the right cannot reopen their chat panel; the conversation stays readable as an
-  issue. A side effect beyond groups: viewers can no longer chat with protected manager agents.
+  issue. Viewers cannot assign or chat with any agent on this core, which refuses their every
+  non-GET request; agent-rules never gives a viewer an assignment grant.
 - **Residual: agents are visible.** The core has no per-agent visibility, so people outside a group
   can still see its agents, their tasks and their runs. Groups restrict giving work and chat, not
   seeing.

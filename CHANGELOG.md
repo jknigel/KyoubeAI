@@ -10,7 +10,8 @@ building on it. The format is loosely [Keep a Changelog](https://keepachangelog.
 
 - User groups (licensed): decide which people may use which agents and apps, and set a group data
   level. A group holds people, agents, apps and an optional data level (read, write or schema; never
-  below read, highest wins). An agent or app in no group stays open to everyone; owners and admins are
+  below read, highest wins; groups can lower operators but never raise viewers, whom the core keeps
+  read-only). An agent or app in no group stays open to everyone; owners and admins are
   never restricted. Manage groups under Company Settings, Groups; the agent page gets an Access tab
   and the Data access page shows where each level comes from. Agent changes apply within about a minute
   through the agent rules loop. Any valid licence unlocks creating and changing groups; existing
@@ -22,8 +23,8 @@ building on it. The format is loosely [Keep a Changelog](https://keepachangelog.
 
 - Agent chat honours assignment rules for protected agents (second standing core patch,
   `groups-chat-open-assign-check` and `groups-chat-message-assign-check`). Opening a chat with a
-  protected agent, and sending a message in one, needs the right to assign it. Viewers can no longer
-  chat with protected manager agents, which they could never assign to.
+  protected agent, and sending a message in one, needs the right to assign it. Viewers cannot
+  assign or chat with any agent on this core, which refuses every change a viewer sends.
 - The agent rules routes (`kyoube.agent-rules` reconcile, revert and groups apply) and the
   `kyoube.apps` group sync routes now answer only the `kyoube agent-rules` loop or a company owner or
   admin; before, any signed-in person passed. The loop proves itself with a rules token it creates in

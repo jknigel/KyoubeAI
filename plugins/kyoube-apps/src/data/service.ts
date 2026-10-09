@@ -6,7 +6,7 @@ import type { GuardAgentAction, GuardContext, GuardedAction } from "../decisions
 import { isBulkTarget, rowTargetParams } from "../decisions/guardrail.js";
 import { withMeta, type AuditEntry } from "./audit.js";
 import { DataError } from "./errors.js";
-import { highestLevel, isManagerRole, type GroupLevel } from "../groups/levels.js";
+import { highestLevel, isManagerRole, isViewerRole, type GroupLevel } from "../groups/levels.js";
 import { isAiColumn } from "./field-kinds.js";
 import type { QuerySpec } from "./filter.js";
 import { getAgentLevel, getCompanySettings, listAgentGrants, setAgentGrant, setCompanySettings, type AgentGrant, type CompanySettings } from "./grants.js";
@@ -160,7 +160,9 @@ export class DataService {
       const role = await this.resolveUserRole(companyId, actor.id, opts.fresh === true);
       const base = roleToLevel(role);
       // Someone outside the company gets nothing, and owners and admins are never restricted by a group.
-      if (base === "none" || isManagerRole(role) || !this.groupLevels) return base;
+      // A viewer stays at `read` whatever their groups say: the core refuses a viewer's every write
+      // before it reaches this plugin (ruling R19), so a group can lower an operator but never raise a viewer.
+      if (base === "none" || isManagerRole(role) || isViewerRole(role) || !this.groupLevels) return base;
       const levels = await this.groupLevels(companyId, actor.id);
       return levels.length > 0 ? highestLevel(levels) : base;
     }

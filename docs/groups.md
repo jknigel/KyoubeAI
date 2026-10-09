@@ -45,8 +45,10 @@ never lets them decide who else gets access.
 - A person's level is the highest level among their groups that set one. If none of their groups
   sets a level, their company role decides (owner and admin: `schema`, operator: `write`, viewer:
   `read`), as before.
-- A group can raise a person (a viewer in a `write` group gets `write`) or lower them (an operator in
-  a `read` group gets `read`).
+- A group can lower an operator (an operator in a `read` group gets `read`) or raise one to
+  `schema`. It never raises a viewer: the core refuses every change a viewer sends ("Viewer access is
+  read-only"), so a viewer stays at `read` whatever their groups say, and the Data access page shows
+  "role: viewer (groups cannot raise a viewer)".
 - A group level is never below `read`. There is no `none`: every company member can read, and the
   Data page's reads rely on that (see `SECURITY.md`).
 - The **Data access** page shows each person's level and where it comes from ("role: operator" or
@@ -88,10 +90,9 @@ Someone outside the agent's groups cannot assign it a task or chat with it. The 
 - **Chat follows assignment.** Opening a chat with a protected agent, and sending a message in one,
   needs the right to assign that agent. Someone who loses the right can no longer reopen their old
   chat panel. The conversation stays readable as an issue.
-- **Viewers and managers.** Because of that rule, viewers can chat only with agents they may assign.
-  Since this release that excludes protected manager agents (see
-  [agent-rules.md](agent-rules.md)), which viewers could never assign. Owners, admins and operators
-  keep chat with managers.
+- **Viewers.** On this core a viewer cannot assign work to or chat with any agent, in a group or
+  not: the core refuses every change a viewer sends. Putting a viewer in a group gives them no agent.
+  Owners, admins and operators keep chat with managers.
 - Other actions in an already-open chat, such as answering an interaction card or uploading an
   attachment, are only checked against the chat's owner by the core.
 
@@ -117,7 +118,7 @@ Agent restrictions use the core's own mechanism, written by the agent rules loop
 - **Operators.** An operator's unscoped `tasks:assign` grant is replaced by one scoped to every live
   agent except the restricted agents they are not allowed. Unrestricted agents and managers stay
   assignable.
-- **Viewers.** A viewer who is in a group with agents gets a grant for exactly those agents.
+- **Viewers** are never given an assignment grant: the core refuses their every change anyway.
 - **Owners and admins** are not touched.
 - **Grants set by hand.** A grant someone scoped by hand is left alone and reported. A grant
   someone changes after KyoubeAI wrote it is left as they set it. The exception is a row equal to the

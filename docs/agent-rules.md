@@ -53,7 +53,7 @@ work to which agents. After the guard step, each pass:
 - reads the list of restricted agents from `kyoube.apps` (`POST /groups/agent-access`) and posts it
   to `kyoube.agent-rules` (`POST /groups/apply`), then reports the result back (`POST
   /groups/sync-report`) for the Groups page;
-- protects every listed agent, and scopes operators' and group viewers' `tasks:assign` grants. A
+- protects every listed agent, and scopes operators' `tasks:assign` grants (viewers get none). A
   grant someone scoped by hand is left alone and reported; everything is put back when the last
   restricted agent goes.
 
@@ -66,9 +66,9 @@ an agent with such a policy, but the chat check (protected agents only) does not
 step runs even with `KYOUBE_AGENT_RULES=off` (see [Turn it off](#turn-it-off)).
 
 **Chat.** A standing core patch makes opening a chat with a protected agent, and sending a message
-in one, require the right to assign it. This applies to the managers above too: viewers can no
-longer chat with a protected manager agent, which they could never assign to anyway. Owners, admins
-and operators are unaffected.
+in one, require the right to assign it. This applies to the managers above too. Viewers cannot assign
+or chat with any agent on this core in any case: it refuses every change a viewer sends. Owners,
+admins and operators keep chat with managers.
 
 ## Standing handoffs
 
