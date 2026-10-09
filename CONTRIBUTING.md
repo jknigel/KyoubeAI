@@ -100,7 +100,7 @@ The workspace is the private root and these build-time or deployable members:
 | `docker/bootstrap/` | `@kyoube/bootstrap` | The `kyoube` CLI (`setup`, `ensure-plugins`, `agent-rules`, `license`, `users`, `doctor`, `harness`, `connect`). |
 | `docker/system/` | *(not a package)* | What the image adds for the Terminal: passwordless `sudo`, the apt hook that keeps installed system packages (`apt-record`, `apt-restore`), `/etc/profile.d` and npm's prefix. |
 | `docker/rebrand/` | `@kyoube/rebrand` | The build-time brand transform: names, logo and artwork (see `docs/branding.md`). |
-| `docker/core-patches/` | `@kyoube/core-patches` | Build-time fixes to upstream bugs, held only until the upstream fix ships, plus the standing licensing entries (see "Never patch the core"). |
+| `docker/core-patches/` | `@kyoube/core-patches` | Build-time fixes to upstream bugs, held only until the upstream fix ships, plus the standing licensing and user-groups entries (see "Never patch the core"). |
 | `docker/theme/` | `@kyoube/theme` | The build-time Studio theme: brand tokens, a gated skin and display-text renames (see `docs/theme.md`). |
 | `plugins/kyoube-terminal/` | `@kyoube/plugin-terminal` | The browser terminal plugin. |
 | `plugins/kyoube-apps/` | `@kyoube/plugin-apps` | The organisation database and Apps plugin (one worker, two modules). |
@@ -133,8 +133,8 @@ doesn't expose), the answer is never to vendor or patch upstream code — propos
 [`paperclipai/paperclip`](https://github.com/paperclipai/paperclip)) or find a way to build it as a
 plugin. `docs/architecture.md`'s "Isolation from upstream" material and `docs/upgrading.md` explain why
 this matters: it is what makes a core version bump a one-line change instead of a rebase. There are
-two standing exceptions that change presentation only, one standing exception that changes behaviour,
-and one temporary list that changes behaviour; all four are build-time transforms re-applied to the
+two standing exceptions that change presentation only, one standing exception that changes behaviour
+(licensing and user groups, below), and one temporary list that changes behaviour; all four are build-time transforms re-applied to the
 pristine core on every build, and all four fail the build when upstream moves what they rely on.
 The two presentation exceptions:
 
@@ -148,7 +148,7 @@ The two presentation exceptions:
   the stock layout. It may not change behaviour: anything that needs data or logic goes in
   `plugins/kyoube-studio`, on the public SDK. `docs/theme.md` has the details.
 
-The one standing behaviour exception is licensing. Two entries in `docker/core-patches/patches.mjs`
+The standing behaviour exception has two parts. The first is licensing. Two entries in `docker/core-patches/patches.mjs`
 marked `standing` register a Better Auth `user.create.before` hook in `server/dist/auth/better-auth.js`.
 The hook only calls KyoubeAI code (`packages/license`, shipped as `/opt/kyoube/license/enforce.mjs`),
 which enforces the user limit in `LICENSE` (`docs/licensing.md`). When a core release moves the code
@@ -156,8 +156,17 @@ it anchors on, the build fails naming the entry, and the fix is to redo it for t
 delete it. `scripts/smoke.sh` proves the limit on every PR, after every core bump, and weekly against
 the core's `:beta`.
 
+The second is user groups (`docs/groups.md`). Two `standing` entries, `groups-chat-open-assign-check`
+and `groups-chat-message-assign-check`, add the core's own `assertCanAssignTasks` check to the Agent
+Chat routes in `server/dist/routes/issues.js`, for protected agents only. Those routes create and
+continue a conversation assigned to an agent without any assignment check, and groups restrict who
+may give an agent work, so the gap would let anyone outside a group chat with its agents. It is a
+patch because the core offers no hook there. It calls only the core's own function and holds no
+KyoubeAI logic. The same rule applies: when a core release moves an anchor, the build fails naming
+the entry, and the fix is to redo it for that core, never to delete it.
+
 The one narrow, temporary way to change behaviour is `docker/core-patches/patches.mjs`, a list whose
-temporary entries are meant to go away; only the standing licensing entries stay. The temporary
+temporary entries are meant to go away; only the standing licensing and user-groups entries stay. The temporary
 entries are fixes in the served UI and in the compiled server (`server/dist`), for example the command
 the Claude subscription sign-in presents and the agent Test route on an unsaved harness switch. A
 temporary entry is a fix to an upstream bug that had to ship here first, applied to the

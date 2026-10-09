@@ -49,6 +49,15 @@ on the Licence page, and `kyoube doctor` shows a `WARN` line. When the key expir
 of 5 applies again. Nobody is locked out or deleted, but no new user can be added while the
 instance has 5 or more. Apply the renewed key to lift the limit again.
 
+## Groups
+
+Creating and changing user groups (`docs/groups.md`) needs any valid licence. The limit of 5 users
+is a separate matter: a key unlocks groups whatever its seat count.
+
+Without a valid licence (free, expired, invalid or removed), existing groups keep restricting apps,
+agents and data levels, and can be deleted. Only creating and changing them is refused. Nothing
+opens up silently when a key expires.
+
 ## Removing a user to free a seat
 
 The core has no way to delete an account, so KyoubeAI adds one. In the Terminal page:

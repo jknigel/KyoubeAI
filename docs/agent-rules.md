@@ -37,6 +37,29 @@ and writes only what differs:
   only a plugin set an agent's scoped grant.
 - It records each pass in `/kyoubeai/.kyoube/agent-rules.json`, which `kyoube doctor` reads.
 
+## Group restrictions
+
+When a company has user groups (`docs/groups.md`), the same loop also applies which people may give
+work to which agents. After the guard step, each pass:
+
+- reads the list of restricted agents from `kyoube.apps` (`GET /groups/agent-access`) and posts it
+  to `kyoube.agent-rules` (`POST /groups/apply`), then reports the result back (`POST
+  /groups/sync-report`) for the Groups page;
+- protects every listed agent, and scopes operators' and group viewers' `tasks:assign` grants. A
+  grant someone scoped by hand is left alone and reported; everything is put back when the last
+  restricted agent goes.
+
+If the list cannot be read, the group step is skipped for that company and reported. It is never
+applied as "no groups". An agent whose authorization policy has keys KyoubeAI does not change cannot
+be protected; it shows under `agent rules skipped` and the restriction is not in force for it.
+
+`kyoube agent-rules off` does not remove group enforcement: delete the groups for that.
+
+**Chat.** A standing core patch makes opening a chat with a protected agent, and sending a message
+in one, require the right to assign it. This applies to the managers above too: viewers can no
+longer chat with a protected manager agent, which they could never assign to anyway. Owners, admins
+and operators are unaffected.
+
 ## Standing handoffs
 
 To let an agent hand a kind of work to another agent without being asked each time, write it in that
@@ -77,6 +100,9 @@ manager: the manager is protected.
   - an `AGENTS.md` whose markers were damaged by hand
   - a manager whose authorization policy KyoubeAI does not change
   - an agent waiting for approval
+  - an agent a group restricts whose authorization policy KyoubeAI does not change (the restriction
+    is not in force for it)
+  - a person whose assignment grant someone scoped by hand
   - an instructions bundle with no `AGENTS.md`
 
 Run a pass by hand and see every message with `docker compose exec app kyoube agent-rules --once`.

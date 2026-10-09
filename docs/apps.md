@@ -25,6 +25,9 @@ draft manifest changes nothing anyone sees until that version is published — a
 older name back with the version it restores. Everyone with read access sees the gallery, including
 people who cannot see drafts at all, which is why a draft never writes to it.
 
+An app that is in a user group is the exception: only that group's members, owners and admins see
+it in the gallery or can open it ([groups.md](groups.md)).
+
 ## Manifest
 
 ```json
