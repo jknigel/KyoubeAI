@@ -2,7 +2,7 @@
 
 Groups decide which people may use which agents and apps, and at what data level. They are a
 licensed feature (see [Licence](#licence)). Owners and admins manage them under
-**Settings → Groups**.
+**Company Settings → Groups**.
 
 ## What groups do
 
@@ -26,8 +26,8 @@ An agent or app that is in no group is open to everyone, as it was before groups
 nothing until someone creates a group.
 
 This works in both directions. Deleting a group, or taking an agent or app out of its last group,
-makes it open to everyone. The Groups page warns you first and names what becomes open ("Support Bot
-and the Refunds app will be usable by everyone").
+makes it open to everyone. The Groups page warns you first, naming what becomes open: "This makes
+Support Bot, Refunds usable by everyone. Continue?"
 
 A group with agents but no members leaves those agents to owners and admins only.
 
@@ -98,7 +98,8 @@ Someone outside the agent's groups cannot assign it a task or chat with it. The 
 ## Licence
 
 Creating and changing groups needs any valid licence (see [licensing.md](licensing.md)). Without
-one, the Groups page shows your groups read-only with a pointer to the Licence page.
+one, the Groups page shows your groups read-only with a pointer to the licence page
+(**Settings → Plugins → KyoubeAI Licence**).
 
 Enforcement never depends on the licence. Existing groups keep restricting apps, agents and data
 levels when the licence is free, expired or removed, and you can still delete them. Switching
@@ -126,8 +127,9 @@ Agent restrictions use the core's own mechanism, written by the agent rules loop
   grants are put back.
 - **Suspended members** are left untouched until they are active again.
 - **Agents KyoubeAI cannot protect.** If an agent's authorization policy has keys KyoubeAI does not
-  change, KyoubeAI leaves it alone and reports it as skipped. The restriction is then not in force
-  for that agent.
+  change, KyoubeAI leaves it alone and reports it as skipped. The core already refuses everyone
+  assignment to an agent with such a policy, so its groups change nothing there. The chat check
+  covers protected agents only and does not cover such an agent.
 
 Chat needs one standing core patch, `groups-chat-open-assign-check` and
 `groups-chat-message-assign-check` in `docker/core-patches/patches.mjs`. It adds the core's own
