@@ -23,6 +23,8 @@ export interface KyoubeContext {
   tables: string[];
   /** The decision sets this app declares, and whether the company lets apps use them right now. */
   decisions: { available: boolean; sets: string[] };
+  /** The external API connections this app declares, and whether each can be called right now. */
+  connections: Array<{ name: string; access: "read" | "read-write"; available: boolean }>;
 }
 export type Where = { field: string; op: "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "in" | "contains" | "starts_with" | "is_null" | "is_not_null"; value?: unknown } | { and: Where[] } | { or: Where[] } | { not: Where };
 export interface QuerySpec { where?: Where; orderBy?: Array<{ field: string; direction?: "asc" | "desc" }>; limit?: number; offset?: number; fields?: string[] }
@@ -45,6 +47,8 @@ export interface KyoubeAnswer {
   status: "auto" | "review";
 }
 export interface KyoubeDecision { decisionId: string | null; model: string; answers: Record<string, KyoubeAnswer> }
+export interface KyoubeConnectionRequest { method?: string; path?: string; query?: Record<string, string>; headers?: Record<string, string>; body?: unknown }
+export interface KyoubeConnectionResponse { status: number; headers: Record<string, string>; body: string }
 export interface Kyoube {
   version: 1;
   context: KyoubeContext | null;
@@ -55,6 +59,8 @@ export interface Kyoube {
   decide(set: string, input: { rowId: string } | { values: Record<string, unknown> }): Promise<KyoubeDecision>;
   /** Record what the person chose for one answer in a review lane: only for this app's own decisions for them, within 24 hours, once. */
   decideOutcome(decisionId: string, question: string, value: string | boolean): Promise<{ outcome: "human_confirmed" | "human_changed" }>;
+  /** Call an external API the manifest declares, through the host. Failures reject with `kyoube.Error`. */
+  connections: { call(name: string, request?: KyoubeConnectionRequest): Promise<KyoubeConnectionResponse> };
   Error: new (code: string, message: string) => Error & { code: string };
 }
 declare global {

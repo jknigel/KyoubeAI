@@ -114,3 +114,16 @@ describe("typed decisions", () => {
     expect(env.posts.at(-1)!.message).toMatchObject({ method: "decisions.outcome", params: { decisionId: "d1", question: "urgent", value: false } });
   });
 });
+
+describe("connections", () => {
+  it("posts connections.call as a protocol request", async () => {
+    vi.useFakeTimers();
+    const env = await install("nonce-abcdefghijklmnop");
+    const sdk = env.sdk() as unknown as { connections: { call(name: string, request?: unknown): Promise<unknown> } };
+    const done = sdk.connections.call("crm", { path: "/x" });
+    const sent = env.posts.at(-1)!.message;
+    expect(sent).toMatchObject({ method: "connections.call", nonce: "nonce-abcdefghijklmnop", params: { name: "crm", request: { path: "/x" } } });
+    env.deliver({ source: env.parent, data: { kyoube: 1, id: sent.id, result: { status: 200, headers: {}, body: "" } } });
+    await expect(done).resolves.toEqual({ status: 200, headers: {}, body: "" });
+  });
+});

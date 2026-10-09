@@ -8,6 +8,7 @@ export type RoutedRequest =
   | { kind: "toast"; title: string; tone: string }
   | { kind: "openApp"; slug: string }
   | { kind: "decide"; set: string; input: Record<string, unknown> }
+  | { kind: "connection"; name: string; request: Record<string, unknown> }
   | { kind: "outcome"; decisionId: string; question: string; value: string | boolean }
   | { kind: "reject"; code: string; message: string };
 
@@ -15,6 +16,8 @@ export type RoutedRequest =
 const SLUG_RE = /^[a-z][a-z0-9-]{1,48}$/;
 /** Mirrors `QUESTION_KEY_RE` in `src/decisions/contract.ts` (not imported: that module is worker-only). */
 const DECISION_KEY_RE = /^[a-z][a-z0-9_]{0,39}$/;
+/** Mirrors `CONNECTION_NAME_RE` in `src/connections/config.ts` (not imported: that module is worker-only). */
+const CONNECTION_NAME_RE = /^[a-z][a-z0-9_-]{0,39}$/;
 const MAX_TOAST_TITLE = 200;
 
 /**
@@ -126,6 +129,12 @@ export function routeAppRequest(request: KyoubeRequest): RoutedRequest {
     }
     return { kind: "outcome", decisionId, question, value };
   }
+  if (request.method === "connections.call") {
+    const { name, request: raw } = request.params;
+    if (typeof name !== "string" || !CONNECTION_NAME_RE.test(name)) return { kind: "reject", code: "invalid", message: "connections.call needs the name of a connection the manifest declares" };
+    if (raw !== undefined && !isPlainObject(raw)) return { kind: "reject", code: "invalid", message: "the connection request must be an object" };
+    return { kind: "connection", name, request: raw ?? {} };
+  }
   const method = request.method.startsWith("data.") ? request.method.slice("data.".length) : "";
   if (!DATA_METHODS.has(method)) return { kind: "reject", code: "invalid", message: `unknown method "${request.method}"` };
   return { kind: "data", method, params: request.params };
@@ -206,6 +215,8 @@ const MAX_NONCE_MISMATCHES = 3;
  * something on the viewer's screen. `decisions` is a third ceiling, like `toasts`: each typed
  * decision spends one provider request from the company's daily cap, so a frame may ask at most
  * ten per window. A decision also takes one of the 60 requests; a reported outcome takes only that.
+ * `connections` is a fourth ceiling: each call reaches an external service, so thirty per window,
+ * on top of the 60.
  *
  * The numbers are deliberately far above what a hand-written UI does and far
  * below what a loop does: 60 requests in 10 s is six a second — more than any
@@ -214,7 +225,7 @@ const MAX_NONCE_MISMATCHES = 3;
  * patience: an app that keeps hitting the ceiling for three windows running is
  * not busy, it is looping, and is stopped rather than served forever.
  */
-export const APP_BUDGET = { windowMs: 10_000, requests: 60, toasts: 5, decisions: 10, limitedWindows: 3 } as const;
+export const APP_BUDGET = { windowMs: 10_000, requests: 60, toasts: 5, decisions: 10, connections: 30, limitedWindows: 3 } as const;
 
 /**
  * The per-mount state the bridge keeps for one running app: the handshake
@@ -228,7 +239,9 @@ export interface AppGuard {
   /** True when `nonce` is this mount's. A mismatch is counted, and the third one stops the runner. */
   accepts(nonce: unknown): boolean;
   /** True when this call fits the frame's budget. A refusal is counted; three limited windows running stop the runner. */
-  spend(kind: "request" | "toast" | "decision"): boolean;
+  spend(kind: "request" | "toast" | "decision" | "connection"): boolean;
+  /** True the first time this mount sees a connection answer `disabled`, so the person is told once. */
+  firstDisabled(name: string): boolean;
   /** The reason this runner stopped, or null while it is still running. */
   stopped(): StopReason | null;
   /** Records a stop the runner decided on itself (a second frame load). Idempotent. */
@@ -241,7 +254,8 @@ export function createAppGuard(nonce: string, opts: { onStop: (reason: StopReaso
   let reason: StopReason | null = null;
   // The calls still inside the window, oldest first; never longer than the
   // budget itself, because a call over the ceiling is refused rather than kept.
-  const spent: Record<"request" | "toast" | "decision", number[]> = { request: [], toast: [], decision: [] };
+  const spent: Record<"request" | "toast" | "decision" | "connection", number[]> = { request: [], toast: [], decision: [], connection: [] };
+  const disabledSeen = new Set<string>();
   // The start of the window the last refusal fell in, and how many windows in a
   // row have had one.
   let limitedAt: number | null = null;
@@ -281,10 +295,15 @@ export function createAppGuard(nonce: string, opts: { onStop: (reason: StopReaso
       if (mismatches >= MAX_NONCE_MISMATCHES) stop("nonce");
       return false;
     },
-    spend(kind: "request" | "toast" | "decision"): boolean {
+    firstDisabled(name: string): boolean {
+      if (disabledSeen.has(name)) return false;
+      disabledSeen.add(name);
+      return true;
+    },
+    spend(kind: "request" | "toast" | "decision" | "connection"): boolean {
       const at = now();
       const times = spent[kind];
-      const max = kind === "request" ? APP_BUDGET.requests : kind === "toast" ? APP_BUDGET.toasts : APP_BUDGET.decisions;
+      const max = kind === "request" ? APP_BUDGET.requests : kind === "toast" ? APP_BUDGET.toasts : kind === "connection" ? APP_BUDGET.connections : APP_BUDGET.decisions;
       while (times.length > 0 && at - times[0]! >= APP_BUDGET.windowMs) times.shift();
       if (times.length >= max) {
         refused(at);
@@ -315,6 +334,8 @@ export interface AppBridgeCallbacks {
   onOpenApp: (slug: string) => void;
   /** A typed decision (`apps.decide`). Absent, the app is told decisions are not available here. */
   onDecide?: (set: string, input: Record<string, unknown>) => Promise<unknown>;
+  /** A call to a declared external API (`apps.connection_call`). Absent, the app is told connections are not available here. */
+  onConnection?: (name: string, request: Record<string, unknown>) => Promise<unknown>;
   /** What the person chose in a review lane (`apps.decision_outcome`). */
   onDecisionOutcome?: (decisionId: string, question: string, value: string | boolean) => Promise<unknown>;
   /** False once the runner has torn down, or once the app navigated its frame — nothing runs after that. */
@@ -450,6 +471,25 @@ export async function handleAppMessage(event: AppMessageEvent, target: AppMessag
         reply({ error: appErrorPayload(error) });
       }
       return;
+    case "connection": {
+      if (!callbacks.guard.spend("connection")) {
+        reply({ error: { code: "limit", message: "limit: too many connection calls" } });
+        return;
+      }
+      if (!callbacks.onConnection) {
+        reply({ error: { code: "disabled", message: "disabled: connections are not available here" } });
+        return;
+      }
+      try {
+        reply({ result: await callbacks.onConnection(routed.name, routed.request) });
+      } catch (error) {
+        const payload = appErrorPayload(error);
+        // Once per connection per mount: an app that polls a switched-off connection must not flood the screen.
+        if (payload.code === "disabled" && callbacks.guard.firstDisabled(routed.name)) callbacks.onToast(`The ${routed.name} connection is turned off.`, "warn");
+        reply({ error: payload });
+      }
+      return;
+    }
     case "outcome":
       if (!callbacks.onDecisionOutcome) {
         reply({ error: { code: "disabled", message: "disabled: typed decisions are not available here" } });
