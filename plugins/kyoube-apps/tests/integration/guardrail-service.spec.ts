@@ -165,6 +165,23 @@ describe("Guardrail.check", () => {
     expect(reused.message).toContain("already used");
   });
 
+  it("lets an allowed external write through once, and holds it again with a different body", async () => {
+    const { guardrail, cards } = harness(OFF_TASK);
+    const write = (bodyHash: string): GuardedAction => ({
+      companyId: C, actor: AGENT, operation: "connection_write", connection: "crm", method: "POST", path: "contacts/42",
+      params: { connection: "crm", method: "POST", path: "contacts/42", queryHash: "q", bodyHash }, guard: { issueId: ISSUE },
+    });
+    const held = await failure(guardrail.check(write("b1"))) as DataError;
+    expect(held.code).toBe("held");
+    expect(cards[0]!.request.payload.prompt).toBe("Agent Builder wants to send a POST to connection crm at contacts/42.");
+    Object.assign(cards[0]!, { status: "accepted", resolvedByUserId: "owner-1" });
+    const other = await failure(guardrail.check(write("b2"))) as DataError;
+    expect(other.code).toBe("held");
+    expect(await failure(guardrail.check(write("b1")))).toBe("resolved");
+    const again = await failure(guardrail.check(write("b1"))) as DataError;
+    expect(again.code).toBe("held");
+  });
+
   it("runs a plain retry that matches an allowed hold once, then checks the next identical call with the model as normal", async () => {
     const { guardrail, cards, decided } = harness(OFF_TASK);
     await failure(guardrail.check(drop({ issueId: ISSUE })));

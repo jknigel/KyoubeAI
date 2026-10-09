@@ -49,7 +49,8 @@ Both gates above decide whether a call is *allowed*. A company that has typed de
 **Guardrail on risky agent actions**, under Company Settings → Data access. It runs inside
 `kyoube.apps`, so it covers the REST path as well as tools, for `data_drop_table`,
 `data_rename_table`, `data_remove_field`, bulk `data_update`/`data_delete`, and `apps_publish`,
-`apps_rollback`, `apps_archive`. It can only hold a call, never allow one the grant level refuses.
+`apps_rollback`, `apps_archive`, and an agent's write requests (anything but GET) to
+connected external services. It can only hold a call, never allow one the grant level refuses.
 A held call waits on a people-only confirmation card on the agent's task. It is not a security
 boundary: the grant level is. Grant `schema` as narrowly as before, and use the guardrail to catch
 the allowed call that does not fit the task.

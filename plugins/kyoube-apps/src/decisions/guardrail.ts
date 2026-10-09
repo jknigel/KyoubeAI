@@ -11,7 +11,7 @@ import { canonical, type DecideResult, type Question } from "./contract.js";
  * fingerprinted, and what the confirmation card says. The guardrail can only ever hold an action:
  * a pass lets it go ahead exactly as it would without the guardrail.
  */
-export type GuardedOperation = "drop_table" | "remove_field" | "rename_table" | "delete" | "update" | "app_publish" | "app_archive" | "app_rollback";
+export type GuardedOperation = "drop_table" | "remove_field" | "rename_table" | "delete" | "update" | "app_publish" | "app_archive" | "app_rollback" | "connection_write";
 
 /** What an agent's call carries for the guardrail. Ids only; never data. */
 export interface GuardContext { issueId?: string; confirmationId?: string }
@@ -25,6 +25,10 @@ export interface GuardedAction {
   newName?: string | null;
   app?: string | null;
   version?: number | null;
+  /** An external write: the connection's name, the HTTP method and the path under its base URL. */
+  connection?: string | null;
+  method?: string | null;
+  path?: string | null;
   /** The exact call. It is hashed into the fingerprint and nothing else: never sent, logged or stored. */
   params: Record<string, unknown>;
   /** Rows the action would touch. Called only when the guardrail actually asks the model. */
@@ -70,6 +74,7 @@ const OPERATION_TEXT: Record<GuardedOperation, string> = {
   app_publish: "publish app",
   app_archive: "archive app",
   app_rollback: "roll back app",
+  connection_write: "send a write request to an external service",
 };
 
 function rowCount(count: number): string {
@@ -86,6 +91,7 @@ export function describeAction(action: GuardedAction, affectedRows: number | nul
     case "app_publish": return `publish app \`${action.app}\`${action.version === null || action.version === undefined ? " (latest version)" : ` version ${action.version}`}`;
     case "app_archive": return `archive app \`${action.app}\``;
     case "app_rollback": return `roll app \`${action.app}\` back to version ${action.version}`;
+    case "connection_write": return `send a ${action.method} to connection ${action.connection} at ${action.path}`;
   }
 }
 
@@ -98,7 +104,7 @@ export interface IssueText { title: string; description: string | null }
  */
 export function guardState(action: GuardedAction, affectedRows: number | null, issue: IssueText): Record<string, unknown> {
   const subject: Record<string, unknown> = { operation: OPERATION_TEXT[action.operation] };
-  for (const key of ["table", "field", "newName", "app", "version"] as const) {
+  for (const key of ["table", "field", "newName", "app", "version", "connection", "method", "path"] as const) {
     const value = action[key];
     if (value !== undefined && value !== null) subject[key] = value;
   }

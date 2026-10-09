@@ -64,6 +64,10 @@ describe("describeAction", () => {
     expect(describeAction(action({ operation: "app_archive", table: null, app: "crm", params: {} }), null)).toBe("archive app `crm`");
     expect(describeAction(action({ operation: "app_rollback", table: null, app: "crm", version: 2, params: {} }), null)).toBe("roll app `crm` back to version 2");
   });
+  it("names the connection, method and path of an external write, never the body", () => {
+    const write = action({ operation: "connection_write", table: null, connection: "crm", method: "POST", path: "contacts/42", params: { connection: "crm", method: "POST", path: "contacts/42", queryHash: "q", bodyHash: "b" } });
+    expect(describeAction(write, null)).toBe("send a POST to connection crm at contacts/42");
+  });
 });
 
 describe("guardState", () => {
@@ -78,6 +82,22 @@ describe("guardState", () => {
     const long = guardState(action(), null, { title: "T", description: "x".repeat(20_000) });
     expect((long.task as string).length).toBe(MAX_TASK_TEXT);
     expect(guardState(action(), null, { title: "Only a title", description: null }).task).toBe("Only a title");
+  });
+});
+
+describe("connection_write", () => {
+  const params = { connection: "crm", method: "POST", path: "contacts/42", queryHash: "q1", bodyHash: "b1" };
+  const write = action({ operation: "connection_write", table: null, connection: "crm", method: "POST", path: "contacts/42", params });
+  it("shows the model the connection, method and path but not the hashes", () => {
+    const state = guardState(write, null, { title: "T", description: null });
+    expect(state.action).toEqual({ operation: "send a write request to an external service", connection: "crm", method: "POST", path: "contacts/42" });
+    expect(JSON.stringify(state)).not.toContain("b1");
+  });
+  it("fingerprints a different body or query differently", () => {
+    const base = actionFingerprint(write);
+    expect(actionFingerprint({ ...write, params: { ...params, bodyHash: "b2" } })).not.toBe(base);
+    expect(actionFingerprint({ ...write, params: { ...params, queryHash: "q2" } })).not.toBe(base);
+    expect(actionFingerprint({ ...write, params: { ...params } })).toBe(base);
   });
 });
 
