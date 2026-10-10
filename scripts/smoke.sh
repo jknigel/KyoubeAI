@@ -668,7 +668,7 @@ api_post "/tables/smoke_contacts/rows/delete" "{\"companyId\":\"$COMPANY_ID\",\"
 api_post "/tables/smoke_contacts/rows/count" "{\"companyId\":\"$COMPANY_ID\"}" | jq -e '.count == 1' >/dev/null
 echo "    data round-trip ok"
 
-# The 18 data_*, 7 apps_* and 2 decisions_* tools (both registered under the "kyoube.apps:"
+# The 18 data_*, 7 apps_*, 2 decisions_* and 2 connections_* tools (all registered under the "kyoube.apps:"
 # prefix, since Phase 3 added the Apps tools to the same plugin) are what an
 # agent actually calls, through the core's tool gateway. Executing one from
 # here is not possible without a live agent run: POST
@@ -679,10 +679,10 @@ echo "    data round-trip ok"
 # that the host registered the whole tool surface (Step 3 of the task brief
 # covers real agent execution manually).
 curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/plugins/tools" >"$TMP/tools.json"
-jq -e '[.[] | select(.name | startswith("kyoube.apps:"))] | length == 27' "$TMP/tools.json" >/dev/null \
-  || { echo "expected 27 kyoube.apps tools (18 data_* + 7 apps_* + 2 decisions_*), got: $(jq -c '[.[] | select(.name | startswith("kyoube.apps:")) | .name]' "$TMP/tools.json")" >&2; exit 1; }
-jq -e 'map(.name) | index("kyoube.apps:data_sql_select") != null and index("kyoube.apps:data_insert") != null and index("kyoube.apps:apps_create") != null and index("kyoube.apps:apps_publish") != null and index("kyoube.apps:decisions_decide") != null and index("kyoube.apps:data_list_review") != null' "$TMP/tools.json" >/dev/null
-echo "    27 kyoube.apps:data_*/apps_*/decisions_* tools registered with the host tool dispatcher"
+jq -e '[.[] | select(.name | startswith("kyoube.apps:"))] | length == 29' "$TMP/tools.json" >/dev/null \
+  || { echo "expected 29 kyoube.apps tools (18 data_* + 7 apps_* + 2 decisions_* + 2 connections_*), got: $(jq -c '[.[] | select(.name | startswith("kyoube.apps:")) | .name]' "$TMP/tools.json")" >&2; exit 1; }
+jq -e 'map(.name) | index("kyoube.apps:data_sql_select") != null and index("kyoube.apps:data_insert") != null and index("kyoube.apps:apps_create") != null and index("kyoube.apps:apps_publish") != null and index("kyoube.apps:decisions_decide") != null and index("kyoube.apps:data_list_review") != null and index("kyoube.apps:connections_list") != null and index("kyoube.apps:connections_call") != null' "$TMP/tools.json" >/dev/null
+echo "    29 kyoube.apps:data_*/apps_*/decisions_*/connections_* tools registered with the host tool dispatcher"
 
 echo "==> the activity log summarises the data mutations but never the rows"
 curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/companies/$COMPANY_ID/activity?limit=200" \
